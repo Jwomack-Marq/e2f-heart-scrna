@@ -21,6 +21,7 @@ cmm   <- app$cm$meta; RES <- app$cm$res
 heat  <- app$heat; tabs <- app$tables; CONF <- app$confound
 ctDE  <- tabs$ct_DE; subDE <- tabs$sub_DE; subSum <- tabs$sub_summary; subType <- tabs$sub_subtype
 figs  <- app$figs
+GI    <- app$geneinfo          # per-gene info table (NULL on an un-enriched build)
 
 has <- function(col, df = meta) col %in% names(df)
 CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype","seurat_clusters"))
@@ -97,28 +98,63 @@ de_volcano_ly <- function(d, ttl, source_id) {
 # ordered/filtered DE table; returns a data frame (rendered by DT). No row cap so
 # every volcano point has a corresponding table row for click->highlight.
 DE_PAGELEN <- 25
+DE_DISP <- c(gene = "gene", log2FoldChange = "log2FC", neglog10p = "-log10(p)",
+             baseMean = "baseMean", pvalue = "p", padj = "padj")   # data col -> header label
 de_table <- function(d, search = "") {
   validate(need(!is.null(d) && nrow(d), "No DE table for this selection."))
   d <- d[order(-abs(d$log2FoldChange)), ]
-  cols <- intersect(c("gene","log2FoldChange","baseMean","pvalue","padj"), names(d))
+  d$neglog10p <- -log10(pmax(d$pvalue, 1e-300))
+  cols <- intersect(c("gene","log2FoldChange","neglog10p","baseMean","pvalue","padj"), names(d))
   d <- d[, cols]
   if (nzchar(search)) d <- d[grepl(search, d$gene, ignore.case = TRUE), ]
   d
 }
 # shared DT renderer for the DE tables (single-row select, scroll body)
 de_datatable <- function(df) {
-  DT::datatable(df, rownames = FALSE, selection = "single",
+  disp <- ifelse(names(df) %in% names(DE_DISP), DE_DISP[names(df)], names(df))
+  DT::datatable(df, rownames = FALSE, selection = "single", colnames = unname(disp),
     options = list(pageLength = DE_PAGELEN, scrollY = "380px", scrollCollapse = TRUE,
                    dom = "ftip", order = list()),
     class = "compact stripe hover") |>
-    DT::formatSignif(intersect(c("log2FoldChange","baseMean","pvalue","padj"), names(df)), 3)
+    DT::formatSignif(intersect(c("log2FoldChange","neglog10p","baseMean","pvalue","padj"), names(df)), 3)
 }
-# highlight + scroll a DE table to the row for `gene` (driven by a volcano click)
-select_gene_row <- function(proxy, df, gene) {
-  idx <- which(df$gene == gene)[1]
-  if (is.na(idx)) { DT::selectRows(proxy, NULL); return(invisible()) }   # filtered out by search
-  DT::selectPage(proxy, ceiling(idx / DE_PAGELEN))
-  DT::selectRows(proxy, idx)
+# small "Showing only <gene>" banner + a link to clear the volcano-click filter
+pick_banner <- function(gene, clear_id) {
+  if (is.null(gene) || !nzchar(gene)) return(NULL)
+  div(style = "margin-bottom:6px; font-size:13px",
+      span(HTML(paste0("Showing only <b>", gene, "</b> &middot; "))),
+      actionLink(clear_id, "show all genes"))
+}
+# info card for a picked gene, from the bundled app$geneinfo table (GI). All data
+# is precomputed (no runtime network calls); external links go to the full records.
+gene_info_card <- function(gene) {
+  if (is.null(gene) || !nzchar(gene)) return(NULL)
+  info <- if (!is.null(GI) && gene %in% rownames(GI)) as.list(GI[gene, ]) else NULL
+  has  <- function(x) !is.null(x) && length(x) && !is.na(x) && nzchar(x)
+  lnk  <- function(href, label) tags$a(label, href = href, target = "_blank", style = "margin-right:14px")
+  links <- list()
+  if (!is.null(info)) {
+    if (has(info$entrez))  links <- c(links, list(lnk(paste0("https://www.ncbi.nlm.nih.gov/gene/", info$entrez), "NCBI Gene")))
+    if (has(info$ensembl)) links <- c(links, list(lnk(paste0("https://www.ensembl.org/Mus_musculus/Gene/Summary?g=", info$ensembl), "Ensembl")))
+    if (has(info$mgi))     links <- c(links, list(lnk(paste0("https://www.informatics.jax.org/marker/", info$mgi), "MGI")))
+  }
+  links <- c(links, list(lnk(paste0("https://www.genecards.org/cgi-bin/carddisp.pl?gene=", toupper(gene)), "GeneCards")))
+  name  <- if (!is.null(info) && has(info$name)) info$name else "(name not found)"
+  bits  <- character(0)
+  if (!is.null(info)) {
+    if (has(info$type)) bits <- c(bits, info$type)
+    if (has(info$chr))  bits <- c(bits, paste0("chr ", info$chr,
+        if (has(info$start)) paste0(":", info$start, "-", info$end) else ""))
+  }
+  summ <- if (!is.null(info) && has(info$summary)) info$summary else
+          "No functional summary available for this gene (see links)."
+  card(class = "mt-2",
+    card_header(HTML(paste0("<b>", gene, "</b> &mdash; ", name))),
+    card_body(
+      if (length(bits)) tags$p(tags$small(paste(bits, collapse = " · ")), style = "color:#666;margin:0 0 4px"),
+      if (!is.null(info) && has(info$alias)) tags$p(tags$small(paste0("Aliases: ", info$alias)), style = "color:#666;margin:0 0 6px"),
+      tags$p(summ, style = "font-size:13px;margin-bottom:8px"),
+      tags$div(links)))
 }
 # ggplot heatmap -> plotly with hover (gene / group / value)
 ggheat <- function(p) {
@@ -271,10 +307,11 @@ ui <- page_navbar(
                      br(), strong("p-axis ranks candidates only — not valid at n = 1."))),
     navset_card_tab(
       nav_panel("Volcano + table",
-        helpText("Hover a point for the gene & stats; click a point to highlight it in the table."),
+        helpText("Hover a point for the gene & stats; click a point to show just that gene in the table."),
         layout_columns(col_widths = c(6, 6),
         plotlyOutput("ct_volcano", height = "470px"),
-        DTOutput("ct_table", height = "470px"))),
+        div(uiOutput("ct_pick_ui"), DTOutput("ct_table", height = "440px"))),
+        uiOutput("ct_geneinfo")),
       nav_panel("Heatmap (top genes × cell types)", plotlyOutput("ct_heat", height = "620px"))))),
 
   nav_panel("Cardiomyocyte deep-dive", layout_sidebar(
@@ -295,10 +332,11 @@ ui <- page_navbar(
         plotlyOutput("cm_map", height = "600px")),
       nav_panel("Identity (marker heatmap)", plotlyOutput("cm_markerheat", height = "660px")),
       nav_panel("KO-vs-WT DE (per subgroup)",
-        helpText("Hover a point for the gene & stats; click a point to highlight it in the table."),
+        helpText("Hover a point for the gene & stats; click a point to show just that gene in the table."),
         layout_columns(col_widths = c(6, 6),
           plotlyOutput("cm_volcano", height = "440px"),
-          DTOutput("cm_detab", height = "440px")),
+          div(uiOutput("cm_pick_ui"), DTOutput("cm_detab", height = "410px"))),
+        uiOutput("cm_geneinfo"),
         card(card_header("DE heatmap — top genes × subclusters (log2FC KO/WT)"),
              plotlyOutput("cm_lfcheat", height = "560px"))),
       nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px"))))),
@@ -381,16 +419,22 @@ server <- function(input, output, session) {
   })
 
   # ---- DE by cell type ----
-  ct_d   <- reactive({ req(input$ct_tp, input$ct_sel); ctDE[[paste(input$ct_tp, input$ct_sel, sep = "_")]] })
-  ct_tab <- reactive(de_table(ct_d(), input$ct_search))            # exactly what the table shows
+  ct_d    <- reactive({ req(input$ct_tp, input$ct_sel); ctDE[[paste(input$ct_tp, input$ct_sel, sep = "_")]] })
+  ct_pick <- reactiveVal(NULL)                                     # gene picked by clicking the volcano
+  ct_tab  <- reactive({                                            # exactly what the table shows
+    d <- de_table(ct_d(), input$ct_search); g <- ct_pick()
+    if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
+    d
+  })
   output$ct_volcano <- renderPlotly(de_volcano_ly(ct_d(),
                          paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano"))
   output$ct_table   <- renderDT(de_datatable(ct_tab()))
-  ct_proxy <- dataTableProxy("ct_table")
-  observeEvent(event_data("plotly_click", source = "ct_volcano"), {
-    g <- event_data("plotly_click", source = "ct_volcano")$customdata; req(g)
-    select_gene_row(ct_proxy, ct_tab(), g)
-  })
+  output$ct_pick_ui  <- renderUI(pick_banner(ct_pick(), "ct_clear"))
+  output$ct_geneinfo <- renderUI(gene_info_card(ct_pick()))
+  observeEvent(event_data("plotly_click", source = "ct_volcano"),
+    ct_pick(event_data("plotly_click", source = "ct_volcano")$customdata))
+  observeEvent(input$ct_clear, ct_pick(NULL))
+  observeEvent(list(input$ct_tp, input$ct_sel, input$ct_search), ct_pick(NULL), ignoreInit = TRUE)
   output$ct_heat <- renderPlotly({
     req(input$ct_tp)
     keys <- grep(paste0("^", input$ct_tp, "_"), names(ctDE), value = TRUE)
@@ -419,16 +463,22 @@ server <- function(input, output, session) {
            title = paste0("Subcluster identity markers — res ", input$cm_res))
     ggheat(p)
   })
-  cm_d   <- reactive({ req(input$cm_res, input$cm_sub); subDE[[paste0("res", input$cm_res)]][[input$cm_sub]] })
-  cm_tab <- reactive(de_table(cm_d()))
+  cm_d    <- reactive({ req(input$cm_res, input$cm_sub); subDE[[paste0("res", input$cm_res)]][[input$cm_sub]] })
+  cm_pick <- reactiveVal(NULL)
+  cm_tab  <- reactive({
+    d <- de_table(cm_d()); g <- cm_pick()
+    if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
+    d
+  })
   output$cm_volcano <- renderPlotly(de_volcano_ly(cm_d(),
                          paste0(input$cm_sub, " — ", sub_label(input$cm_res, input$cm_sub)), "cm_volcano"))
   output$cm_detab   <- renderDT(de_datatable(cm_tab()))
-  cm_proxy <- dataTableProxy("cm_detab")
-  observeEvent(event_data("plotly_click", source = "cm_volcano"), {
-    g <- event_data("plotly_click", source = "cm_volcano")$customdata; req(g)
-    select_gene_row(cm_proxy, cm_tab(), g)
-  })
+  output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
+  output$cm_geneinfo <- renderUI(gene_info_card(cm_pick()))
+  observeEvent(event_data("plotly_click", source = "cm_volcano"),
+    cm_pick(event_data("plotly_click", source = "cm_volcano")$customdata))
+  observeEvent(input$cm_clear, cm_pick(NULL))
+  observeEvent(list(input$cm_res, input$cm_sub), cm_pick(NULL), ignoreInit = TRUE)
   output$cm_lfcheat <- renderPlotly({ req(input$cm_res)
     ggheat(lfc_heat(subDE[[paste0("res", input$cm_res)]], 22,
              paste0("KO-vs-WT log2FC across CM subclusters — res ", input$cm_res))) })
@@ -491,7 +541,12 @@ server <- function(input, output, session) {
     "<li><b>Sex confound:</b> KO and WT animals are different sexes (Y-genes top the KO-up list; flagged as 'sex/construct').</li>",
     "<li><b>KO not confirmed:</b> E2f7/E2f8 are not reduced at the transcript level (likely a conditional allele a 3' assay cannot see).</li>",
     "<li>All KO-vs-WT differences are <b>descriptive / hypothesis-generating only.</b> ",
-    "Valid inference needs a replicated, sex-matched cohort (&ge;3 animals/condition).</li></ul></div>",
+    "Valid inference needs a replicated, sex-matched cohort (&ge;3 animals/condition).</li>",
+    "<li><b>Volcano p-axis is for ranking, not significance.</b> Because the n = 1 design treats technical ",
+    "replicates as biological ones (pseudoreplication), the test under-estimates variance and returns ",
+    "extreme p-values &mdash; many so small they underflow to 0 in double precision. The plot floors these at ",
+    "1e-300, so points pinned at <code>-log10 p = 300</code> simply mean &ldquo;smaller than the computer can ",
+    "represent,&rdquo; not a real significance level. Use the vertical axis only to rank candidate genes.</li></ul></div>",
     "<p style='color:#777;font-size:12px'>Live views show a stratified sample of ", format(nrow(meta), big.mark = ","),
     " cells over a ", length(genes), "-gene panel; differential-expression tables and heatmaps are computed from the FULL data. ",
     "Built ", app$built, ".</p>")))
