@@ -1,10 +1,11 @@
-# E2F7/8 mouse-heart scRNA-seq — interactive cell browser
-# Runs as a normal Shiny app AND, after shinylive::export(), entirely in the browser
-# (WebAssembly/webR). webR has no Seurat, so everything is plain ggplot2 + Matrix on
-# the slim app_data.rds built by build_app_data.R.
+# E2F7/8 mouse-heart scRNA-seq — interactive cell browser (server-side Shiny app).
+# Self-contained: ggplot2 + Matrix + plotly + DT on the slim app_data.rds built by
+# build_app_data.R (no Seurat needed at runtime). Previously also shipped as a
+# shinylive/WebAssembly static export — that build is archived at the git tag
+# `shinylive-static-archive`; this app now runs only against an R/Shiny server.
 #
-#   Local preview : shiny::runApp("our_analysis/06_outputs/app")
-#   Static export : Rscript our_analysis/06_outputs/app/export_shinylive.R
+#   Local preview : shiny::runApp("shiny_app")
+#   Deploy        : rsconnect::deployApp("shiny_app")   # shinyapps.io (account jwomackmu)
 #
 # DESCRIPTIVE pilot (n = 1, sex-confounded, KO not transcript-confirmed) — see About tab.
 
@@ -22,6 +23,15 @@ heat  <- app$heat; tabs <- app$tables; CONF <- app$confound
 ctDE  <- tabs$ct_DE; subDE <- tabs$sub_DE; subSum <- tabs$sub_summary; subType <- tabs$sub_subtype
 figs  <- app$figs
 GI    <- app$geneinfo          # per-gene info table (NULL on an un-enriched build)
+ENR   <- app$enrich            # list(gsea, go, tf) of precomputed enrichment (may be NULL)
+EXPR  <- app$deg_expr          # broad-gene log-norm matrix (genes x downsampled cells) for the DEG explorer
+DMETA <- if (!is.null(app$deg_meta)) app$deg_meta else meta   # metadata aligned to EXPR cols (fallback so UI builds)
+GENES_FULL <- app$deg_genes
+# searchable union: curated panel (full 30k cells) + broad genes (deg_expr, ~8k cells).
+# Lets the UMAP/Gene-detail views show ANY gene that shows up in a volcano, falling
+# back to the broad matrix when a gene is outside the curated panel (expr_vec below).
+ALL_GENES <- sort(unique(c(genes, GENES_FULL)))
+in_panel  <- function(g) !is.null(g) && nzchar(g) && g %in% rownames(expr)
 
 has <- function(col, df = meta) col %in% names(df)
 CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype","seurat_clusters"))
@@ -38,9 +48,15 @@ theme_umap <- theme_minimal(base_size = 13) +
         legend.position = "right", strip.text = element_text(face = "bold"))
 div_scale <- scale_fill_gradient2(low = "#1565c0", mid = "white", high = "#c62828", midpoint = 0, na.value = "grey92")
 
+# expression for `cells`, drawn from the curated panel when possible, else the
+# broad deg_expr matrix (only ~8k cells overlap, the rest stay NA = grey). This is
+# what lets a gene that appears in a volcano but not the curated panel be coloured.
 expr_vec <- function(gene, cells) {
-  if (is.null(gene) || !gene %in% rownames(expr)) return(setNames(rep(NA_real_, length(cells)), cells))
-  v <- as.numeric(expr[gene, ]); names(v) <- colnames(expr); v[cells]
+  if (in_panel(gene)) { v <- as.numeric(expr[gene, ]); names(v) <- colnames(expr); return(v[cells]) }
+  if (!is.null(gene) && nzchar(gene) && !is.null(EXPR) && gene %in% rownames(EXPR)) {
+    v <- as.numeric(EXPR[gene, ]); names(v) <- colnames(EXPR); return(v[cells])
+  }
+  setNames(rep(NA_real_, length(cells)), cells)
 }
 cm_subcol <- function(res) paste0("SCT_snn_res.", res)
 cm_subs   <- function(res) { v <- unique(paste0("CM", cmm[[cm_subcol(res)]]))
@@ -54,12 +70,15 @@ sub_label <- function(res, sub) {
   lab
 }
 VOLC_PAL <- c("up in KO" = "#c62828", "up in WT" = "#1565c0", "n.s." = "#cccccc", "sex/construct" = "#9e9e9e")
-# add the derived columns (-log10 p, KO/WT class) the volcano + hover need
-de_annot <- function(d) {
+volc_pal <- function(pos, neg) setNames(c("#c62828","#1565c0","#cccccc","#9e9e9e"),
+                                        c(pos, neg, "n.s.", "sex/construct"))
+# add the derived columns (-log10 p, up/down class) the volcano + hover need.
+# pos/neg name the two directions (default KO/WT for the precomputed DE tabs).
+de_annot <- function(d, pos = "up in KO", neg = "up in WT") {
   d$neglogp <- -log10(pmax(d$pvalue, 1e-300))
   d$class <- ifelse(d$confounder, "sex/construct",
-              ifelse(abs(d$log2FoldChange) >= 1, ifelse(d$log2FoldChange > 0, "up in KO", "up in WT"), "n.s."))
-  d$class <- factor(d$class, levels = names(VOLC_PAL))
+              ifelse(abs(d$log2FoldChange) >= 1, ifelse(d$log2FoldChange > 0, pos, neg), "n.s."))
+  d$class <- factor(d$class, levels = c(pos, neg, "n.s.", "sex/construct"))
   d
 }
 # DE volcano from a trimmed DE data frame (static ggplot — kept for reference)
@@ -74,20 +93,21 @@ de_volcano <- function(d, ttl) {
 }
 # interactive plotly volcano: hover shows gene/stats, click emits the gene via
 # customdata (captured by event_data(source = source_id)) to drive the DE table.
-de_volcano_ly <- function(d, ttl, source_id) {
+de_volcano_ly <- function(d, ttl, source_id, pos = "up in KO", neg = "up in WT",
+                           xlab = "log2 fold change (KO / WT)") {
   validate(need(!is.null(d) && nrow(d), "No DE results for this selection (cluster too small / unbalanced)."))
-  d <- de_annot(d)
+  d <- de_annot(d, pos, neg)
   d$hover <- sprintf(
-    "<b>%s</b><br>log2FC (KO/WT): %.2f<br>-log10 p: %.2f<br>padj: %.2g<br>%s",
+    "<b>%s</b><br>logFC: %.2f<br>-log10 p: %.2f<br>padj: %.2g<br>%s",
     d$gene, d$log2FoldChange, d$neglogp, d$padj, as.character(d$class))
-  plot_ly(d, x = ~log2FoldChange, y = ~neglogp, color = ~class, colors = VOLC_PAL,
+  plot_ly(d, x = ~log2FoldChange, y = ~neglogp, color = ~class, colors = volc_pal(pos, neg),
           customdata = ~gene, text = ~hover, hovertemplate = "%{text}<extra></extra>",
           type = "scattergl", mode = "markers",
           marker = list(size = 6, opacity = 0.6, line = list(width = 0)),
           source = source_id) |>
     layout(
       title = list(text = ttl, font = list(size = 13)),
-      xaxis = list(title = "log2 fold change (KO / WT)", zeroline = FALSE),
+      xaxis = list(title = xlab, zeroline = FALSE),
       yaxis = list(title = "-log10 p (ranking only, n=1)", zeroline = FALSE),
       legend = list(title = list(text = ""), itemsizing = "constant"),
       shapes = lapply(c(-1, 1), function(v) list(type = "line", x0 = v, x1 = v,
@@ -117,6 +137,12 @@ de_datatable <- function(df) {
                    dom = "ftip", order = list()),
     class = "compact stripe hover") |>
     DT::formatSignif(intersect(c("log2FoldChange","neglog10p","baseMean","pvalue","padj"), names(df)), 3)
+}
+# optionally drop the sex/construct confounder genes (Xist, Y-genes, ROSA26) from a
+# DE frame before it reaches a volcano/table — n=1 makes these dominate the contrast.
+drop_conf <- function(d, hide) {
+  if (isTRUE(hide) && !is.null(d) && "confounder" %in% names(d)) d <- d[!d$confounder, , drop = FALSE]
+  d
 }
 # small "Showing only <gene>" banner + a link to clear the volcano-click filter
 pick_banner <- function(gene, clear_id) {
@@ -159,6 +185,94 @@ gene_info_card <- function(gene) {
 # ggplot heatmap -> plotly with hover (gene / group / value)
 ggheat <- function(p) {
   ggplotly(p, tooltip = c("x", "y", "fill")) |> layout(margin = list(t = 40))
+}
+
+# ---- enrichment helpers (precomputed tables in ENR; reuse VOLC_PAL for KO/WT) --
+# cell-type values are matched EXACTLY: "Cardiomyocyte" and "Cardiomyocyte(cardiac-subset)"
+# are distinct analyses and must not be merged.
+enr_celltypes <- function() sort(unique(c(ENR$gsea$celltype, ENR$go$celltype, ENR$tf$celltype)))
+enr_dt <- function(df, scroll = "320px") {
+  validate(need(!is.null(df) && nrow(df), "No results for this selection."))
+  DT::datatable(df, rownames = FALSE, selection = "none",
+    options = list(pageLength = 15, scrollY = scroll, scrollX = TRUE,
+                   scrollCollapse = TRUE, dom = "ftip"),
+    class = "compact stripe hover")
+}
+enr_gsea <- function(ct, tp) { d <- ENR$gsea
+  validate(need(!is.null(d), "GSEA results are not in this data build."))
+  d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
+enr_gsea_plot <- function(ct, tp, topn = 20) {
+  d <- enr_gsea(ct, tp)
+  validate(need(nrow(d), "No GSEA results for this cell type / timepoint."))
+  d <- head(d[order(-abs(d$NES)), ], topn)
+  d$dir <- ifelse(d$NES > 0, "up in KO", "up in WT")
+  d$pathway <- factor(d$pathway, levels = d$pathway[order(d$NES)])
+  p <- ggplot(d, aes(NES, pathway, fill = dir,
+        text = paste0(pathway, "<br>NES: ", NES, "<br>padj: ", padj, "<br>size: ", size))) +
+    geom_col() + geom_vline(xintercept = 0, color = "grey60") +
+    scale_fill_manual(values = c("up in KO" = "#c62828", "up in WT" = "#1565c0")) +
+    theme_minimal(base_size = 12) +
+    labs(x = "NES (>0 enriched toward KO-up)", y = NULL, fill = NULL,
+         title = paste0("GSEA — ", ct, " ", tp))
+  ggplotly(p, tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+}
+enr_gsea_table <- function(ct, tp) {
+  d <- enr_gsea(ct, tp)
+  enr_dt(d[order(d$padj), intersect(c("pathway","NES","padj","size","leadingEdge"), names(d))])
+}
+enr_go <- function(ct, tp) { d <- ENR$go
+  validate(need(!is.null(d), "GO results are not in this data build."))
+  d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
+enr_go_plot <- function(ct, tp, topn = 20) {
+  d <- enr_go(ct, tp)
+  validate(need(nrow(d), "No GO BP results for this cell type / timepoint."))
+  d <- head(d[order(d$p.adjust), ], topn)
+  d$Description <- factor(d$Description, levels = rev(d$Description))
+  p <- ggplot(d, aes(FoldEnrichment, Description, size = Count, color = p.adjust,
+        text = paste0(Description, "<br>fold: ", FoldEnrichment, "<br>padj: ", p.adjust, "<br>genes: ", Count))) +
+    geom_point() + scale_color_viridis_c(option = "magma", direction = -1) +
+    theme_minimal(base_size = 11) +
+    labs(x = "fold enrichment", y = NULL, color = "padj", size = "genes",
+         title = paste0("GO BP enriched in KO-up genes — ", ct, " ", tp))
+  ggplotly(p, tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+}
+enr_go_table <- function(ct, tp) {
+  d <- enr_go(ct, tp)
+  enr_dt(d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))])
+}
+# E2F-family regulon activity (KO - WT) across cell type x timepoint
+enr_e2f_heat <- function() {
+  d <- tabs$e2f_regulon
+  validate(need(!is.null(d) && nrow(d), "No E2F regulon activity table."))
+  d$col <- paste0(d$celltype, " ", d$timepoint)
+  p <- ggplot(d, aes(col, source, fill = KO_minus_WT,
+        text = paste0(source, "<br>", col, "<br>KO-WT: ", round(KO_minus_WT, 3)))) +
+    geom_tile(color = "grey92") +
+    scale_fill_gradient2(low = "#1565c0", mid = "white", high = "#c62828", midpoint = 0) +
+    theme_minimal(base_size = 11) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = NULL, y = NULL, fill = "KO - WT", title = "E2F-family regulon activity (KO - WT)")
+  ggplotly(p, tooltip = "text") |> layout(margin = list(t = 40))
+}
+# top TFs by |KO - WT| activity for a cell type (from ENR$tf)
+enr_tf_top <- function(ct, topn = 20) {
+  d <- ENR$tf
+  validate(need(!is.null(d), "TF activity is not in this data build."))
+  d <- d[d$celltype == ct, , drop = FALSE]
+  validate(need(nrow(d), "No TF activity for this cell type."))
+  ko <- setNames(d$mean_activity[d$genotype == "KO"], d$source[d$genotype == "KO"])
+  wt <- setNames(d$mean_activity[d$genotype == "WT"], d$source[d$genotype == "WT"])
+  src <- intersect(names(ko), names(wt))
+  validate(need(length(src), "TF activity needs both KO and WT."))
+  w <- data.frame(source = src, KO = ko[src], WT = wt[src]); w$diff <- w$KO - w$WT
+  w <- head(w[order(-abs(w$diff)), ], topn)
+  w$source <- factor(w$source, levels = w$source[order(w$diff)])
+  p <- ggplot(w, aes(diff, source, fill = diff > 0,
+        text = paste0(source, "<br>KO: ", round(KO,3), "<br>WT: ", round(WT,3), "<br>KO-WT: ", round(diff,3)))) +
+    geom_col() + geom_vline(xintercept = 0, color = "grey60") +
+    scale_fill_manual(values = c("TRUE" = "#c62828", "FALSE" = "#1565c0"), guide = "none") +
+    theme_minimal(base_size = 11) +
+    labs(x = "KO - WT activity", y = NULL, title = paste0("Top TFs by |KO-WT| — ", ct))
+  ggplotly(p, tooltip = "text") |> layout(margin = list(l = 0, t = 40))
 }
 # log2FC heatmap: top genes (by max |LFC| across groups) x groups, fill = KO/WT log2FC
 lfc_heat <- function(de_list, topn = 22, ttl = NULL) {
@@ -256,6 +370,40 @@ umap_split <- function(df, colvar, splitvar, gene = NULL, continuous = FALSE, ps
     layout(margin = .umap_mar, legend = list(itemsizing = "constant"), annotations = anns)
 }
 
+# ---- interactive subset DEG (descriptive Wilcoxon via presto on log-norm) ----
+# filters: named list colname -> selected levels (NULL/empty = all). Returns a
+# logical mask over meta rows (= columns of EXPR, same order).
+deg_mask <- function(filters) {
+  keep <- rep(TRUE, nrow(DMETA))
+  for (col in names(filters)) {
+    sel <- filters[[col]]
+    if (!is.null(sel) && length(sel) && col %in% names(DMETA))
+      keep <- keep & as.character(DMETA[[col]]) %in% sel
+  }
+  keep
+}
+# compute descriptive DE between two groups within a cell subset.
+# grpvar = meta column to split on; a/b = the two level-sets (group A vs B).
+deg_compute <- function(mask, grpvar, a_levels, b_levels) {
+  validate(need(!is.null(EXPR), "Expanded expression matrix not in this data build."))
+  gv <- as.character(DMETA[[grpvar]])
+  inA <- mask & gv %in% a_levels
+  inB <- mask & gv %in% b_levels
+  nA <- sum(inA); nB <- sum(inB)
+  validate(need(nA >= 10 && nB >= 10,
+    sprintf("Need >= 10 cells per group (A = %d, B = %d). Loosen the filters.", nA, nB)))
+  cols <- which(inA | inB)
+  grp  <- ifelse(inA[cols], "A", "B")
+  X <- EXPR[, cols, drop = FALSE]
+  res <- presto::wilcoxauc(X, grp)
+  res <- res[res$group == "A", ]                       # logFC > 0 => up in group A
+  data.frame(gene = res$feature, log2FoldChange = res$logFC,
+             pvalue = res$pval, padj = res$padj,
+             pct_A = round(res$pct_in, 1), pct_B = round(res$pct_out, 1),
+             confounder = res$feature %in% CONF, n_A = nA, n_B = nB,
+             stringsAsFactors = FALSE)
+}
+
 # ---------------------------------------------------------------- UI ----------
 ui <- page_navbar(
   title = "E2F7/8 heart scRNA-seq", theme = bs_theme(version = 5, bootswatch = "flatly"),
@@ -303,6 +451,7 @@ ui <- page_navbar(
       radioButtons("ct_tp", "Timepoint", c("P0","P7"), inline = TRUE),
       selectInput("ct_sel", "Cell type", choices = NULL),
       textInput("ct_search", "Filter genes (substring)", ""),
+      checkboxInput("ct_hideconf", "Hide sex/construct genes", FALSE),
       hr(), helpText("KO-vs-WT differential expression within each cell type.",
                      br(), strong("p-axis ranks candidates only — not valid at n = 1."))),
     navset_card_tab(
@@ -319,13 +468,19 @@ ui <- page_navbar(
       selectInput("cm_res", "Subcluster resolution",
                   setNames(RES, paste0("res ", RES)), selected = RES[length(RES)]),
       selectInput("cm_sub", "Subcluster (for DE)", choices = NULL),
+      checkboxInput("cm_hideconf", "Hide sex/construct genes (DE)", FALSE),
       selectInput("cm_mapcolor", "Map: colour by",
                   c("Subcluster" = "subcluster", "Cell-cycle phase" = "Phase", "Cycling" = "cycling",
                     "Genotype" = "genotype", "Timepoint" = "timepoint", "Gene" = "gene")),
       conditionalPanel("input.cm_mapcolor == 'gene'",
         selectizeInput("cm_gene", "Gene", choices = NULL, options = list(maxOptions = 50L))),
+      selectInput("cm_phase_split", "Cell-cycle plot: split by",
+                  c("Genotype" = "genotype", "Timepoint" = "timepoint",
+                    "Genotype × Timepoint" = "both"), selected = "both"),
       hr(), helpText("True re-clustering of cardiomyocytes. Explore subgroup identity,",
-                     "KO-vs-WT differences per subgroup, and cell-cycle state.")),
+                     "KO-vs-WT differences per subgroup, and cell-cycle state.",
+                     br(), "Split the cell-cycle plot by timepoint to see whether two cycling",
+                     "subclusters separate by P0/P7 or by S vs G2/M phase.")),
     navset_card_tab(
       nav_panel("Subcluster map",
         helpText("Hover any cell to highlight all cells of its subcluster; move off to restore the full map."),
@@ -341,6 +496,67 @@ ui <- page_navbar(
              plotlyOutput("cm_lfcheat", height = "560px"))),
       nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px"))))),
 
+  nav_panel("E2F focus", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      selectInput("e2f_ct", "Cell type",
+                  choices = c("All cells" = "All",
+                              setNames(sort(unique(as.character(meta$celltype))),
+                                       gsub("_", " ", sort(unique(as.character(meta$celltype)))))),
+                  selected = if ("Cardiomyocyte" %in% meta$celltype) "Cardiomyocyte" else "All"),
+      hr(),
+      helpText(strong("Reading the E2F8 'up in KO' signal."),
+               br(), "An apparent rise in E2f8 transcript in the E2F7/8 KO most often reflects ",
+               "the conditional allele: reads outside the excised exons are still quantified, and ",
+               "loss of E2F8 auto-repression can elevate the residual transcript. It does NOT ",
+               "establish that functional E2F8 protein is up. Confirm which exons the flox removes ",
+               "vs. where reads map before interpreting direction.")),
+    card(full_screen = TRUE,
+      card_header("E2f7 / E2f8 log-norm expression by genotype × timepoint"),
+      plotOutput("e2f_expr", height = "560px")))),
+
+  nav_panel("Subset & DEGs", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      tags$b("1. Filter cells"),
+      lapply(CAT_COLS, function(c) selectizeInput(paste0("degf_", c), labof(c),
+        choices = sort(unique(as.character(DMETA[[c]]))), multiple = TRUE,
+        options = list(placeholder = "all"))),
+      hr(), tags$b("2. Compare"),
+      selectInput("deg_by", "Split groups by",
+        c("Genotype (KO vs WT)" = "genotype", "Cell-cycle phase" = "Phase",
+          "Cycling vs non-cycling" = "cycling", "Timepoint (P0 vs P7)" = "timepoint")),
+      selectizeInput("deg_a", "Group A", choices = NULL, multiple = TRUE),
+      selectizeInput("deg_b", "Group B", choices = NULL, multiple = TRUE),
+      checkboxInput("deg_hideconf", "Hide sex/construct genes", FALSE),
+      actionButton("deg_run", "Compute DEGs", class = "btn-primary"),
+      hr(), helpText("Descriptive Wilcoxon (presto) on log-norm expression of the ",
+                     "filtered live cells. Hypothesis-generating only (n = 1); ",
+                     "for rigorous KO-vs-WT use the precomputed DE tabs.")),
+    div(textOutput("deg_n"), style = "font-size:13px;margin-bottom:4px"),
+    helpText("Hover a point for the gene & stats; click to show just that gene below."),
+    layout_columns(col_widths = c(6, 6),
+      plotlyOutput("deg_volcano", height = "470px"),
+      div(uiOutput("deg_pick_ui"), DTOutput("deg_table", height = "440px"))),
+    uiOutput("deg_geneinfo"))),
+
+  nav_panel("Pathways & enrichment", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("enr_tp", "Timepoint", c("P0","P7"), selected = "P7"),
+      selectInput("enr_ct", "Cell type", choices = NULL),
+      hr(), helpText("Pre-computed pathway/GO/TF enrichment of the KO-vs-WT signal ",
+                     "(fgsea Hallmark/KEGG/E2F, GO biological process, decoupleR TF activity). ",
+                     strong("Descriptive only — n = 1."))),
+    navset_card_tab(
+      nav_panel("GSEA pathways",
+        plotlyOutput("enr_gsea_plot", height = "440px"),
+        DTOutput("enr_gsea_tab", height = "360px")),
+      nav_panel("GO biological process",
+        plotlyOutput("enr_go_plot", height = "440px"),
+        DTOutput("enr_go_tab", height = "360px")),
+      nav_panel("TF / regulon activity",
+        helpText("E2F-family regulon activity across cell types (KO − WT), then the top TFs for the selected cell type."),
+        plotlyOutput("enr_e2f_heat", height = "380px"),
+        plotlyOutput("enr_tf_top", height = "460px"))))),
+
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
     uiOutput("qcfigs"),
     h5("Doublet rate by lane (numbers)"),
@@ -352,8 +568,8 @@ ui <- page_navbar(
 # -------------------------------------------------------------- SERVER --------
 server <- function(input, output, session) {
   for (id in c("gene","g2","cm_gene")) {
-    sel <- if ("Gabbr2" %in% genes) "Gabbr2" else genes[1]
-    updateSelectizeInput(session, id, choices = genes, selected = sel, server = TRUE)
+    sel <- if ("Gabbr2" %in% ALL_GENES) "Gabbr2" else ALL_GENES[1]
+    updateSelectizeInput(session, id, choices = ALL_GENES, selected = sel, server = TRUE)
   }
   # cell-type choices depend on timepoint
   observeEvent(input$ct_tp, {
@@ -372,8 +588,11 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
 
   # ---- UMAP explorer ----
-  output$umap_title <- renderText(
-    if (input$color_by == "gene") paste0("Expression of ", input$gene) else paste0("Coloured by ", labof(input$color_by)))
+  output$umap_title <- renderText({
+    if (input$color_by != "gene") return(paste0("Coloured by ", labof(input$color_by)))
+    note <- if (!in_panel(input$gene)) "  (broad matrix — shown on the ~8k-cell subset)" else ""
+    paste0("Expression of ", input$gene, note)
+  })
   output$umap <- renderPlotly({
     cb <- input$color_by; cont <- cb %in% c("gene", CONT_COLS); ps <- input$ptsize
     if (input$split == "none") {
@@ -422,11 +641,11 @@ server <- function(input, output, session) {
   ct_d    <- reactive({ req(input$ct_tp, input$ct_sel); ctDE[[paste(input$ct_tp, input$ct_sel, sep = "_")]] })
   ct_pick <- reactiveVal(NULL)                                     # gene picked by clicking the volcano
   ct_tab  <- reactive({                                            # exactly what the table shows
-    d <- de_table(ct_d(), input$ct_search); g <- ct_pick()
+    d <- de_table(drop_conf(ct_d(), input$ct_hideconf), input$ct_search); g <- ct_pick()
     if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
     d
   })
-  output$ct_volcano <- renderPlotly(de_volcano_ly(ct_d(),
+  output$ct_volcano <- renderPlotly(de_volcano_ly(drop_conf(ct_d(), input$ct_hideconf),
                          paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano"))
   output$ct_table   <- renderDT(de_datatable(ct_tab()))
   output$ct_pick_ui  <- renderUI(pick_banner(ct_pick(), "ct_clear"))
@@ -466,11 +685,11 @@ server <- function(input, output, session) {
   cm_d    <- reactive({ req(input$cm_res, input$cm_sub); subDE[[paste0("res", input$cm_res)]][[input$cm_sub]] })
   cm_pick <- reactiveVal(NULL)
   cm_tab  <- reactive({
-    d <- de_table(cm_d()); g <- cm_pick()
+    d <- de_table(drop_conf(cm_d(), input$cm_hideconf)); g <- cm_pick()
     if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
     d
   })
-  output$cm_volcano <- renderPlotly(de_volcano_ly(cm_d(),
+  output$cm_volcano <- renderPlotly(de_volcano_ly(drop_conf(cm_d(), input$cm_hideconf),
                          paste0(input$cm_sub, " — ", sub_label(input$cm_res, input$cm_sub)), "cm_volcano"))
   output$cm_detab   <- renderDT(de_datatable(cm_tab()))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
@@ -486,12 +705,112 @@ server <- function(input, output, session) {
     req(input$cm_res)
     df <- cmm; df$sub <- factor(paste0("CM", df[[cm_subcol(input$cm_res)]]), levels = cm_subs(input$cm_res))
     validate(need("Phase" %in% names(df), "No cell-cycle phase data."))
-    tb <- as.data.frame(prop.table(table(df$sub, df$Phase, df$genotype), c(1, 3))); names(tb) <- c("sub","Phase","genotype","prop")
-    ggplot(tb, aes(sub, prop, fill = Phase)) + geom_col() + facet_wrap(~genotype) +
+    sp <- input$cm_phase_split %||% "both"
+    has_tp <- "timepoint" %in% names(df)
+    split_cols <- switch(sp,
+      genotype = "genotype",
+      timepoint = if (has_tp) "timepoint" else "genotype",
+      both = if (has_tp) c("genotype","timepoint") else "genotype")
+    # fraction of each Phase within sub × (split groups): margin = every dim but Phase (dim 2)
+    tab <- table(df[c("sub","Phase", split_cols)])
+    tb <- as.data.frame(prop.table(tab, setdiff(seq_along(dim(tab)), 2L)))
+    names(tb)[match("Freq", names(tb))] <- "prop"
+    tb$prop[is.nan(tb$prop)] <- 0     # empty subcluster × group cells -> 0, not NaN
+    fw <- if (length(split_cols) == 2) facet_grid(reformulate(split_cols[2], split_cols[1])) else facet_wrap(reformulate(split_cols))
+    ggplot(tb, aes(sub, prop, fill = Phase)) + geom_col() + fw +
       scale_fill_manual(values = c(G1 = "#bdbdbd", S = "#1565c0", G2M = "#c62828"), na.value = "grey90") +
       theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
-      labs(x = "subcluster", y = "fraction of cells", title = paste0("Cell-cycle phase by subcluster — res ", input$cm_res))
+      labs(x = "subcluster", y = "fraction of cells",
+           title = paste0("Cell-cycle phase by subcluster — res ", input$cm_res))
   })
+
+  # ---- E2F focus (E2f7 / E2f8 expression by genotype x timepoint) ----
+  output$e2f_expr <- renderPlot({
+    req(input$e2f_ct)
+    df <- meta
+    if (input$e2f_ct != "All" && has("celltype")) df <- df[df$celltype == input$e2f_ct, ]
+    validate(need(nrow(df) > 0, "No cells for this cell type."))
+    eg <- intersect(c("E2f7","E2f8"), c(rownames(expr), if (!is.null(EXPR)) rownames(EXPR)))
+    validate(need(length(eg) > 0, "E2f7/E2f8 not present in this data build."))
+    long <- do.call(rbind, lapply(eg, function(g) {
+      v <- expr_vec(g, df$cell)
+      data.frame(gene = g, expr = v, genotype = df$genotype,
+                 timepoint = if (has("timepoint", df)) df$timepoint else "all",
+                 stringsAsFactors = FALSE)
+    }))
+    long <- long[is.finite(long$expr), ]
+    validate(need(nrow(long) > 0, "No expression values (gene only in the broad subset with no overlap here)."))
+    long$genotype <- factor(long$genotype)
+    ggplot(long, aes(genotype, expr, fill = genotype)) +
+      geom_violin(scale = "width", trim = TRUE, alpha = .55, linewidth = .2) +
+      stat_summary(fun = mean, geom = "point", size = 2.4, color = "black") +
+      facet_grid(gene ~ timepoint, scales = "free_y") +
+      scale_fill_manual(values = c(KO = "#c62828", WT = "#1565c0"), na.value = "grey70") +
+      theme_minimal(base_size = 13) + guides(fill = "none") +
+      labs(x = "genotype", y = "log-norm expression",
+           title = paste0("E2f7 / E2f8 — ", gsub("_", " ", input$e2f_ct),
+                          " (black dot = mean; descriptive, n = 1)"))
+  })
+
+  # ---- Subset & DEGs (interactive descriptive DE) ----
+  observeEvent(input$deg_by, {
+    lv <- sort(unique(as.character(DMETA[[input$deg_by]])))
+    defA <- defB <- NULL
+    if (input$deg_by == "genotype")      { defA <- "KO";  defB <- "WT" }
+    else if (input$deg_by == "timepoint"){ defA <- "P0";  defB <- "P7" }
+    else if (input$deg_by == "cycling")  { defA <- "TRUE"; defB <- "FALSE" }
+    else if (input$deg_by == "Phase")    { defA <- intersect("G2M", lv); defB <- intersect("G1", lv) }
+    defA <- intersect(defA, lv); defB <- intersect(defB, lv)
+    updateSelectizeInput(session, "deg_a", choices = lv, selected = defA)
+    updateSelectizeInput(session, "deg_b", choices = lv, selected = defB)
+  }, ignoreNULL = FALSE)
+
+  deg_lab <- function(x) if (length(x)) paste(x, collapse = "/") else "?"
+  deg_res <- eventReactive(input$deg_run, {
+    req(input$deg_by, input$deg_a, input$deg_b)
+    validate(need(!length(intersect(input$deg_a, input$deg_b)),
+                  "Groups A and B overlap — pick distinct levels."))
+    filters <- setNames(lapply(CAT_COLS, function(c) input[[paste0("degf_", c)]]), CAT_COLS)
+    deg_compute(deg_mask(filters), input$deg_by, input$deg_a, input$deg_b)
+  }, ignoreNULL = FALSE)
+  deg_pick <- reactiveVal(NULL)
+  observeEvent(input$deg_run, deg_pick(NULL))                 # reset selection on a new run
+  deg_tab <- reactive({
+    d <- de_table(drop_conf(deg_res(), input$deg_hideconf)); g <- deg_pick()
+    if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
+    d
+  })
+  output$deg_n <- renderText({
+    d <- deg_res()
+    sprintf("Group A (%s): %d cells   |   Group B (%s): %d cells   |   %d genes tested",
+            deg_lab(isolate(input$deg_a)), d$n_A[1], deg_lab(isolate(input$deg_b)), d$n_B[1], nrow(d))
+  })
+  output$deg_volcano <- renderPlotly({
+    d <- drop_conf(deg_res(), input$deg_hideconf)
+    de_volcano_ly(d, paste0(deg_lab(isolate(input$deg_a)), "  vs  ", deg_lab(isolate(input$deg_b))),
+                  "deg_volcano", pos = paste0("up in ", deg_lab(isolate(input$deg_a))),
+                  neg = paste0("up in ", deg_lab(isolate(input$deg_b))),
+                  xlab = "logFC  (A / B)")
+  })
+  output$deg_table   <- renderDT(de_datatable(deg_tab()))
+  output$deg_pick_ui <- renderUI(pick_banner(deg_pick(), "deg_clear"))
+  output$deg_geneinfo <- renderUI(gene_info_card(deg_pick()))
+  observeEvent(event_data("plotly_click", source = "deg_volcano"),
+    deg_pick(event_data("plotly_click", source = "deg_volcano")$customdata))
+  observeEvent(input$deg_clear, deg_pick(NULL))
+
+  # ---- Pathways & enrichment (precomputed) ----
+  if (!is.null(ENR)) {
+    cts <- enr_celltypes()
+    updateSelectInput(session, "enr_ct", choices = cts,
+                      selected = if ("Cardiomyocyte" %in% cts) "Cardiomyocyte" else cts[1])
+  }
+  output$enr_gsea_plot <- renderPlotly({ req(input$enr_ct); enr_gsea_plot(input$enr_ct, input$enr_tp) })
+  output$enr_gsea_tab  <- renderDT({ req(input$enr_ct); enr_gsea_table(input$enr_ct, input$enr_tp) })
+  output$enr_go_plot   <- renderPlotly({ req(input$enr_ct); enr_go_plot(input$enr_ct, input$enr_tp) })
+  output$enr_go_tab    <- renderDT({ req(input$enr_ct); enr_go_table(input$enr_ct, input$enr_tp) })
+  output$enr_e2f_heat  <- renderPlotly(enr_e2f_heat())
+  output$enr_tf_top    <- renderPlotly({ req(input$enr_ct); enr_tf_top(input$enr_ct) })
 
   # ---- QC & normalization (embedded figures) ----
   figcard <- function(uri, title, desc) {
@@ -547,9 +866,11 @@ server <- function(input, output, session) {
     "extreme p-values &mdash; many so small they underflow to 0 in double precision. The plot floors these at ",
     "1e-300, so points pinned at <code>-log10 p = 300</code> simply mean &ldquo;smaller than the computer can ",
     "represent,&rdquo; not a real significance level. Use the vertical axis only to rank candidate genes.</li></ul></div>",
-    "<p style='color:#777;font-size:12px'>Live views show a stratified sample of ", format(nrow(meta), big.mark = ","),
-    " cells over a ", length(genes), "-gene panel; differential-expression tables and heatmaps are computed from the FULL data. ",
-    "Built ", app$built, ".</p>")))
+    "<p style='color:#777;font-size:12px'>Live views colour a stratified sample of ", format(nrow(meta), big.mark = ","),
+    " cells over a ", length(genes), "-gene curated panel at full resolution. Any other gene seen in a volcano ",
+    "can still be plotted from a broader ~", format(if (!is.null(EXPR)) ncol(EXPR) else 0L, big.mark = ","),
+    "-cell subset (the UMAP title flags when this fallback is in use). Differential-expression tables and heatmaps ",
+    "are computed from the FULL data. Built ", app$built, ".</p>")))
 }
 
 shinyApp(ui, server)
