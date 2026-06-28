@@ -1,0 +1,16 @@
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Data snapshots / backups — only the live app_data.rds is tracked
+*.bak.rds
+
+# OS / shell junk
+*.stackdump
+.DS_Store
+
+# rsconnect deploy logs (the .dcf deployment record IS tracked)
+rsconnect/*.log
+shiny_app/rsconnect/**/*.log
