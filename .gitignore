@@ -4,8 +4,14 @@
 .RData
 .Ruserdata
 
-# Data snapshots / backups — only the live app_data.rds is tracked
+# Data snapshots / backups
 *.bak.rds
+# Data bundle: build artifact, gzip-compressed ~108MB (over GitHub's 100MB limit).
+# Built by build_app_data.R; shipped to shinyapps.io via rsconnect, not via git.
+shiny_app/app_data.rds
+
+# RStudio project files
+*.Rproj
 
 # OS / shell junk
 *.stackdump

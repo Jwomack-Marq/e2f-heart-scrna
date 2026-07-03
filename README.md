@@ -15,21 +15,26 @@ subcluster identity / cell-cycle state, and browse pathway/enrichment results.
 ```
 shiny_app/
   app.R           # the whole app (UI + server)
-  app_data.rds    # slim, self-contained data bundle (built by build_app_data.R)
+  app_data.rds    # data bundle (built by build_app_data.R) — NOT in git, see below
   rsconnect/      # shinyapps.io deployment record
 ```
 
-The app is self-contained: it needs only `app_data.rds` and the R packages below
-— no Seurat or source `.rds` objects at runtime.
+At runtime the app needs only `app_data.rds` (no Seurat / source objects). The bundle
+is a **build artifact**: gzip-compressed it is ~108 MB, over GitHub's 100 MB file
+limit, so it is **git-ignored** and shipped to shinyapps.io via `rsconnect` (working
+tree), not committed. Regenerate it with `build_app_data.R` from the analysis pipeline
+(and `build_expr_full.R` / the enrichment scripts) — gzip, not xz, for faster
+cold-start deserialization.
 
 ## Run locally
 
 ```r
-install.packages(c("shiny", "bslib", "ggplot2", "Matrix", "plotly", "DT"))
+install.packages(c("shiny", "bslib", "ggplot2", "Matrix", "plotly", "DT",
+                   "svglite", "shinycssloaders"))
 # presto (descriptive Wilcoxon for the interactive "Subset & DEGs" tab):
 remotes::install_github("immunogenomics/presto")
 
-shiny::runApp("shiny_app")
+shiny::runApp("shiny_app")   # needs shiny_app/app_data.rds present
 ```
 
 ## Deploy (shinyapps.io)

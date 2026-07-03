@@ -15,7 +15,8 @@ library(ggplot2)
 library(Matrix)
 library(plotly)
 library(DT)
-library(svglite)   # vector SVG device for ggsave() figure export
+library(svglite)         # vector SVG device for ggsave() figure export
+library(shinycssloaders) # loading spinners on plot outputs
 
 app   <- readRDS("app_data.rds")
 meta  <- app$meta; expr <- app$expr; genes <- app$genes
@@ -533,6 +534,12 @@ deg_compute <- function(mask, grpvar, a_levels, b_levels) {
 }
 
 # ---------------------------------------------------------------- UI ----------
+# Wrap every plot output in a loading spinner (shown while the output computes /
+# on tab switch), by shadowing the two output constructors used across the UI.
+.spin <- function(x) shinycssloaders::withSpinner(x, type = 6, color = "#2c3e50", size = 0.6)
+plotOutput   <- function(...) .spin(shiny::plotOutput(...))
+plotlyOutput <- function(...) .spin(plotly::plotlyOutput(...))
+
 ui <- page_navbar(
   title = "E2F7/8 heart scRNA-seq", theme = bs_theme(version = 5, bootswatch = "flatly"),
 
