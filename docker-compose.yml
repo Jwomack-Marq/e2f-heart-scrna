@@ -5,4 +5,9 @@ services:
     container_name: e2f-heart-scrna
     ports:
       - "3838:3838"   # http://localhost:3838
+    volumes:
+      # The data bundle is git-ignored (~103 MB) and supplied at runtime, not baked in.
+      # IMPORTANT: create shiny_app/app_data.rds on the host BEFORE `up` — if the file is
+      # missing, Docker will create an empty directory here and the app will fail to read it.
+      - ./shiny_app/app_data.rds:/srv/shiny-app/app_data.rds:ro
     restart: unless-stopped
