@@ -1,0 +1,17 @@
+# The build only needs shiny_app/app.R + shiny_app/app_data.rds.
+# Everything else (esp. the 116 MB shinylive/ runtime and 53 MB app.json static
+# export) is excluded so the build context stays tiny.
+.git
+shinylive/
+app.json
+shinylive-sw.js
+index.html
+edit/
+.nojekyll
+bash.exe.stackdump
+shiny_app/app_data.bak.rds
+shiny_app/rsconnect/
+**/.DS_Store
+Dockerfile
+docker-compose.yml
+DOCKER.md

@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    image: e2f-heart-scrna:latest
+    container_name: e2f-heart-scrna
+    ports:
+      - "3838:3838"   # http://localhost:3838
+    restart: unless-stopped
