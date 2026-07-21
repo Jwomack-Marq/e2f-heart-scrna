@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-Command Rscript,R -ErrorAction SilentlyContinue | Select-Object Name, Source; Write-Output \"---\"; \\(Get-Item \"C:\\\\Users\\\\Justi\\\\OneDrive\\\\Documents\\\\GitHub\\\\e2f-heart-scrna\\\\shiny_app\\\\app_data.rds\"\\).Length)"
+    ]
+  }
+}
