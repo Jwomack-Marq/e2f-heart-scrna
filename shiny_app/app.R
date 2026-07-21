@@ -1,10 +1,11 @@
-# E2F7/8 mouse-heart scRNA-seq — interactive cell browser
-# Runs as a normal Shiny app AND, after shinylive::export(), entirely in the browser
-# (WebAssembly/webR). webR has no Seurat, so everything is plain ggplot2 + Matrix on
-# the slim app_data.rds built by build_app_data.R.
+# E2F7/8 mouse-heart scRNA-seq — interactive cell browser (server-side Shiny app).
+# Self-contained: ggplot2 + Matrix + plotly + DT on the slim app_data.rds built by
+# build_app_data.R (no Seurat needed at runtime). Previously also shipped as a
+# shinylive/WebAssembly static export — that build is archived at the git tag
+# `shinylive-static-archive`; this app now runs only against an R/Shiny server.
 #
-#   Local preview : shiny::runApp("our_analysis/06_outputs/app")
-#   Static export : Rscript our_analysis/06_outputs/app/export_shinylive.R
+#   Local preview : shiny::runApp("shiny_app")
+#   Deploy        : rsconnect::deployApp("shiny_app")   # shinyapps.io (account jwomackmu)
 #
 # DESCRIPTIVE pilot (n = 1, sex-confounded, KO not transcript-confirmed) — see About tab.
 
@@ -14,23 +15,84 @@ library(ggplot2)
 library(Matrix)
 library(plotly)
 library(DT)
+library(svglite)         # vector SVG device for ggsave() figure export
+library(shinycssloaders) # loading spinners on plot outputs
 
 app   <- readRDS("app_data.rds")
 meta  <- app$meta; expr <- app$expr; genes <- app$genes
-cmm   <- app$cm$meta; RES <- app$cm$res
+cmm   <- app$cm$meta; RES <- setdiff(app$cm$res, c("0.1", "0.3"))  # only expose res 0.2 in the app
 heat  <- app$heat; tabs <- app$tables; CONF <- app$confound
 ctDE  <- tabs$ct_DE; subDE <- tabs$sub_DE; subSum <- tabs$sub_summary; subType <- tabs$sub_subtype
 figs  <- app$figs
 GI    <- app$geneinfo          # per-gene info table (NULL on an un-enriched build)
+ENR   <- app$enrich            # list(gsea, go, tf) of precomputed enrichment (may be NULL)
+EXPR  <- app$deg_expr          # broad-gene log-norm matrix (genes x downsampled cells) for the DEG explorer
+DMETA <- if (!is.null(app$deg_meta)) app$deg_meta else meta   # metadata aligned to EXPR cols (fallback so UI builds)
+GENES_FULL <- app$deg_genes
+SCOREMETA  <- app$score_meta   # per-cell module-score definitions/coverage (build_signature_scores.R; may be NULL)
+COMMUN     <- app$commun       # curated ligand-receptor scores (build_communication.R; may be NULL)
+REFMAP     <- app$refmap       # reference-marker annotation check (build_refmap.R; may be NULL)
+# Present WT before KO on every plot (genotype is otherwise alphabetical -> KO first).
+GENO_LEVELS <- c("WT","KO")
+relevel_geno <- function(df) {
+  if (!is.null(df) && "genotype" %in% names(df))
+    df$genotype <- factor(df$genotype, levels = intersect(GENO_LEVELS, unique(as.character(df$genotype))))
+  df
+}
+meta <- relevel_geno(meta); cmm <- relevel_geno(cmm); DMETA <- relevel_geno(DMETA)
+# searchable union: curated panel (full 30k cells) + broad genes (deg_expr, ~8k cells).
+# Lets the UMAP/Gene-detail views show ANY gene that shows up in a volcano, falling
+# back to the broad matrix when a gene is outside the curated panel (expr_vec below).
+ALL_GENES <- sort(unique(c(genes, GENES_FULL)))
+in_panel  <- function(g) !is.null(g) && nzchar(g) && g %in% rownames(expr)
+
+# Curated gene sets for the "Gene set" quick-pick (mouse symbols, copied from the
+# pipeline's _common.R). Each is intersected with the available genes; empties drop.
+# Note: every gene here lives in the curated panel, so picking via a set => full cells.
+.gene_sets_raw <- list(
+  "E2F targets" = c("Mcm2","Mcm3","Mcm4","Mcm5","Mcm6","Mcm7","Pcna","Cdc6","Cdt1",
+                    "Ccne1","Ccne2","Ccna2","Ccnb1","Ccnb2","Cdk1","Cdc20","E2f1",
+                    "Mki67","Top2a","Birc5","Bub1","Rrm2","Tk1","Cdc25a","Foxm1",
+                    "Aurkb","Plk1","Cenpa","Cenpe"),
+  "E2F repressors" = c("E2f7","E2f8"),
+  "Cell cycle (S)" = c("Mcm2","Mcm4","Mcm5","Mcm6","Mcm7","Pcna","Rrm1","Rrm2","Tyms",
+                       "Slbp","Gins2","Cdc6","Cdc45","Cdca7","Dtl","Uhrf1","Usp1","Hells"),
+  "Cell cycle (G2/M)" = c("Mki67","Top2a","Ccnb1","Ccnb2","Cdk1","Cdc20","Aurka","Aurkb",
+                          "Bub1","Birc5","Cenpa","Cenpe","Cenpf","Cks2","Kif11","Kif23",
+                          "Tpx2","Nusap1","Anln","Cdca2","Cdca3","Cdca8","Ube2c","Tubb4b"),
+  "Cardiomyocyte" = c("Tnnt2","Myh6","Actc1","Ttn","Tnni3","Nppa"),
+  "Fibroblast"    = c("Col1a1","Col1a2","Dcn","Pdgfra","Gsn"),
+  "Endothelial"   = c("Pecam1","Cdh5","Kdr","Fabp4","Egfl7"),
+  "Immune / myeloid" = c("Ptprc","Cd68","Lyz2","C1qa","Csf1r"),
+  "Mural / pericyte" = c("Rgs5","Pdgfrb","Myh11","Acta2","Tagln"),
+  "CM subtypes"   = c("Myl2","Myh7","Myl7","Sln","Nppa","Bmp10","Hey2","Irx3","Tbx20",
+                      "Mki67","Top2a","Ccnb1","Aurkb","Cdca8"),
+  "CM maturation" = c("Myh6","Tnni3","Pln","Atp2a2","Ckm","Myl2","Cox6a2",          # mature
+                      "Myh7","Tnni1","Nppa","Nppb","Ccnd1","Mki67","Top2a"))         # immature
+GENE_SETS <- Filter(length, lapply(.gene_sets_raw, function(g) intersect(g, ALL_GENES)))
+# choices for the "Gene set" dropdowns: sentinel "__all__" maps to the full list
+GENE_SET_CHOICES <- c("All genes" = "__all__", setNames(names(GENE_SETS), names(GENE_SETS)))
+genes_for_set <- function(set) if (is.null(set) || set == "__all__" || !set %in% names(GENE_SETS))
+  ALL_GENES else GENE_SETS[[set]]
 
 has <- function(col, df = meta) col %in% names(df)
 CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype","seurat_clusters"))
-CONT_COLS <- Filter(has, c("pseudotime","S.Score","G2M.Score"))
+# per-cell module scores added by build_signature_scores.R (headline scores only;
+# absent columns drop out so an un-rebuilt bundle still loads).
+SCORE_COLS <- Filter(has, c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy",
+                            "sig_maturation","sig_metabolic"))
+CONT_COLS <- Filter(has, c("pseudotime","S.Score","G2M.Score", SCORE_COLS))
 
 nice <- c(gene = "Gene expression", celltype = "Cell type", genotype = "Genotype (KO/WT)",
           timepoint = "Timepoint (P0/P7)", Phase = "Cell-cycle phase", cycling = "Cycling (S/G2M)",
           cm_subtype = "CM subtype", seurat_clusters = "Cluster", pseudotime = "Pseudotime",
-          S.Score = "S-phase score", G2M.Score = "G2/M score", subcluster = "Subcluster")
+          S.Score = "S-phase score", G2M.Score = "G2/M score", subcluster = "Subcluster",
+          splitgrp = "Genotype × timepoint",
+          sig_prolif = "Proliferation score", sig_cytokinesis = "Cytokinesis score",
+          sig_ccexit = "Cell-cycle exit score", sig_ploidy = "Polyploidization proxy",
+          sig_maturation = "CM maturation score", sig_metabolic = "Metabolic maturation (FAO−glyc)",
+          sig_glycolysis = "Glycolysis score", sig_faox = "Fatty-acid oxidation score",
+          sig_mat_mature = "Mature-CM program", sig_mat_immature = "Immature-CM program")
 labof <- function(x) ifelse(x %in% names(nice), nice[x], gsub("_", " ", x))
 
 theme_umap <- theme_minimal(base_size = 13) +
@@ -38,9 +100,15 @@ theme_umap <- theme_minimal(base_size = 13) +
         legend.position = "right", strip.text = element_text(face = "bold"))
 div_scale <- scale_fill_gradient2(low = "#1565c0", mid = "white", high = "#c62828", midpoint = 0, na.value = "grey92")
 
+# expression for `cells`, drawn from the curated panel when possible, else the
+# broad deg_expr matrix (only ~8k cells overlap, the rest stay NA = grey). This is
+# what lets a gene that appears in a volcano but not the curated panel be coloured.
 expr_vec <- function(gene, cells) {
-  if (is.null(gene) || !gene %in% rownames(expr)) return(setNames(rep(NA_real_, length(cells)), cells))
-  v <- as.numeric(expr[gene, ]); names(v) <- colnames(expr); v[cells]
+  if (in_panel(gene)) { v <- as.numeric(expr[gene, ]); names(v) <- colnames(expr); return(v[cells]) }
+  if (!is.null(gene) && nzchar(gene) && !is.null(EXPR) && gene %in% rownames(EXPR)) {
+    v <- as.numeric(EXPR[gene, ]); names(v) <- colnames(EXPR); return(v[cells])
+  }
+  setNames(rep(NA_real_, length(cells)), cells)
 }
 cm_subcol <- function(res) paste0("SCT_snn_res.", res)
 cm_subs   <- function(res) { v <- unique(paste0("CM", cmm[[cm_subcol(res)]]))
@@ -54,12 +122,15 @@ sub_label <- function(res, sub) {
   lab
 }
 VOLC_PAL <- c("up in KO" = "#c62828", "up in WT" = "#1565c0", "n.s." = "#cccccc", "sex/construct" = "#9e9e9e")
-# add the derived columns (-log10 p, KO/WT class) the volcano + hover need
-de_annot <- function(d) {
+volc_pal <- function(pos, neg) setNames(c("#c62828","#1565c0","#cccccc","#9e9e9e"),
+                                        c(pos, neg, "n.s.", "sex/construct"))
+# add the derived columns (-log10 p, up/down class) the volcano + hover need.
+# pos/neg name the two directions (default KO/WT for the precomputed DE tabs).
+de_annot <- function(d, pos = "up in KO", neg = "up in WT") {
   d$neglogp <- -log10(pmax(d$pvalue, 1e-300))
   d$class <- ifelse(d$confounder, "sex/construct",
-              ifelse(abs(d$log2FoldChange) >= 1, ifelse(d$log2FoldChange > 0, "up in KO", "up in WT"), "n.s."))
-  d$class <- factor(d$class, levels = names(VOLC_PAL))
+              ifelse(abs(d$log2FoldChange) >= 1, ifelse(d$log2FoldChange > 0, pos, neg), "n.s."))
+  d$class <- factor(d$class, levels = c(pos, neg, "n.s.", "sex/construct"))
   d
 }
 # DE volcano from a trimmed DE data frame (static ggplot — kept for reference)
@@ -74,26 +145,34 @@ de_volcano <- function(d, ttl) {
 }
 # interactive plotly volcano: hover shows gene/stats, click emits the gene via
 # customdata (captured by event_data(source = source_id)) to drive the DE table.
-de_volcano_ly <- function(d, ttl, source_id) {
+de_volcano_ly <- function(d, ttl, source_id, pos = "up in KO", neg = "up in WT",
+                           xlab = "log2 fold change (KO / WT)", highlight = NULL) {
   validate(need(!is.null(d) && nrow(d), "No DE results for this selection (cluster too small / unbalanced)."))
-  d <- de_annot(d)
+  d <- de_annot(d, pos, neg)
   d$hover <- sprintf(
-    "<b>%s</b><br>log2FC (KO/WT): %.2f<br>-log10 p: %.2f<br>padj: %.2g<br>%s",
+    "<b>%s</b><br>logFC: %.2f<br>-log10 p: %.2f<br>padj: %.2g<br>%s",
     d$gene, d$log2FoldChange, d$neglogp, d$padj, as.character(d$class))
-  plot_ly(d, x = ~log2FoldChange, y = ~neglogp, color = ~class, colors = VOLC_PAL,
+  p <- plot_ly(d, x = ~log2FoldChange, y = ~neglogp, color = ~class, colors = volc_pal(pos, neg),
           customdata = ~gene, text = ~hover, hovertemplate = "%{text}<extra></extra>",
           type = "scattergl", mode = "markers",
           marker = list(size = 6, opacity = 0.6, line = list(width = 0)),
           source = source_id) |>
     layout(
       title = list(text = ttl, font = list(size = 13)),
-      xaxis = list(title = "log2 fold change (KO / WT)", zeroline = FALSE),
+      xaxis = list(title = xlab, zeroline = FALSE),
       yaxis = list(title = "-log10 p (ranking only, n=1)", zeroline = FALSE),
       legend = list(title = list(text = ""), itemsizing = "constant"),
       shapes = lapply(c(-1, 1), function(v) list(type = "line", x0 = v, x1 = v,
         yref = "paper", y0 = 0, y1 = 1, line = list(color = "grey60", width = 1, dash = "dot"))),
-      margin = list(t = 34)) |>
-    event_register("plotly_click")
+      margin = list(t = 34))
+  # ring the selected gene's point (set by clicking a point OR a table row)
+  if (!is.null(highlight) && nzchar(highlight) && highlight %in% d$gene) {
+    hd <- d[match(highlight, d$gene), , drop = FALSE]
+    p <- add_trace(p, x = hd$log2FoldChange, y = hd$neglogp, type = "scattergl", mode = "markers",
+                   marker = list(size = 15, color = "rgba(0,0,0,0)", line = list(color = "#111", width = 3)),
+                   name = "selected", showlegend = FALSE, hoverinfo = "skip", inherit = FALSE)
+  }
+  event_register(p, "plotly_click")
 }
 # ordered/filtered DE table; returns a data frame (rendered by DT). No row cap so
 # every volcano point has a corresponding table row for click->highlight.
@@ -110,24 +189,30 @@ de_table <- function(d, search = "") {
   d
 }
 # shared DT renderer for the DE tables (single-row select, scroll body)
-de_datatable <- function(df) {
+de_datatable <- function(df, scroll = "380px") {
   disp <- ifelse(names(df) %in% names(DE_DISP), DE_DISP[names(df)], names(df))
+  opts <- list(pageLength = DE_PAGELEN, dom = "ftip", order = list())
+  if (!is.null(scroll)) { opts$scrollY <- scroll; opts$scrollCollapse <- TRUE }  # NULL = natural height, paginated
   DT::datatable(df, rownames = FALSE, selection = "single", colnames = unname(disp),
-    options = list(pageLength = DE_PAGELEN, scrollY = "380px", scrollCollapse = TRUE,
-                   dom = "ftip", order = list()),
-    class = "compact stripe hover") |>
+    options = opts, class = "compact stripe hover") |>
     DT::formatSignif(intersect(c("log2FoldChange","neglog10p","baseMean","pvalue","padj"), names(df)), 3)
 }
-# small "Showing only <gene>" banner + a link to clear the volcano-click filter
+# optionally drop the sex/construct confounder genes (Xist, Y-genes, ROSA26) from a
+# DE frame before it reaches a volcano/table — n=1 makes these dominate the contrast.
+drop_conf <- function(d, hide) {
+  if (isTRUE(hide) && !is.null(d) && "confounder" %in% names(d)) d <- d[!d$confounder, , drop = FALSE]
+  d
+}
+# small "Selected <gene>" banner above the table + a link to clear the selection
 pick_banner <- function(gene, clear_id) {
   if (is.null(gene) || !nzchar(gene)) return(NULL)
   div(style = "margin-bottom:6px; font-size:13px",
-      span(HTML(paste0("Showing only <b>", gene, "</b> &middot; "))),
-      actionLink(clear_id, "show all genes"))
+      span(HTML(paste0("Selected <b>", gene, "</b> &middot; "))),
+      actionLink(clear_id, "clear"))
 }
 # info card for a picked gene, from the bundled app$geneinfo table (GI). All data
 # is precomputed (no runtime network calls); external links go to the full records.
-gene_info_card <- function(gene) {
+gene_info_card <- function(gene, close_id = NULL) {
   if (is.null(gene) || !nzchar(gene)) return(NULL)
   info <- if (!is.null(GI) && gene %in% rownames(GI)) as.list(GI[gene, ]) else NULL
   has  <- function(x) !is.null(x) && length(x) && !is.na(x) && nzchar(x)
@@ -149,7 +234,10 @@ gene_info_card <- function(gene) {
   summ <- if (!is.null(info) && has(info$summary)) info$summary else
           "No functional summary available for this gene (see links)."
   card(class = "mt-2",
-    card_header(HTML(paste0("<b>", gene, "</b> &mdash; ", name))),
+    card_header(class = "d-flex justify-content-between align-items-center",
+      HTML(paste0("<b>", gene, "</b> &mdash; ", name)),
+      if (!is.null(close_id)) actionLink(close_id, HTML("&times;"), title = "close",
+        style = "font-size:20px;line-height:1;color:#888;text-decoration:none")),
     card_body(
       if (length(bits)) tags$p(tags$small(paste(bits, collapse = " · ")), style = "color:#666;margin:0 0 4px"),
       if (!is.null(info) && has(info$alias)) tags$p(tags$small(paste0("Aliases: ", info$alias)), style = "color:#666;margin:0 0 6px"),
@@ -159,6 +247,116 @@ gene_info_card <- function(gene) {
 # ggplot heatmap -> plotly with hover (gene / group / value)
 ggheat <- function(p) {
   ggplotly(p, tooltip = c("x", "y", "fill")) |> layout(margin = list(t = 40))
+}
+
+# ---- enrichment helpers (precomputed tables in ENR; reuse VOLC_PAL for KO/WT) --
+# cell-type values are matched EXACTLY: "Cardiomyocyte" and "Cardiomyocyte(cardiac-subset)"
+# are distinct analyses and must not be merged.
+enr_celltypes <- function() sort(unique(c(ENR$gsea$celltype, ENR$go$celltype, ENR$tf$celltype)))
+enr_dt <- function(df, scroll = "320px") {
+  validate(need(!is.null(df) && nrow(df), "No results for this selection."))
+  DT::datatable(df, rownames = FALSE, selection = "none",
+    options = list(pageLength = 15, scrollY = scroll, scrollX = TRUE,
+                   scrollCollapse = TRUE, dom = "ftip"),
+    class = "compact stripe hover")
+}
+# ---- df-based enrichment plot cores (shared by the cell-type tab and the
+# per-subcluster tab so both render identically) --------------------------------
+gsea_barplot_gg <- function(d, ttl, topn = 20) {
+  validate(need(!is.null(d) && nrow(d), "No GSEA results for this selection."))
+  d <- head(d[order(-abs(d$NES)), ], topn)
+  d$dir <- ifelse(d$NES > 0, "up in KO", "up in WT")
+  d$pathway <- factor(d$pathway, levels = d$pathway[order(d$NES)])
+  ggplot(d, aes(NES, pathway, fill = dir,
+        text = paste0(pathway, "<br>NES: ", NES, "<br>padj: ", padj, "<br>size: ", size))) +
+    geom_col() + geom_vline(xintercept = 0, color = "grey60") +
+    scale_fill_manual(values = c("up in KO" = "#c62828", "up in WT" = "#1565c0")) +
+    theme_minimal(base_size = 12) +
+    labs(x = "NES (>0 enriched toward KO-up)", y = NULL, fill = NULL, title = ttl)
+}
+gsea_barplot_df <- function(d, ttl, topn = 20)
+  ggplotly(gsea_barplot_gg(d, ttl, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+go_dotplot_gg <- function(d, ttl, topn = 20) {
+  validate(need(!is.null(d) && nrow(d), "No GO BP results for this selection."))
+  d <- head(d[order(d$p.adjust), ], topn)
+  d$Description <- factor(d$Description, levels = rev(d$Description))
+  ggplot(d, aes(FoldEnrichment, Description, size = Count, color = p.adjust,
+        text = paste0(Description, "<br>fold: ", FoldEnrichment, "<br>padj: ", p.adjust, "<br>genes: ", Count))) +
+    geom_point() + scale_color_viridis_c(option = "magma", direction = -1) +
+    theme_minimal(base_size = 11) +
+    labs(x = "fold enrichment", y = NULL, color = "padj", size = "genes", title = ttl)
+}
+go_dotplot_df <- function(d, ttl, topn = 20)
+  ggplotly(go_dotplot_gg(d, ttl, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+# static "all subclusters at once" overviews (faceted; renderPlot, low-memory) --
+# "All clusters" enrichment view: one full-size plot per subcluster, two per row
+# (server registers a renderPlot per subcluster id "cm_<kind>_all_<CMn>").
+cm_enr_grid <- function(kind) {
+  subs <- cm_subs("0.2")
+  outs <- lapply(subs, function(cl) plotOutput(paste0("cm_", kind, "_all_", cl), height = "340px"))
+  rows <- lapply(seq(1, length(outs), by = 2), function(i)
+    fluidRow(column(6, outs[[i]]),
+             if (i + 1L <= length(outs)) column(6, outs[[i + 1L]])))
+  do.call(tagList, rows)
+}
+# per-subcluster enrichment slice (precomputed into ENR$sub by build_subcluster_enrichment.R)
+enr_sub_df <- function(kind, sub) {
+  d <- ENR$sub[[kind]]
+  validate(need(!is.null(d), "Per-subcluster enrichment isn't in this data build — run build_subcluster_enrichment.R and redeploy."))
+  d[d$subcluster == sub, , drop = FALSE]
+}
+
+enr_gsea <- function(ct, tp) { d <- ENR$gsea
+  validate(need(!is.null(d), "GSEA results are not in this data build."))
+  d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
+enr_gsea_plot <- function(ct, tp, topn = 20)
+  gsea_barplot_df(enr_gsea(ct, tp), paste0("GSEA — ", ct, " ", tp), topn)
+enr_gsea_table <- function(ct, tp) {
+  d <- enr_gsea(ct, tp)
+  enr_dt(d[order(d$padj), intersect(c("pathway","NES","padj","size","leadingEdge"), names(d))])
+}
+enr_go <- function(ct, tp) { d <- ENR$go
+  validate(need(!is.null(d), "GO results are not in this data build."))
+  d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
+enr_go_plot <- function(ct, tp, topn = 20)
+  go_dotplot_df(enr_go(ct, tp), paste0("GO BP enriched in KO-up genes — ", ct, " ", tp), topn)
+enr_go_table <- function(ct, tp) {
+  d <- enr_go(ct, tp)
+  enr_dt(d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))])
+}
+# E2F-family regulon activity (KO - WT) across cell type x timepoint
+enr_e2f_heat <- function() {
+  d <- tabs$e2f_regulon
+  validate(need(!is.null(d) && nrow(d), "No E2F regulon activity table."))
+  d$col <- paste0(d$celltype, " ", d$timepoint)
+  p <- ggplot(d, aes(col, source, fill = KO_minus_WT,
+        text = paste0(source, "<br>", col, "<br>KO-WT: ", round(KO_minus_WT, 3)))) +
+    geom_tile(color = "grey92") +
+    scale_fill_gradient2(low = "#1565c0", mid = "white", high = "#c62828", midpoint = 0) +
+    theme_minimal(base_size = 11) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = NULL, y = NULL, fill = "KO - WT", title = "E2F-family regulon activity (KO - WT)")
+  ggplotly(p, tooltip = "text") |> layout(margin = list(t = 40))
+}
+# top TFs by |KO - WT| activity for a cell type (from ENR$tf)
+enr_tf_top <- function(ct, topn = 20) {
+  d <- ENR$tf
+  validate(need(!is.null(d), "TF activity is not in this data build."))
+  d <- d[d$celltype == ct, , drop = FALSE]
+  validate(need(nrow(d), "No TF activity for this cell type."))
+  ko <- setNames(d$mean_activity[d$genotype == "KO"], d$source[d$genotype == "KO"])
+  wt <- setNames(d$mean_activity[d$genotype == "WT"], d$source[d$genotype == "WT"])
+  src <- intersect(names(ko), names(wt))
+  validate(need(length(src), "TF activity needs both KO and WT."))
+  w <- data.frame(source = src, KO = ko[src], WT = wt[src]); w$diff <- w$KO - w$WT
+  w <- head(w[order(-abs(w$diff)), ], topn)
+  w$source <- factor(w$source, levels = w$source[order(w$diff)])
+  p <- ggplot(w, aes(diff, source, fill = diff > 0,
+        text = paste0(source, "<br>KO: ", round(KO,3), "<br>WT: ", round(WT,3), "<br>KO-WT: ", round(diff,3)))) +
+    geom_col() + geom_vline(xintercept = 0, color = "grey60") +
+    scale_fill_manual(values = c("TRUE" = "#c62828", "FALSE" = "#1565c0"), guide = "none") +
+    theme_minimal(base_size = 11) +
+    labs(x = "KO - WT activity", y = NULL, title = paste0("Top TFs by |KO-WT| — ", ct))
+  ggplotly(p, tooltip = "text") |> layout(margin = list(l = 0, t = 40))
 }
 # log2FC heatmap: top genes (by max |LFC| across groups) x groups, fill = KO/WT log2FC
 lfc_heat <- function(de_list, topn = 22, ttl = NULL) {
@@ -183,25 +381,51 @@ PAL <- c("#E41A1C","#377EB8","#4DAF4A","#984EA3","#FF7F00","#FFD92F","#A65628","
          "#1B9E77","#D95F02","#7570B3","#E7298A","#66A61E","#E6AB02","#A6761D","#666666",
          "#1F78B4","#33A02C","#FB9A99","#FDBF6F","#CAB2D6","#B15928","#6A3D9A","#B2DF8A")
 pal_for <- function(levs) setNames(PAL[((seq_along(levs) - 1) %% length(PAL)) + 1], levs)
+# ---- publication aesthetics: palettes + label-rename helpers --------------------
+# colourblind-safe discrete palettes (hardcoded hex -> no extra package deps).
+PALETTES_DISCRETE <- list(
+  "Default"   = PAL,
+  "Okabe-Ito" = c("#E69F00","#56B4E9","#009E73","#F0E442","#0072B2","#D55E00","#CC79A7","#000000"),
+  "Set2"      = c("#66C2A5","#FC8D62","#8DA0CB","#E78AC3","#A6D854","#FFD92F","#E5C494","#B3B3B3"),
+  "Dark2"     = c("#1B9E77","#D95F02","#7570B3","#E7298A","#66A61E","#E6AB02","#A6761D","#666666"),
+  "Viridis"   = NULL)   # NULL -> generated per-n via grDevices::hcl.colors below
+# named colour vector over `levs` for the chosen palette (recycles like pal_for)
+disc_pal <- function(levs, choice = "Default") {
+  if (is.null(choice) || !choice %in% names(PALETTES_DISCRETE)) choice <- "Default"
+  pal <- if (identical(choice, "Viridis")) grDevices::hcl.colors(max(length(levs), 1), "viridis")
+         else PALETTES_DISCRETE[[choice]]
+  setNames(pal[((seq_along(levs) - 1) %% length(pal)) + 1], levs)
+}
+# map a character/level vector through a rename list; unmapped values pass through.
+relab <- function(x, map = list()) {
+  x <- as.character(x)
+  if (!length(map)) return(x)
+  hit <- x %in% names(map)
+  x[hit] <- unlist(map[x[hit]]); x
+}
 .ax       <- list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE, title = "")
 .exprsc   <- list(c(0,"#eeeeee"), c(0.45,"#fec44f"), c(0.75,"#fc4e2a"), c(1,"#800026"))
 .umap_mar <- list(l = 0, r = 0, b = 0, t = 26)
-centroids <- function(df) { a <- aggregate(cbind(UMAP1, UMAP2) ~ val, df, median)
-  lapply(seq_len(nrow(a)), function(i) list(x = a$UMAP1[i], y = a$UMAP2[i], text = as.character(a$val[i]),
-    showarrow = FALSE, font = list(size = 12, color = "#111"), bgcolor = "rgba(255,255,255,0.55)")) }
+centroids <- function(df, size = 12, map = list()) { a <- aggregate(cbind(UMAP1, UMAP2) ~ val, df, median)
+  lapply(seq_len(nrow(a)), function(i) list(x = a$UMAP1[i], y = a$UMAP2[i], text = relab(a$val[i], map),
+    showarrow = FALSE, font = list(size = size, color = "#111"), bgcolor = "rgba(255,255,255,0.55)")) }
 
 # single-panel categorical: hover a cell -> highlight ALL cells of that cluster (crosstalk),
 # double-click a legend entry to isolate; centroid labels make clusters easy to read.
-umap_cat <- function(df, colvar, ttl = NULL, psize = 4.5, labels = TRUE) {
+# labels/labsize/legend/pal/map are publication-figure controls (defaults = original look).
+umap_cat <- function(df, colvar, ttl = NULL, psize = 4.5, labels = TRUE,
+                     labsize = 12, legend = TRUE, pal_choice = "Default", map = list()) {
   df$val <- factor(df[[colvar]])
+  if (length(map)) levels(df$val) <- relab(levels(df$val), map)   # rename legend + centroid labels
+  cols <- disc_pal(levels(df$val), pal_choice)
   grp <- paste0("umaphl_", make.names(colvar))                 # named crosstalk group to clear from JS
   sd <- crosstalk::SharedData$new(df, key = ~val, group = grp)
   p <- plot_ly(sd, x = ~UMAP1, y = ~UMAP2, type = "scattergl", mode = "markers",
-               color = ~val, colors = pal_for(levels(df$val)),
+               color = ~val, colors = cols,
                marker = list(size = psize, line = list(width = 0)), text = ~val, hoverinfo = "text") |>
     layout(xaxis = .ax, yaxis = .ax, margin = .umap_mar, title = list(text = ttl, font = list(size = 13)),
-           legend = list(itemsizing = "constant"),
-           annotations = if (labels) centroids(df) else NULL)
+           showlegend = legend, legend = list(itemsizing = "constant"),
+           annotations = if (labels) centroids(df, size = labsize) else NULL)
   # hover a cell -> highlight its whole subtype (crosstalk). crosstalk's own `off`
   # can't fire on un-hover, so we clear the selection ourselves on unhover and on a
   # click that hits no point -> all cells return to normal.
@@ -219,44 +443,268 @@ umap_cat <- function(df, colvar, ttl = NULL, psize = 4.5, labels = TRUE) {
     }", grp))
 }
 # single-panel continuous (gene expression / scores)
-umap_cont <- function(df, val, ttl = NULL, psize = 4.5) {
+umap_cont <- function(df, val, ttl = NULL, psize = 4.5, legend = TRUE) {
   df$val <- as.numeric(val); df <- df[order(df$val, na.last = FALSE), ]
   plot_ly(df, x = ~UMAP1, y = ~UMAP2, type = "scattergl", mode = "markers",
-          marker = list(size = psize, color = ~val, colorscale = .exprsc, showscale = TRUE,
+          marker = list(size = psize, color = ~val, colorscale = .exprsc, showscale = legend,
                         colorbar = list(title = ""), line = list(width = 0)),
           text = ~round(val, 2), hoverinfo = "text") |>
     layout(xaxis = .ax, yaxis = .ax, margin = .umap_mar, title = list(text = ttl, font = list(size = 13)))
 }
-# side-by-side split panels (legend / colourbar shown once)
-umap_split <- function(df, colvar, splitvar, gene = NULL, continuous = FALSE, psize = 4) {
-  levs_sp  <- sort(unique(as.character(df[[splitvar]])))
-  val_levs <- if (!continuous) levels(factor(df[[colvar]])) else NULL
-  cols     <- if (!continuous) pal_for(val_levs) else NULL
+# side-by-side split panels (legend / colourbar shown once). pal_choice/map rename + recolour.
+# nrows > 1 lays the panels out on a grid (row-major), e.g. genotype x timepoint as a 2x2.
+umap_split <- function(df, colvar, splitvar, gene = NULL, continuous = FALSE, psize = 4,
+                       legend = TRUE, pal_choice = "Default", map = list(), nrows = 1) {
+  levs_sp  <- if (is.factor(df[[splitvar]])) levels(droplevels(factor(df[[splitvar]]))) else sort(unique(as.character(df[[splitvar]])))
+  val_levs <- if (!continuous) relab(levels(factor(df[[colvar]])), map) else NULL
+  cols     <- if (!continuous) disc_pal(val_levs, pal_choice) else NULL
   plts <- lapply(seq_along(levs_sp), function(j) {
     d <- df[as.character(df[[splitvar]]) == levs_sp[j], ]
     if (continuous) {
       d$val <- if (!is.null(gene)) expr_vec(gene, d$cell) else d[[colvar]]; d <- d[order(d$val, na.last = FALSE), ]
       plot_ly(d, x = ~UMAP1, y = ~UMAP2, type = "scattergl", mode = "markers",
-              marker = list(size = psize, color = ~val, colorscale = .exprsc, showscale = (j == 1),
+              marker = list(size = psize, color = ~val, colorscale = .exprsc, showscale = (j == 1 && legend),
                             colorbar = list(title = ""), line = list(width = 0)),
               text = ~round(val, 2), hoverinfo = "text") |> layout(xaxis = .ax, yaxis = .ax)
     } else {
-      d$val <- factor(d[[colvar]], levels = val_levs); p <- plot_ly()
+      d$val <- factor(relab(d[[colvar]], map), levels = val_levs); p <- plot_ly()
       for (i in seq_along(val_levs)) { di <- d[d$val == val_levs[i], ]
         p <- add_trace(p, data = di, x = ~UMAP1, y = ~UMAP2, type = "scattergl", mode = "markers",
-                       name = val_levs[i], legendgroup = val_levs[i], showlegend = (j == 1),
+                       name = val_levs[i], legendgroup = val_levs[i], showlegend = (j == 1 && legend),
                        marker = list(size = psize, color = cols[i], line = list(width = 0)),
                        text = val_levs[i], hoverinfo = "text") }
       p |> layout(xaxis = .ax, yaxis = .ax)
     }
   })
-  anns <- lapply(seq_along(levs_sp), function(j) list(text = paste0(labof(splitvar), ": ", levs_sp[j]),
-    x = (j - 0.5) / length(levs_sp), y = 1.0, xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 13)))
-  subplot(plts, nrows = 1, shareX = TRUE, shareY = TRUE, titleX = FALSE, titleY = FALSE) |>
-    layout(margin = .umap_mar, legend = list(itemsizing = "constant"), annotations = anns)
+  ncol <- ceiling(length(levs_sp) / nrows)
+  anns <- lapply(seq_along(levs_sp), function(j) {
+    col <- (j - 1) %% ncol; row <- (j - 1) %/% ncol           # row-major (matches subplot fill order)
+    list(text = paste0(labof(splitvar), ": ", levs_sp[j]),
+         x = (col + 0.5) / ncol, y = 1 - row / nrows,
+         xref = "paper", yref = "paper", showarrow = FALSE, font = list(size = 13)) })
+  subplot(plts, nrows = nrows, shareX = TRUE, shareY = TRUE, titleX = FALSE, titleY = FALSE) |>
+    layout(margin = .umap_mar, showlegend = legend, legend = list(itemsizing = "constant"), annotations = anns)
+}
+
+# ---- publication "Figure options": reusable control block + export wiring -------
+# emits a namespaced (prefix_*) control set; `export` picks the download UI (vector
+# ggsave for ggplot panels, camera-button PNG for the WebGL UMAP).
+figure_controls <- function(prefix, export = c("ggplot","umap"), base = TRUE, palette = TRUE,
+                            rename = TRUE, labels = FALSE, default_base = 13) {
+  export <- match.arg(export); p <- function(s) paste0(prefix, "_", s)
+  tagList(
+    textInput(p("title"), "Title (blank = default)", ""),
+    if (labels) checkboxInput(p("labels"), "Show cluster labels", TRUE),
+    if (labels) sliderInput(p("labelsize"), "Label font size", 8, 28, 12, 1),
+    if (base)   sliderInput(p("basesize"), "Base font size", 8, 24, default_base, 1),
+    checkboxInput(p("legend"), "Show legend", TRUE),
+    if (palette) selectInput(p("palette"), "Palette", names(PALETTES_DISCRETE)),
+    if (rename) tagList(tags$small("Rename categories (double-click a label cell):"),
+                        DTOutput(p("renametab"))),
+    hr(),
+    checkboxInput(p("export_on"), "Custom export options", FALSE),
+    conditionalPanel(sprintf("input.%s_export_on", prefix),
+      if (export == "ggplot") tagList(
+        div(style = "display:flex;gap:6px",
+          numericInput(p("w"), "W (in)", 7, 1, 20, 0.5),
+          numericInput(p("h"), "H (in)", 5, 1, 20, 0.5),
+          numericInput(p("dpi"), "DPI", 300, 72, 600, 1)),
+        div(style = "display:flex;gap:6px;margin-top:4px",
+          downloadButton(p("dl_pdf"), "PDF", class = "btn-sm btn-outline-secondary"),
+          downloadButton(p("dl_svg"), "SVG", class = "btn-sm btn-outline-secondary"),
+          downloadButton(p("dl_png"), "PNG", class = "btn-sm btn-outline-secondary")))
+      else tagList(
+        div(style = "display:flex;gap:6px",
+          numericInput(p("w"), "W (px)", 1200, 300, 4000, 50),
+          numericInput(p("h"), "H (px)", 900, 300, 4000, 50)),
+        sliderInput(p("scale"), "Resolution scale", 1, 4, 2, 0.5),
+        helpText("Camera icon on the plot saves a PNG at this size/scale. ",
+                 "Leave unchecked to use the camera's default download."))))
+}
+# editable 2-column rename table (category read-only, label editable)
+rename_table <- function(levs, map = list()) {
+  df <- data.frame(category = levs, label = relab(levs, map), stringsAsFactors = FALSE)
+  DT::datatable(df, rownames = FALSE, selection = "none",
+    editable = list(target = "cell", disable = list(columns = 0)),
+    options = list(dom = "t", paging = FALSE, scrollY = "180px", ordering = FALSE),
+    class = "compact stripe")
+}
+# apply the generic options a built ggplot can take without knowing its data:
+# title override (blank = keep the plot's own) + legend toggle. Palette/rename/base
+# size are applied inside each plot's build reactive (they need the data levels).
+apply_fig_opts <- function(p, prefix, input) {
+  ttl <- input[[paste0(prefix, "_title")]]
+  if (!is.null(ttl) && nzchar(ttl)) p <- p + labs(title = ttl)
+  if (isFALSE(input[[paste0(prefix, "_legend")]])) p <- p + theme(legend.position = "none")
+  p
+}
+# downloadHandler factory: regenerates the SAME plot object for export via ggsave.
+dl_ggplot <- function(prefix, plot_reactive, input, fmt) {
+  downloadHandler(
+    filename = function() paste0(prefix, "_", Sys.Date(), ".", fmt),
+    content  = function(file) {
+      g <- function(s) input[[paste0(prefix, "_", s)]]
+      ggsave(file, apply_fig_opts(plot_reactive(), prefix, input), device = fmt,
+             width = g("w") %||% 7, height = g("h") %||% 5, dpi = g("dpi") %||% 300, units = "in")
+    })
+}
+
+# ---- interactive subset DEG (descriptive Wilcoxon via presto on log-norm) ----
+# filters: named list colname -> selected levels (NULL/empty = all). Returns a
+# logical mask over meta rows (= columns of EXPR, same order).
+deg_mask <- function(filters) {
+  keep <- rep(TRUE, nrow(DMETA))
+  for (col in names(filters)) {
+    sel <- filters[[col]]
+    if (!is.null(sel) && length(sel) && col %in% names(DMETA))
+      keep <- keep & as.character(DMETA[[col]]) %in% sel
+  }
+  keep
+}
+# compute descriptive DE between two groups within a cell subset.
+# grpvar = meta column to split on; a/b = the two level-sets (group A vs B).
+deg_compute <- function(mask, grpvar, a_levels, b_levels) {
+  validate(need(!is.null(EXPR), "Expanded expression matrix not in this data build."))
+  gv <- as.character(DMETA[[grpvar]])
+  inA <- mask & gv %in% a_levels
+  inB <- mask & gv %in% b_levels
+  nA <- sum(inA); nB <- sum(inB)
+  validate(need(nA >= 10 && nB >= 10,
+    sprintf("Need >= 10 cells per group (A = %d, B = %d). Loosen the filters.", nA, nB)))
+  cols <- which(inA | inB)
+  grp  <- ifelse(inA[cols], "A", "B")
+  X <- EXPR[, cols, drop = FALSE]
+  res <- presto::wilcoxauc(X, grp)
+  res <- res[res$group == "A", ]                       # logFC > 0 => up in group A
+  data.frame(gene = res$feature, log2FoldChange = res$logFC,
+             pvalue = res$pval, padj = res$padj,
+             pct_A = round(res$pct_in, 1), pct_B = round(res$pct_out, 1),
+             confounder = res$feature %in% CONF, n_A = nA, n_B = nB,
+             stringsAsFactors = FALSE)
+}
+
+# ---- new-analysis helpers: module scores / communication / annotation check --
+# All read precomputed slots (build_signature_scores.R / build_communication.R /
+# build_refmap.R). Each validate()s a clear "run the builder" message so an
+# un-rebuilt bundle still loads.
+CELLTYPE_CHOICES <- c("All cells" = "All",
+  if ("celltype" %in% names(meta)) setNames(sort(unique(as.character(meta$celltype))),
+    gsub("_", " ", sort(unique(as.character(meta$celltype))))) else NULL)
+CM_DEFAULT_CT <- if ("celltype" %in% names(meta) && "Cardiomyocyte" %in% meta$celltype) "Cardiomyocyte" else "All"
+
+score_df <- function(scol, ct) {
+  validate(need(scol %in% names(meta), paste0(
+    "Score not in this data build — run build_signature_scores.R and redeploy.")))
+  df <- meta
+  if (!is.null(ct) && ct != "All" && "celltype" %in% names(df)) df <- df[as.character(df$celltype) == ct, ]
+  df <- df[!is.na(df[[scol]]), ]
+  validate(need(nrow(df), "No scored cells for this selection."))
+  df
+}
+# violin+box of a score by genotype, faceted by timepoint
+score_violin <- function(scol, ct, bs = 13, pal = "Default") {
+  df <- score_df(scol, ct); df$y <- df[[scol]]
+  p <- ggplot(df, aes(genotype, y, fill = genotype)) +
+    geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2) +
+    geom_boxplot(width = .12, outlier.size = .3, alpha = .5) +
+    guides(fill = "none") + theme_minimal(base_size = bs) +
+    labs(x = NULL, y = labof(scol), title = paste0(labof(scol), " — ", ct))
+  if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
+  if (pal != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(factor(df$genotype)), pal))
+  p
+}
+# proliferation vs cytokinesis scatter — the polyploidization quadrant
+ploidy_scatter <- function(ct, bs = 13) {
+  need_cols <- c("sig_prolif","sig_cytokinesis")
+  validate(need(all(need_cols %in% names(meta)),
+    "Run build_signature_scores.R for the proliferation/cytokinesis scores."))
+  df <- meta; if (ct != "All" && "celltype" %in% names(df)) df <- df[as.character(df$celltype) == ct, ]
+  df <- df[stats::complete.cases(df[need_cols]), ]
+  validate(need(nrow(df), "No scored cells for this selection."))
+  p <- ggplot(df, aes(sig_prolif, sig_cytokinesis, color = genotype)) +
+    geom_point(size = .5, alpha = .35) +
+    geom_hline(yintercept = 0, color = "grey70") + geom_vline(xintercept = 0, color = "grey70") +
+    theme_minimal(base_size = bs) +
+    labs(x = "Proliferation score", y = "Cytokinesis score", color = NULL,
+         title = paste0("Cycling vs cytokinesis — ", ct),
+         caption = "High proliferation + low cytokinesis (lower-right) = karyokinesis without cytokinesis → polyploidization.")
+  if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
+  p
+}
+# transcriptional maturation vs metabolic maturation, per cell (this bundle has no
+# pseudotime, so the joint score distribution is the maturation read-out)
+mat_scatter <- function(ct, bs = 13) {
+  need_cols <- c("sig_maturation","sig_metabolic")
+  validate(need(all(need_cols %in% names(meta)),
+    "Run build_signature_scores.R for the maturation/metabolic scores."))
+  df <- meta; if (ct != "All" && has("celltype")) df <- df[as.character(df$celltype) == ct, ]
+  df <- df[stats::complete.cases(df[need_cols]), ]
+  validate(need(nrow(df), "No cells with both maturation and metabolic scores for this selection."))
+  p <- ggplot(df, aes(sig_maturation, sig_metabolic, color = genotype)) +
+    geom_point(size = .5, alpha = .35) +
+    geom_hline(yintercept = 0, color = "grey70") + geom_vline(xintercept = 0, color = "grey70") +
+    theme_minimal(base_size = bs) +
+    labs(x = "CM maturation score", y = "Metabolic maturation (FAO−glyc)", color = NULL,
+         title = paste0("Transcriptional vs metabolic maturation — ", ct),
+         caption = "Upper-right = mature sarcomere program + oxidative metabolism. Co-varying? Does KO shift the joint distribution?")
+  if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
+  p
+}
+# ---- curated cell-cell communication (COMMUN$scores) --------------------------
+commun_pathways <- function() if (is.null(COMMUN$scores)) character(0) else sort(unique(COMMUN$scores$pathway))
+commun_heat <- function(pathway, tp, metric) {
+  validate(need(!is.null(COMMUN$scores),
+    "Cell-cell communication isn't in this data build — run build_communication.R and redeploy."))
+  d <- COMMUN$scores[COMMUN$scores$timepoint == tp, , drop = FALSE]
+  if (!is.null(pathway) && pathway != "All") d <- d[d$pathway == pathway, , drop = FALSE]
+  validate(need(nrow(d), "No interactions for this selection."))
+  d$val <- d[[metric]]
+  agg <- aggregate(val ~ sender + receiver, d, function(x) mean(x, na.rm = TRUE))
+  fillscale <- if (metric == "delta") div_scale
+               else scale_fill_gradient(low = "#eeeeee", high = "#800026", na.value = "grey92")
+  ttl <- paste0(if (pathway == "All") "All pathways" else pathway, " — ", tp,
+                " (", if (metric == "delta") "KO − WT" else metric, ")")
+  p <- ggplot(agg, aes(receiver, sender, fill = val,
+        text = paste0(sender, " → ", receiver, "<br>", metric, ": ", round(val, 3)))) +
+    geom_tile(color = "grey92") + fillscale +
+    theme_minimal(base_size = 11) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = "receiver", y = "sender", fill = metric, title = ttl)
+  ggplotly(p, tooltip = "text") |> layout(margin = list(t = 40))
+}
+commun_table <- function(pathway, tp) {
+  validate(need(!is.null(COMMUN$scores), "No communication table in this build."))
+  d <- COMMUN$scores[COMMUN$scores$timepoint == tp, , drop = FALSE]
+  if (pathway != "All") d <- d[d$pathway == pathway, , drop = FALSE]
+  d <- d[order(-abs(d$delta)), ]
+  enr_dt(d[, intersect(c("pathway","ligand","receptor","sender","receiver","WT","KO","delta"), names(d))])
+}
+# ---- reference-marker annotation check (REFMAP$confusion) --------------------
+refmap_heat <- function() {
+  validate(need(!is.null(REFMAP$confusion),
+    "Annotation check isn't in this data build — run build_refmap.R and redeploy."))
+  d <- REFMAP$confusion
+  p <- ggplot(d, aes(predicted, celltype, fill = prop,
+        text = paste0(celltype, " → ", predicted, "<br>row prop: ", round(prop, 2), "<br>n: ", n))) +
+    geom_tile(color = "grey92") +
+    scale_fill_gradient(low = "#f7fbff", high = "#08306b", na.value = "grey92") +
+    theme_minimal(base_size = 11) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = "predicted (marker argmax)", y = "existing celltype", fill = "row prop",
+         title = "Annotation concordance (row-normalised)")
+  ggplotly(p, tooltip = "text") |> layout(margin = list(t = 40))
+}
+refmap_table <- function() {
+  validate(need(!is.null(REFMAP$confusion), "No annotation-check table in this build."))
+  d <- REFMAP$confusion
+  enr_dt(d[order(d$celltype, -d$prop), ])
 }
 
 # ---------------------------------------------------------------- UI ----------
+# Wrap every plot output in a loading spinner (shown while the output computes /
+# on tab switch), by shadowing the two output constructors used across the UI.
+.spin <- function(x) shinycssloaders::withSpinner(x, type = 6, color = "#2c3e50", size = 0.6)
+plotOutput   <- function(...) .spin(shiny::plotOutput(...))
+plotlyOutput <- function(...) .spin(plotly::plotlyOutput(...))
+
 ui <- page_navbar(
   title = "E2F7/8 heart scRNA-seq", theme = bs_theme(version = 5, bootswatch = "flatly"),
 
@@ -267,26 +715,34 @@ ui <- page_navbar(
                                      c(labof("gene"), labof(CAT_COLS), labof(CONT_COLS))),
                   selected = "celltype"),
       conditionalPanel("input.color_by == 'gene'",
+        selectInput("geneset", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
         selectizeInput("gene", "Gene", choices = NULL, options = list(maxOptions = 50L))),
       selectInput("split", "Split panels by", c("(none)" = "none",
                   setNames(intersect(c("genotype","timepoint"), CAT_COLS),
                            labof(intersect(c("genotype","timepoint"), CAT_COLS))))),
       sliderInput("ptsize", "Point size", 1, 9, 4.5, 0.5),
       hr(), helpText("Hover a cell to highlight its whole cluster; double-click a legend entry to isolate one; ",
-                     "single-click to toggle. Colour by a gene, then split by Genotype to compare KO vs WT.")),
+                     "single-click to toggle. Colour by a gene, then split by Genotype to compare KO vs WT."),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("umap", export = "umap", base = FALSE, labels = TRUE)))),
     card(full_screen = TRUE, card_header(textOutput("umap_title")), plotlyOutput("umap", height = "640px")))),
 
   nav_panel("Gene detail", layout_sidebar(
     sidebar = sidebar(width = 300,
+      selectInput("geneset2", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
       selectizeInput("g2", "Gene", choices = NULL, options = list(maxOptions = 50L)),
       selectInput("grp", "Group by", setNames(CAT_COLS, labof(CAT_COLS)),
                   selected = if (has("celltype")) "celltype" else CAT_COLS[1]),
       selectInput("sp2", "Split by", c("(none)" = "none",
                   setNames(intersect(c("genotype","timepoint"), CAT_COLS),
-                           labof(intersect(c("genotype","timepoint"), CAT_COLS)))), selected = "genotype")),
+                           labof(intersect(c("genotype","timepoint"), CAT_COLS)))), selected = "genotype"),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("Violin options",   figure_controls("vln", palette = TRUE,  rename = TRUE)),
+        accordion_panel("Dot plot options", figure_controls("dot", palette = FALSE, rename = TRUE)))),
     layout_columns(col_widths = c(7, 5),
       card(card_header("Expression distribution (violin)"), plotOutput("vln", height = "460px")),
-      card(card_header("% expressing & mean expression"), plotOutput("dot", height = "460px"))))),
+      card(card_header("% expressing & mean expression"), plotOutput("dot", height = "460px"))),
+    div(uiOutput("g2_cells"), style = "font-size:12px;color:#666;margin-top:4px"))),
 
   nav_panel("Composition", layout_sidebar(
     sidebar = sidebar(width = 300,
@@ -295,66 +751,284 @@ ui <- page_navbar(
       selectInput("comp_x", "Across groups", setNames(
                   intersect(c("orig.ident","genotype","timepoint"), names(meta)),
                   labof(intersect(c("orig.ident","genotype","timepoint"), names(meta)))),
-                  selected = if (has("orig.ident")) "orig.ident" else "genotype")),
+                  selected = if (has("orig.ident")) "orig.ident" else "genotype"),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("comp", palette = TRUE, rename = TRUE)))),
     card(full_screen = TRUE, card_header("Cell-type / state proportions"), plotOutput("comp", height = "560px")))),
 
+  nav_menu("Differential expression",
   nav_panel("DE by cell type", layout_sidebar(
     sidebar = sidebar(width = 300,
       radioButtons("ct_tp", "Timepoint", c("P0","P7"), inline = TRUE),
       selectInput("ct_sel", "Cell type", choices = NULL),
       textInput("ct_search", "Filter genes (substring)", ""),
+      checkboxInput("ct_hideconf", "Hide sex/construct genes", FALSE),
       hr(), helpText("KO-vs-WT differential expression within each cell type.",
                      br(), strong("p-axis ranks candidates only — not valid at n = 1."))),
     navset_card_tab(
       nav_panel("Volcano + table",
-        helpText("Hover a point for the gene & stats; click a point to show just that gene in the table."),
+        helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
         layout_columns(col_widths = c(6, 6),
-        plotlyOutput("ct_volcano", height = "470px"),
-        div(uiOutput("ct_pick_ui"), DTOutput("ct_table", height = "440px"))),
+          plotlyOutput("ct_volcano", height = "470px"),
+          div(uiOutput("ct_pick_ui"), DTOutput("ct_table", height = "440px"))),
         uiOutput("ct_geneinfo")),
       nav_panel("Heatmap (top genes × cell types)", plotlyOutput("ct_heat", height = "620px"))))),
 
+  nav_panel("Subset & DEGs", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      tags$b("1. Filter cells"),
+      lapply(CAT_COLS, function(c) selectizeInput(paste0("degf_", c), labof(c),
+        choices = sort(unique(as.character(DMETA[[c]]))), multiple = TRUE,
+        options = list(placeholder = "all"))),
+      hr(), tags$b("2. Compare"),
+      selectInput("deg_by", "Split groups by",
+        c("Genotype (KO vs WT)" = "genotype", "Cell-cycle phase" = "Phase",
+          "Cycling vs non-cycling" = "cycling", "Timepoint (P0 vs P7)" = "timepoint")),
+      selectizeInput("deg_a", "Group A", choices = NULL, multiple = TRUE),
+      selectizeInput("deg_b", "Group B", choices = NULL, multiple = TRUE),
+      checkboxInput("deg_hideconf", "Hide sex/construct genes", FALSE),
+      actionButton("deg_run", "Compute DEGs", class = "btn-primary"),
+      hr(), helpText("Descriptive Wilcoxon (presto) on log-norm expression of the ",
+                     "filtered live cells. Hypothesis-generating only (n = 1); ",
+                     "for rigorous KO-vs-WT use the precomputed DE tabs.")),
+    div(textOutput("deg_n"), style = "font-size:13px;margin-bottom:4px"),
+    helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
+    layout_columns(col_widths = c(6, 6),
+      plotlyOutput("deg_volcano", height = "470px"),
+      div(uiOutput("deg_pick_ui"), DTOutput("deg_table", height = "440px"))),
+    uiOutput("deg_geneinfo"))),
+
+  nav_panel("Pathways & enrichment", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("enr_tp", "Timepoint", c("P0","P7"), selected = "P7"),
+      selectInput("enr_ct", "Cell type", choices = NULL),
+      hr(), helpText("Pre-computed pathway/GO/TF enrichment of the KO-vs-WT signal ",
+                     "(fgsea Hallmark/KEGG/E2F, GO biological process, decoupleR TF activity). ",
+                     strong("Descriptive only — n = 1."))),
+    navset_card_tab(
+      nav_panel("GSEA pathways",
+        plotlyOutput("enr_gsea_plot", height = "440px"),
+        DTOutput("enr_gsea_tab", height = "360px")),
+      nav_panel("GO biological process",
+        plotlyOutput("enr_go_plot", height = "440px"),
+        DTOutput("enr_go_tab", height = "360px")),
+      nav_panel("TF / regulon activity",
+        helpText("E2F-family regulon activity across cell types (KO − WT), then the top TFs for the selected cell type."),
+        plotlyOutput("enr_e2f_heat", height = "380px"),
+        plotlyOutput("enr_tf_top", height = "460px")))))),
+
+  nav_menu("Cardiomyocytes",
   nav_panel("Cardiomyocyte deep-dive", layout_sidebar(
     sidebar = sidebar(width = 320,
-      selectInput("cm_res", "Subcluster resolution",
-                  setNames(RES, paste0("res ", RES)), selected = RES[length(RES)]),
-      selectInput("cm_sub", "Subcluster (for DE)", choices = NULL),
+      conditionalPanel("input.cm_tabs == 'de'",
+        selectInput("cm_sub", "Subcluster (for DE)", choices = NULL),
+        checkboxInput("cm_hideconf", "Hide sex/construct genes (DE)", FALSE)),
       selectInput("cm_mapcolor", "Map: colour by",
                   c("Subcluster" = "subcluster", "Cell-cycle phase" = "Phase", "Cycling" = "cycling",
                     "Genotype" = "genotype", "Timepoint" = "timepoint", "Gene" = "gene")),
       conditionalPanel("input.cm_mapcolor == 'gene'",
+        selectInput("cm_geneset", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
         selectizeInput("cm_gene", "Gene", choices = NULL, options = list(maxOptions = 50L))),
+      selectInput("cm_map_split", "Split map by (res 0.2)",
+                  c("(none)" = "none", "Genotype (WT|KO)" = "genotype",
+                    "Timepoint (P0|P7)" = "timepoint", "Genotype × Timepoint" = "both")),
+      conditionalPanel("input.cm_tabs == 'bars'",
+        radioButtons("cm_bar_mode", "Y axis", c("Proportion" = "prop", "Count" = "count"), inline = TRUE)),
       hr(), helpText("True re-clustering of cardiomyocytes. Explore subgroup identity,",
-                     "KO-vs-WT differences per subgroup, and cell-cycle state.")),
-    navset_card_tab(
+                     "KO-vs-WT differences per subgroup, and cell-cycle state.",
+                     br(), "Split the map by timepoint to see whether two cycling subclusters",
+                     "separate by P0/P7 or by S vs G2/M phase."),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("Cell-cycle figure options",
+          figure_controls("cmphase", palette = TRUE, rename = TRUE)),
+        accordion_panel("Composition figure options",
+          figure_controls("cmbar", palette = TRUE, rename = FALSE)))),
+    navset_card_tab(id = "cm_tabs",
       nav_panel("Subcluster map",
-        helpText("Hover any cell to highlight all cells of its subcluster; move off to restore the full map."),
+        helpText("Hover any cell to highlight all cells of its subcluster; move off to restore the full map.",
+                 br(), "When split (res 0.2) is on, panels are coloured by subcluster and “colour by” is ignored."),
         plotlyOutput("cm_map", height = "600px")),
       nav_panel("Identity (marker heatmap)", plotlyOutput("cm_markerheat", height = "660px")),
-      nav_panel("KO-vs-WT DE (per subgroup)",
-        helpText("Hover a point for the gene & stats; click a point to show just that gene in the table."),
-        layout_columns(col_widths = c(6, 6),
-          plotlyOutput("cm_volcano", height = "440px"),
-          div(uiOutput("cm_pick_ui"), DTOutput("cm_detab", height = "410px"))),
+      nav_panel("KO-vs-WT DE (per subgroup)", value = "de",
+        helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
+        fluidRow(
+          column(6, plotlyOutput("cm_volcano", height = "440px")),
+          column(6, uiOutput("cm_pick_ui"), DTOutput("cm_detab"))),
         uiOutput("cm_geneinfo"),
-        card(card_header("DE heatmap — top genes × subclusters (log2FC KO/WT)"),
-             plotlyOutput("cm_lfcheat", height = "560px"))),
-      nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px"))))),
+        div(class = "mt-3",
+            h5("DE heatmap — top genes × subclusters (log2FC KO/WT)"),
+            plotlyOutput("cm_lfcheat", height = "560px"))),
+      nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px")),
+      nav_panel("Composition (stacked bars)", value = "bars",
+        helpText("Composition of each res-0.2 subcluster, broken down four ways — genotype (WT/KO), ",
+                 "timepoint (P0/P7), cell-cycle phase, and cycling status. Each is its own plot; scroll to see all four."),
+        plotOutput("cm_bar_geno",  height = "300px"),
+        plotOutput("cm_bar_tp",    height = "300px"),
+        plotOutput("cm_bar_phase", height = "300px"),
+        plotOutput("cm_bar_cyc",   height = "300px")),
+      nav_panel("Per-cluster summary", value = "summary",
+        helpText("One row per res-0.2 subcluster: identity, composition, top marker & KO-vs-WT genes, and top pathways — scan all clusters without clicking through tabs. Sizes/percentages are from the displayed (sampled) cells."),
+        div(downloadButton("cm_summary_dl", "Download CSV", class = "btn-sm btn-outline-secondary"),
+            style = "margin-bottom:8px"),
+        DTOutput("cm_summary")),
+      nav_panel("Top markers", value = "topmarkers",
+        helpText("One row per res-0.2 subcluster: top identity markers (by z-scored mean expression) plus ",
+                 "each cluster's top identity GO term, top KO-vs-WT GSEA pathway, and top KO-up / KO-down genes — ",
+                 "a quick read on what each subcluster is doing biologically."),
+        DTOutput("cm_topmarkers")),
+      nav_panel("Subcluster enrichment", value = "subenr",
+        helpText("Per res-0.2 subcluster: identity markers and the KO-vs-WT signal, enriched. ",
+                 strong("Descriptive only — n = 1.")),
+        div(class = "d-flex align-items-center gap-3 mb-2",
+            radioButtons("cm_enr_mode", NULL, c("Single cluster" = "one", "All clusters" = "all"),
+                         selected = "one", inline = TRUE),
+            conditionalPanel("input.cm_enr_mode == 'one'",
+              selectInput("cm_enr_sub", NULL, choices = NULL, width = "260px"))),
+        conditionalPanel("input.cm_enr_mode == 'one'",
+          navset_card_tab(
+            nav_panel("Identity GO",
+              plotlyOutput("cm_sub_idgo_plot", height = "440px"),
+              DTOutput("cm_sub_idgo_tab", height = "320px")),
+            nav_panel("KO-vs-WT GO",
+              plotlyOutput("cm_sub_kogo_plot", height = "440px"),
+              DTOutput("cm_sub_kogo_tab", height = "320px")),
+            nav_panel("KO-vs-WT GSEA",
+              plotlyOutput("cm_sub_gsea_plot", height = "440px"),
+              DTOutput("cm_sub_gsea_tab", height = "320px")))),
+        conditionalPanel("input.cm_enr_mode == 'all'",
+          navset_card_tab(
+            nav_panel("Identity GO", cm_enr_grid("idgo")),
+            nav_panel("KO-vs-WT GO", cm_enr_grid("kogo")),
+            nav_panel("KO-vs-WT GSEA", cm_enr_grid("gsea")))))))),
 
+  nav_panel("E2F focus", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      selectInput("e2f_ct", "Cell type",
+                  choices = c("All cells" = "All",
+                              setNames(sort(unique(as.character(meta$celltype))),
+                                       gsub("_", " ", sort(unique(as.character(meta$celltype)))))),
+                  selected = if ("Cardiomyocyte" %in% meta$celltype) "Cardiomyocyte" else "All"),
+      selectInput("e2f_set", "Downstream gene set", choices = names(GENE_SETS), selected = "E2F targets"),
+      hr(), helpText("E2f7/E2f8 are atypical ", strong("repressors"), " of the E2F cell-cycle program, ",
+                     "so loss should de-repress (raise) their downstream targets — see the fold-change tab. ",
+                     strong("Descriptive only — n = 1, sex-confounded.")),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("E2f7/8 plot options", figure_controls("e2f", palette = TRUE, rename = TRUE)),
+        accordion_panel("Fold-change options", figure_controls("e2ffc", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(
+      nav_panel("E2f7 / E2f8", plotOutput("e2f_expr", height = "560px")),
+      nav_panel("Downstream targets — KO vs WT", plotOutput("e2f_fc", height = "560px")))))),
+
+  nav_menu("Dev",
+  nav_panel("Cell–cell signalling", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("cc_tp", "Timepoint", c("P0","P7"), selected = "P7"),
+      selectInput("cc_pathway", "Pathway",
+                  choices = c("All" = "All", setNames(commun_pathways(), commun_pathways())),
+                  selected = if ("VEGF" %in% commun_pathways()) "VEGF" else "All"),
+      radioButtons("cc_metric", "Show",
+                   c("KO − WT (delta)" = "delta", "WT" = "WT", "KO" = "KO"), selected = "delta"),
+      hr(), helpText("Curated ligand → receptor scoring (mean ligand in the sender × mean receptor ",
+                     "in the receiver, on log-norm expression), focused on the E2F7/8 → Vegfa angiogenic axis. ",
+                     strong("Not permutation-tested; descriptive, n = 1."), br(),
+                     "A full CellChat/LIANA run would need the source Seurat objects.")),
+    navset_card_tab(
+      nav_panel("Sender × receiver heatmap",
+        helpText("Interaction score aggregated (mean) over the ligand→receptor pairs in the chosen pathway."),
+        plotlyOutput("cc_heat", height = "540px")),
+      nav_panel("Interaction table", DTOutput("cc_tab", height = "520px"))))),
+
+  nav_panel("Cell-cycle exit & ploidy", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("cyc_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
+      hr(), helpText("E2f7/8 govern cardiomyocyte cell-cycle exit and polyploidization. ",
+                     "Proliferation vs cytokinesis separates true division from ",
+                     "karyokinesis-without-cytokinesis (binucleation / endoreduplication). ",
+                     strong("Descriptive only — n = 1, sex-confounded.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("cyc", palette = TRUE, rename = FALSE)))),
+    navset_card_tab(
+      nav_panel("Score distributions",
+        helpText("Proliferation, cytokinesis, cell-cycle-exit and polyploidization-proxy scores ",
+                 "across genotype (WT vs KO), faceted by timepoint."),
+        plotOutput("cyc_violins", height = "600px")),
+      nav_panel("Cycling vs cytokinesis", plotOutput("cyc_scatter", height = "600px"))))),
+
+  nav_panel("Maturation & metabolism", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("mat_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
+      selectInput("mat_score", "Score",
+                  c("CM maturation (mature−immature)" = "sig_maturation",
+                    "Metabolic maturation (FAO−glyc)" = "sig_metabolic",
+                    "Mature-CM program" = "sig_mat_mature", "Immature-CM program" = "sig_mat_immature",
+                    "Glycolysis" = "sig_glycolysis", "Fatty-acid oxidation" = "sig_faox")),
+      hr(), helpText("P0→P7 maturation and the glycolysis→fatty-acid-oxidation metabolic switch. ",
+                     "The within-genotype P0→P7 axis is the most robust signal in this design. ",
+                     strong("KO-vs-WT descriptive only — n = 1.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("mat", palette = TRUE, rename = FALSE)))),
+    navset_card_tab(
+      nav_panel("By genotype × timepoint", plotOutput("mat_violin", height = "560px")),
+      nav_panel("Maturation vs metabolism", plotOutput("mat_scatter", height = "560px")))))),
+
+  nav_spacer(),
+  nav_menu("Help",
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
     uiOutput("qcfigs"),
     h5("Doublet rate by lane (numbers)"),
     div(style = "overflow:auto", tableOutput("doublet_tab")))),
 
-  nav_panel("About / caveats", div(style = "max-width:820px;padding:8px 4px", htmlOutput("about")))
+  nav_panel("Annotation check", div(style = "max-width:1000px;padding:8px 4px",
+    helpText("Each cell is scored against published-style developmental mouse-heart marker panels; ",
+             "the argmax lineage (\"predicted\") is cross-tabulated against the existing cell-type label. ",
+             "The diagonal should dominate — off-diagonal mass flags populations worth double-checking. ",
+             strong("Concordance check, not probabilistic label transfer.")),
+    plotlyOutput("ann_heat", height = "520px"),
+    h5("Confusion (row-normalised)", style = "margin-top:12px"),
+    DTOutput("ann_tab", height = "360px"))),
+
+  nav_panel("About / caveats", div(style = "max-width:820px;padding:8px 4px", htmlOutput("about"))))
 )
 
 # -------------------------------------------------------------- SERVER --------
 server <- function(input, output, session) {
   for (id in c("gene","g2","cm_gene")) {
-    sel <- if ("Gabbr2" %in% genes) "Gabbr2" else genes[1]
-    updateSelectizeInput(session, id, choices = genes, selected = sel, server = TRUE)
+    sel <- if ("Gabbr2" %in% ALL_GENES) "Gabbr2" else ALL_GENES[1]
+    updateSelectizeInput(session, id, choices = ALL_GENES, selected = sel, server = TRUE)
   }
+  # gene-set quick-pick: each "Gene set" selector repopulates its paired gene input,
+  # keeping the current gene if it's still in the chosen set.
+  .geneset_pairs <- list(geneset = "gene", geneset2 = "g2", cm_geneset = "cm_gene")
+  for (sid in names(.geneset_pairs)) local({
+    set_id <- sid; gene_id <- .geneset_pairs[[sid]]
+    observeEvent(input[[set_id]], {
+      gl  <- genes_for_set(input[[set_id]])
+      cur <- input[[gene_id]]
+      sel <- if (!is.null(cur) && nzchar(cur) && cur %in% gl) cur else gl[1]
+      updateSelectizeInput(session, gene_id, choices = gl, selected = sel, server = TRUE)
+    }, ignoreInit = TRUE)
+  })
+
+  # ---- publication figure controls: per-plot label-rename stores ----
+  # wires an editable rename table for `prefix`; `levels_fn` yields the current
+  # category levels, `reset_on` (a reactive) clears the map when the variable changes.
+  make_rename <- function(prefix, levels_fn, reset_on = NULL) {
+    rv <- reactiveVal(list())
+    output[[paste0(prefix, "_renametab")]] <- renderDT(rename_table(levels_fn(), rv()))
+    observeEvent(input[[paste0(prefix, "_renametab_cell_edit")]], {
+      e <- input[[paste0(prefix, "_renametab_cell_edit")]]; lv <- levels_fn(); i <- e$row + 1
+      if (length(lv) && i >= 1 && i <= length(lv)) { m <- rv(); m[[ lv[i] ]] <- e$value; rv(m) }
+    })
+    if (!is.null(reset_on)) observeEvent(reset_on(), rv(list()), ignoreInit = TRUE)
+    rv
+  }
+  umap_rn    <- make_rename("umap", function() if (input$color_by %in% CAT_COLS) levels(factor(meta[[input$color_by]])) else character(0), reactive(input$color_by))
+  vln_rn     <- make_rename("vln",  function() levels(factor(meta[[input$grp]])), reactive(input$grp))
+  dot_rn     <- make_rename("dot",  function() levels(factor(meta[[input$grp]])), reactive(input$grp))
+  comp_rn    <- make_rename("comp", function() levels(factor(meta[[input$comp_fill]])), reactive(input$comp_fill))
+  cmphase_rn <- make_rename("cmphase", function() c("G1","S","G2M"))
+  e2f_rn      <- make_rename("e2f",      function() levels(factor(meta$genotype)))
+
   # cell-type choices depend on timepoint
   observeEvent(input$ct_tp, {
     if (!length(input$ct_tp) || !nzchar(input$ct_tp)) return()
@@ -362,78 +1036,128 @@ server <- function(input, output, session) {
     updateSelectInput(session, "ct_sel", choices = setNames(cts, gsub("_", " ", cts)),
                       selected = if ("Cardiomyocyte" %in% cts) "Cardiomyocyte" else cts[1])
   }, ignoreNULL = FALSE)
-  # subcluster choices depend on resolution
-  observeEvent(input$cm_res, {
-    if (!length(input$cm_res) || !nzchar(input$cm_res)) return()
-    subs <- names(subDE[[paste0("res", input$cm_res)]])
+  # populate the DE subcluster picker once (only res 0.2 is exposed)
+  local({
+    subs <- names(subDE[["res0.2"]])
     subs <- subs[order(as.integer(sub("CM", "", subs)))]
-    updateSelectInput(session, "cm_sub", choices = setNames(subs, vapply(subs, function(s) sub_label(input$cm_res, s), "")),
+    updateSelectInput(session, "cm_sub", choices = setNames(subs, vapply(subs, function(s) sub_label("0.2", s), "")),
                       selected = subs[1])
-  }, ignoreNULL = FALSE)
+  })
 
   # ---- UMAP explorer ----
-  output$umap_title <- renderText(
-    if (input$color_by == "gene") paste0("Expression of ", input$gene) else paste0("Coloured by ", labof(input$color_by)))
+  output$umap_title <- renderText({
+    if (input$color_by != "gene") return(paste0("Coloured by ", labof(input$color_by)))
+    note <- if (!in_panel(input$gene)) "  (broad matrix — shown on the ~8k-cell subset)" else ""
+    paste0("Expression of ", input$gene, note)
+  })
   output$umap <- renderPlotly({
     cb <- input$color_by; cont <- cb %in% c("gene", CONT_COLS); ps <- input$ptsize
-    if (input$split == "none") {
+    leg <- input$umap_legend %||% TRUE; pal <- input$umap_palette %||% "Default"; mp <- umap_rn()
+    deflab <- if (cb == "gene") input$gene else labof(cb)
+    ttl <- if (!is.null(input$umap_title) && nzchar(input$umap_title)) input$umap_title
+           else if (cont) deflab else NULL
+    p <- if (input$split == "none") {
       if (cont) umap_cont(meta, if (cb == "gene") expr_vec(input$gene, meta$cell) else meta[[cb]],
-                          if (cb == "gene") input$gene else labof(cb), psize = ps)
-      else umap_cat(meta, cb, psize = ps)
+                          ttl, psize = ps, legend = leg)
+      else umap_cat(meta, cb, ttl = ttl, psize = ps, labels = input$umap_labels %||% TRUE,
+                    labsize = input$umap_labelsize %||% 12, legend = leg, pal_choice = pal, map = mp)
     } else umap_split(meta, cb, input$split, gene = if (cb == "gene") input$gene else NULL,
-                      continuous = cont, psize = max(2, ps - 1))
+                      continuous = cont, psize = max(2, ps - 1), legend = leg, pal_choice = pal, map = mp)
+    if (isTRUE(input$umap_export_on))
+      config(p, displaylogo = FALSE,
+             toImageButtonOptions = list(format = "png", filename = paste0("umap_", Sys.Date()),
+               width = input$umap_w %||% 1200, height = input$umap_h %||% 900, scale = input$umap_scale %||% 2))
+    else config(p, displaylogo = FALSE)   # default camera download behaviour
   })
 
   # ---- Gene detail ----
-  output$vln <- renderPlot({
-    df <- meta; df$expr <- expr_vec(input$g2, df$cell); df$grp <- factor(df[[input$grp]])
-    base <- theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 35, hjust = 1))
+  vln_plot <- reactive({
+    bs <- input$vln_basesize %||% 13; ch <- input$vln_palette %||% "Default"
+    df <- meta; df$expr <- expr_vec(input$g2, df$cell)
+    df$grp <- factor(relab(df[[input$grp]], vln_rn()), levels = relab(levels(factor(df[[input$grp]])), vln_rn()))
+    base <- theme_minimal(base_size = bs) + theme(axis.text.x = element_text(angle = 35, hjust = 1))
     if (input$sp2 != "none") {
       df$splitv <- factor(df[[input$sp2]])
-      ggplot(df, aes(grp, expr, fill = splitv)) +
+      p <- ggplot(df, aes(grp, expr, fill = splitv)) +
         geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2, position = position_dodge(.9)) +
         base + labs(x = labof(input$grp), y = paste0(input$g2, " (log-norm)"), fill = labof(input$sp2))
+      if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(df$splitv), ch))
     } else {
-      ggplot(df, aes(grp, expr, fill = grp)) + geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2) +
+      p <- ggplot(df, aes(grp, expr, fill = grp)) + geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2) +
         base + guides(fill = "none") + labs(x = labof(input$grp), y = paste0(input$g2, " (log-norm)"))
+      if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(df$grp), ch))
     }
+    p
   })
-  output$dot <- renderPlot({
-    df <- meta; df$expr <- expr_vec(input$g2, df$cell); df$grp <- factor(df[[input$grp]]); sp <- input$sp2
+  output$vln <- renderPlot(apply_fig_opts(vln_plot(), "vln", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("vln_dl_", f)]] <- dl_ggplot("vln", vln_plot, input, f) })
+
+  dot_plot <- reactive({
+    bs <- input$dot_basesize %||% 13
+    df <- meta; df$expr <- expr_vec(input$g2, df$cell); sp <- input$sp2
+    df$grp <- factor(relab(df[[input$grp]], dot_rn()), levels = relab(levels(factor(df[[input$grp]])), dot_rn()))
     key <- if (sp != "none") interaction(df$grp, df[[sp]], sep = " · ", drop = TRUE) else df$grp
     agg <- do.call(rbind, lapply(split(df, key), function(s) data.frame(
       grp = s$grp[1], split = if (sp != "none") as.character(s[[sp]][1]) else "all",
       pct = 100 * mean(s$expr > 0), mean = mean(s$expr))))
+    if (sp != "none") agg$split <- factor(agg$split, levels = levels(factor(df[[sp]])))   # honour WT-before-KO
     ggplot(agg, aes(grp, split, size = pct, color = mean)) + geom_point() +
       scale_color_viridis_c(option = "magma", direction = -1) + scale_size_area(max_size = 12) +
-      theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 35, hjust = 1)) +
+      theme_minimal(base_size = bs) + theme(axis.text.x = element_text(angle = 35, hjust = 1)) +
       labs(x = labof(input$grp), y = if (sp != "none") labof(sp) else "", size = "% expr", color = "mean", title = input$g2)
+  })
+  output$dot <- renderPlot(apply_fig_opts(dot_plot(), "dot", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("dot_dl_", f)]] <- dl_ggplot("dot", dot_plot, input, f) })
+  output$g2_cells <- renderUI({
+    g <- input$g2; req(g)
+    n <- sum(!is.na(expr_vec(g, meta$cell)))
+    if (in_panel(g))
+      HTML(sprintf("Showing <b>%s</b> across <b>%s</b> cells (curated panel, full resolution).",
+                   g, format(n, big.mark = ",")))
+    else
+      HTML(sprintf("Showing <b>%s</b> across <b>%s</b> cells — broad subset (gene not in the curated panel, so fewer cells are stored).",
+                   g, format(n, big.mark = ",")))
   })
 
   # ---- Composition ----
-  output$comp <- renderPlot({
+  comp_plot <- reactive({
+    bs <- input$comp_basesize %||% 13; ch <- input$comp_palette %||% "Default"
     df <- meta; x <- input$comp_x; f <- input$comp_fill
     tb <- as.data.frame(prop.table(table(df[[x]], df[[f]]), margin = 1)); names(tb) <- c("x","fill","prop")
-    ggplot(tb, aes(x, prop, fill = fill)) + geom_col() + theme_minimal(base_size = 13) +
+    tb$fill <- factor(relab(tb$fill, comp_rn()), levels = relab(levels(factor(df[[f]])), comp_rn()))
+    p <- ggplot(tb, aes(x, prop, fill = fill)) + geom_col() + theme_minimal(base_size = bs) +
       theme(axis.text.x = element_text(angle = 35, hjust = 1)) + labs(x = labof(x), y = "proportion", fill = labof(f))
+    if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(tb$fill), ch))
+    p
   })
+  output$comp <- renderPlot(apply_fig_opts(comp_plot(), "comp", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("comp_dl_", f)]] <- dl_ggplot("comp", comp_plot, input, f) })
 
   # ---- DE by cell type ----
   ct_d    <- reactive({ req(input$ct_tp, input$ct_sel); ctDE[[paste(input$ct_tp, input$ct_sel, sep = "_")]] })
-  ct_pick <- reactiveVal(NULL)                                     # gene picked by clicking the volcano
-  ct_tab  <- reactive({                                            # exactly what the table shows
-    d <- de_table(ct_d(), input$ct_search); g <- ct_pick()
-    if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
-    d
-  })
-  output$ct_volcano <- renderPlotly(de_volcano_ly(ct_d(),
-                         paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano"))
+  ct_pick <- reactiveVal(NULL)                                     # gene selected on the volcano or in the table
+  ct_tab  <- reactive(de_table(drop_conf(ct_d(), input$ct_hideconf), input$ct_search))  # full table
+  ct_dt_proxy <- DT::dataTableProxy("ct_table")
+  output$ct_volcano <- renderPlotly(de_volcano_ly(drop_conf(ct_d(), input$ct_hideconf),
+                         paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano",
+                         highlight = ct_pick()))
+  outputOptions(output, "ct_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
   output$ct_table   <- renderDT(de_datatable(ct_tab()))
   output$ct_pick_ui  <- renderUI(pick_banner(ct_pick(), "ct_clear"))
-  output$ct_geneinfo <- renderUI(gene_info_card(ct_pick()))
+  output$ct_geneinfo <- renderUI(gene_info_card(ct_pick(), "ct_infoclose"))
   observeEvent(event_data("plotly_click", source = "ct_volcano"),
     ct_pick(event_data("plotly_click", source = "ct_volcano")$customdata))
+  observeEvent(input$ct_table_rows_selected, {                          # table row -> selected gene
+    r <- input$ct_table_rows_selected; g <- if (length(r)) ct_tab()$gene[r] else NULL
+    if (!identical(g, ct_pick())) ct_pick(g)
+  }, ignoreNULL = FALSE)
+  observeEvent(ct_pick(), {                                             # selected gene -> highlight table row
+    g <- ct_pick(); rows <- if (!is.null(g)) which(ct_tab()$gene == g) else integer(0)
+    if (!identical(as.integer(rows), as.integer(input$ct_table_rows_selected)))
+      DT::selectRows(ct_dt_proxy, if (length(rows)) rows else NULL)
+  }, ignoreNULL = FALSE)
   observeEvent(input$ct_clear, ct_pick(NULL))
+  observeEvent(input$ct_infoclose, ct_pick(NULL))
   observeEvent(list(input$ct_tp, input$ct_sel, input$ct_search), ct_pick(NULL), ignoreInit = TRUE)
   output$ct_heat <- renderPlotly({
     req(input$ct_tp)
@@ -444,54 +1168,370 @@ server <- function(input, output, session) {
 
   # ---- CM deep-dive ----
   output$cm_map <- renderPlotly({
-    req(input$cm_res, input$cm_mapcolor); cb <- input$cm_mapcolor; df <- cmm
+    req(input$cm_mapcolor); cb <- input$cm_mapcolor; df <- cmm
+    sp <- input$cm_map_split %||% "none"
+    if (sp != "none") {                          # split panels — always res 0.2, coloured by subcluster
+      df$mapval <- factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
+      if (sp == "both") {
+        gl <- levels(factor(df$genotype)); tl <- levels(factor(df$timepoint))
+        df$splitgrp <- factor(paste(df$genotype, df$timepoint, sep = " · "),
+                              levels = as.vector(t(outer(gl, tl, paste, sep = " · "))))
+        return(umap_split(df, "mapval", "splitgrp", psize = 4, nrows = 2))
+      }
+      return(umap_split(df, "mapval", sp, psize = 4))
+    }
     if (cb == "gene") return(umap_cont(df, expr_vec(input$cm_gene, df$cell), input$cm_gene, psize = 5))
     df$mapval <- if (cb == "subcluster")
-      factor(paste0("CM", df[[cm_subcol(input$cm_res)]]), levels = cm_subs(input$cm_res)) else factor(df[[cb]])
-    umap_cat(df, "mapval", ttl = paste0(labof(cb), if (cb == "subcluster") paste0(" — res ", input$cm_res) else ""),
+      factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2")) else factor(df[[cb]])
+    umap_cat(df, "mapval", ttl = paste0(labof(cb), if (cb == "subcluster") " — res 0.2" else ""),
              psize = 5, labels = (cb == "subcluster"))
   })
   output$cm_markerheat <- renderPlotly({
-    req(input$cm_res)
-    h <- heat[[paste0("res", input$cm_res)]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
+    h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
     long <- h$long; long$gene <- factor(long$gene, levels = rev(h$genes)); long$cluster <- factor(long$cluster, levels = h$clusters)
     p <- ggplot(long, aes(cluster, gene, fill = z)) + geom_tile() +
       scale_fill_gradient2(low = "#3b4cc0", mid = "white", high = "#b40426", midpoint = 0) +
       theme_minimal(base_size = 11) + theme(axis.text.y = element_text(size = 7),
         axis.text.x = element_text(angle = 30, hjust = 1)) +
       labs(x = "subcluster", y = "marker gene", fill = "z-score\nmean expr",
-           title = paste0("Subcluster identity markers — res ", input$cm_res))
+           title = "Subcluster identity markers — res 0.2")
     ggheat(p)
   })
-  cm_d    <- reactive({ req(input$cm_res, input$cm_sub); subDE[[paste0("res", input$cm_res)]][[input$cm_sub]] })
+  cm_d    <- reactive({ req(input$cm_sub); subDE[["res0.2"]][[input$cm_sub]] })
   cm_pick <- reactiveVal(NULL)
-  cm_tab  <- reactive({
-    d <- de_table(cm_d()); g <- cm_pick()
-    if (!is.null(g) && g %in% d$gene) d <- d[d$gene == g, , drop = FALSE]
-    d
-  })
-  output$cm_volcano <- renderPlotly(de_volcano_ly(cm_d(),
-                         paste0(input$cm_sub, " — ", sub_label(input$cm_res, input$cm_sub)), "cm_volcano"))
-  output$cm_detab   <- renderDT(de_datatable(cm_tab()))
+  cm_tab  <- reactive(de_table(drop_conf(cm_d(), input$cm_hideconf)))   # full table (selection never filters it)
+  cm_dt_proxy <- DT::dataTableProxy("cm_detab")
+  output$cm_volcano <- renderPlotly(de_volcano_ly(drop_conf(cm_d(), input$cm_hideconf),
+                         paste0(input$cm_sub, " — ", sub_label("0.2", input$cm_sub)), "cm_volcano",
+                         highlight = cm_pick()))
+  outputOptions(output, "cm_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
+  output$cm_detab   <- renderDT(de_datatable(cm_tab(), scroll = NULL))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
-  output$cm_geneinfo <- renderUI(gene_info_card(cm_pick()))
+  output$cm_geneinfo <- renderUI(gene_info_card(cm_pick(), "cm_infoclose"))
   observeEvent(event_data("plotly_click", source = "cm_volcano"),
     cm_pick(event_data("plotly_click", source = "cm_volcano")$customdata))
+  observeEvent(input$cm_detab_rows_selected, {                          # table row -> selected gene
+    r <- input$cm_detab_rows_selected; g <- if (length(r)) cm_tab()$gene[r] else NULL
+    if (!identical(g, cm_pick())) cm_pick(g)
+  }, ignoreNULL = FALSE)
+  observeEvent(cm_pick(), {                                             # selected gene -> highlight table row
+    g <- cm_pick(); rows <- if (!is.null(g)) which(cm_tab()$gene == g) else integer(0)
+    if (!identical(as.integer(rows), as.integer(input$cm_detab_rows_selected)))
+      DT::selectRows(cm_dt_proxy, if (length(rows)) rows else NULL)
+  }, ignoreNULL = FALSE)
   observeEvent(input$cm_clear, cm_pick(NULL))
-  observeEvent(list(input$cm_res, input$cm_sub), cm_pick(NULL), ignoreInit = TRUE)
-  output$cm_lfcheat <- renderPlotly({ req(input$cm_res)
-    ggheat(lfc_heat(subDE[[paste0("res", input$cm_res)]], 22,
-             paste0("KO-vs-WT log2FC across CM subclusters — res ", input$cm_res))) })
-  output$cm_phase <- renderPlot({
-    req(input$cm_res)
-    df <- cmm; df$sub <- factor(paste0("CM", df[[cm_subcol(input$cm_res)]]), levels = cm_subs(input$cm_res))
+  observeEvent(input$cm_infoclose, cm_pick(NULL))
+  observeEvent(input$cm_sub, cm_pick(NULL), ignoreInit = TRUE)
+  output$cm_lfcheat <- renderPlotly(
+    ggheat(lfc_heat(subDE[["res0.2"]], 22, "KO-vs-WT log2FC across CM subclusters — res 0.2")))
+  cm_phase_plot <- reactive({
+    bs <- input$cmphase_basesize %||% 13; ch <- input$cmphase_palette %||% "Default"; rn <- cmphase_rn()
+    df <- cmm; df$sub <- factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
     validate(need("Phase" %in% names(df), "No cell-cycle phase data."))
-    tb <- as.data.frame(prop.table(table(df$sub, df$Phase, df$genotype), c(1, 3))); names(tb) <- c("sub","Phase","genotype","prop")
-    ggplot(tb, aes(sub, prop, fill = Phase)) + geom_col() + facet_wrap(~genotype) +
-      scale_fill_manual(values = c(G1 = "#bdbdbd", S = "#1565c0", G2M = "#c62828"), na.value = "grey90") +
-      theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
-      labs(x = "subcluster", y = "fraction of cells", title = paste0("Cell-cycle phase by subcluster — res ", input$cm_res))
+    has_tp <- "timepoint" %in% names(df)
+    split_cols <- if (has_tp) c("genotype","timepoint") else "genotype"
+    # fraction of each Phase within sub × (split groups): margin = every dim but Phase (dim 2)
+    tab <- table(df[c("sub","Phase", split_cols)])
+    tb <- as.data.frame(prop.table(tab, setdiff(seq_along(dim(tab)), 2L)))
+    names(tb)[match("Freq", names(tb))] <- "prop"
+    tb$prop[is.nan(tb$prop)] <- 0     # empty subcluster × group cells -> 0, not NaN
+    tb$Phase <- factor(relab(tb$Phase, rn), levels = relab(c("G1","S","G2M"), rn))
+    fw <- if (length(split_cols) == 2) facet_grid(reformulate(split_cols[2], split_cols[1])) else facet_wrap(reformulate(split_cols))
+    fillv <- if (ch == "Default") setNames(c("#bdbdbd","#1565c0","#c62828"), relab(c("G1","S","G2M"), rn))
+             else disc_pal(relab(c("G1","S","G2M"), rn), ch)
+    ggplot(tb, aes(sub, prop, fill = Phase)) + geom_col() + fw +
+      scale_fill_manual(values = fillv, na.value = "grey90") +
+      theme_minimal(base_size = bs) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+      labs(x = "subcluster", y = "fraction of cells",
+           title = "Cell-cycle phase by subcluster — res 0.2")
   })
+  output$cm_phase <- renderPlot(apply_fig_opts(cm_phase_plot(), "cmphase", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("cmphase_dl_", f)]] <- dl_ggplot("cmphase", cm_phase_plot, input, f) })
+
+  # ---- CM composition stacked bars — one plot per breakdown (res 0.2) ----
+  cm_bar_one <- function(v, nm) {                                 # single-dimension stacked bar (own legend)
+    mode <- input$cm_bar_mode %||% "prop"
+    bs <- input$cmbar_basesize %||% 13; ch <- input$cmbar_palette %||% "Default"
+    df <- cmm; df$sub <- factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
+    validate(need(v %in% names(df), paste0("No ", nm, " data.")))
+    fv <- if (v == "cycling") factor(ifelse(as.logical(df$cycling), "cycling", "non-cycling"),
+                                     levels = c("non-cycling","cycling")) else factor(df[[v]])
+    tab <- table(df$sub, fv)
+    tb  <- if (mode == "prop") as.data.frame(prop.table(tab, 1)) else as.data.frame(tab)
+    names(tb) <- c("sub","cat","y"); tb$y[is.nan(tb$y)] <- 0
+    p <- ggplot(tb, aes(sub, y, fill = cat)) + geom_col() +
+      theme_minimal(base_size = bs) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+      labs(x = "subcluster", y = if (mode == "prop") "proportion" else "cell count", fill = NULL, title = nm)
+    if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(tb$cat), ch))
+    p
+  }
+  # combined faceted version — used only for the figure download button
+  cm_bar_plot <- reactive({
+    ps <- list(cm_bar_one("genotype", "By genotype"), cm_bar_one("timepoint", "By timepoint"),
+               cm_bar_one("Phase", "By cell-cycle phase"), cm_bar_one("cycling", "By cycling"))
+    dfs <- Map(function(p, nm) { d <- p$data; d$panel <- nm; d },
+               ps, c("By genotype","By timepoint","By cell-cycle phase","By cycling"))
+    tb <- do.call(rbind, dfs); tb$panel <- factor(tb$panel, levels = unique(tb$panel))
+    tb$cat <- factor(tb$cat, levels = unique(tb$cat)); ch <- input$cmbar_palette %||% "Default"
+    p <- ggplot(tb, aes(sub, y, fill = cat)) + geom_col() + facet_wrap(~ panel, ncol = 1, scales = "free_y") +
+      theme_minimal(base_size = input$cmbar_basesize %||% 13) +
+      theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+      labs(x = "subcluster", y = if ((input$cm_bar_mode %||% "prop") == "prop") "proportion" else "cell count",
+           fill = NULL, title = "Subcluster composition — res 0.2")
+    if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(tb$cat), ch))
+    p
+  })
+  output$cm_bar_geno  <- renderPlot(apply_fig_opts(cm_bar_one("genotype",  "By genotype (WT / KO)"), "cmbar", input))
+  output$cm_bar_tp    <- renderPlot(apply_fig_opts(cm_bar_one("timepoint", "By timepoint (P0 / P7)"), "cmbar", input))
+  output$cm_bar_phase <- renderPlot(apply_fig_opts(cm_bar_one("Phase",     "By cell-cycle phase"), "cmbar", input))
+  output$cm_bar_cyc   <- renderPlot(apply_fig_opts(cm_bar_one("cycling",   "By cycling status"), "cmbar", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("cmbar_dl_", f)]] <- dl_ggplot("cmbar", cm_bar_plot, input, f) })
+
+  # ---- CM per-cluster summary sheet (res 0.2) ----
+  cm_summary_df <- reactive({
+    ss <- subSum[["res0.2"]]; st <- subType[["res0.2"]]; hl <- heat[["res0.2"]]$long
+    df <- cmm; sub <- factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
+    lv  <- levels(sub)
+    n   <- as.integer(table(sub)[lv])
+    pKO <- round(100 * tapply(df$genotype == "KO", sub, mean)[lv], 1)
+    pP0 <- round(100 * tapply(df$timepoint == "P0", sub, mean)[lv], 1)
+    mk  <- vapply(lv, function(cl) { s <- hl[hl$cluster == cl, ]; paste(head(s$gene[order(-s$z)], 5), collapse = ", ") }, "")
+    topOf <- function(tbl, cl, key, out) {
+      if (is.null(tbl)) return(NA_character_)
+      d <- tbl[tbl$subcluster == cl & !is.na(tbl[[key]]), , drop = FALSE]
+      if (!nrow(d)) return(NA_character_)
+      as.character(d[[out]][which.min(d[[key]])])
+    }
+    idgo <- if (!is.null(ENR$sub)) ENR$sub$identity_go else NULL
+    gsea <- if (!is.null(ENR$sub)) ENR$sub$gsea else NULL
+    data.frame(
+      cluster = lv,
+      subtype = st$nearest_CM_subtype[match(lv, st$subcluster)],
+      n_cells = n,
+      pct_KO = pKO, pct_WT = round(100 - pKO, 1),
+      pct_P0 = pP0, pct_P7 = round(100 - pP0, 1),
+      top_markers = mk,
+      n_DE = ss$n_DE_absLFC_gt1[match(lv, ss$subcluster)],
+      top_KO_up = ss$top_KO_up[match(lv, ss$subcluster)],
+      top_KO_down = ss$top_KO_down[match(lv, ss$subcluster)],
+      top_identity_GO    = vapply(lv, function(c) topOf(idgo, c, "p.adjust", "Description"), ""),
+      top_KOvsWT_pathway = vapply(lv, function(c) topOf(gsea, c, "padj", "pathway"), ""),
+      check.names = FALSE, stringsAsFactors = FALSE)
+  })
+  output$cm_summary <- renderDT(DT::datatable(cm_summary_df(), rownames = FALSE,
+    options = list(pageLength = 13, scrollX = TRUE, dom = "ft"), class = "compact stripe hover"))
+  output$cm_summary_dl <- downloadHandler(
+    filename = function() paste0("cm_subcluster_summary_res0.2_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(cm_summary_df(), f, row.names = FALSE))
+
+  # ---- CM top markers + biology per subcluster (stylized; res 0.2) ----
+  output$cm_topmarkers <- renderDT({
+    hl <- heat[["res0.2"]]$long; st <- subType[["res0.2"]]; ss <- subSum[["res0.2"]]
+    idgo <- if (!is.null(ENR$sub)) ENR$sub$identity_go else NULL
+    gsea <- if (!is.null(ENR$sub)) ENR$sub$gsea else NULL
+    chip  <- function(g, bg) paste0("<span style='display:inline-block;background:", bg,
+      ";border:1px solid #d0d7e2;border-radius:10px;padding:1px 8px;margin:2px;font-size:12px'>", g, "</span>")
+    chips <- function(x, bg = "#eef2f7") {                        # gene vector OR comma-string -> chips
+      if (length(x) == 1 && is.character(x)) x <- trimws(strsplit(x, ",")[[1]])
+      x <- x[!is.na(x) & nzchar(x)]
+      if (!length(x)) return("—")
+      paste(vapply(x, chip, "", bg = bg), collapse = " ")
+    }
+    topOf <- function(tbl, cl, key, out) {                        # top-ranked term for a subcluster
+      if (is.null(tbl)) return("—")
+      d <- tbl[tbl$subcluster == cl & !is.na(tbl[[key]]), , drop = FALSE]
+      if (!nrow(d)) return("—")
+      as.character(d[[out]][which.min(d[[key]])])
+    }
+    rows <- lapply(cm_subs("0.2"), function(cl) {
+      m <- hl$cluster == cl; gs <- head(hl$gene[m][order(-hl$z[m])], 8)
+      inSS <- !is.null(ss) && cl %in% ss$subcluster
+      data.frame(
+        Subcluster = cl,
+        Subtype = if (!is.null(st) && cl %in% st$subcluster) st$nearest_CM_subtype[match(cl, st$subcluster)] else "—",
+        Cells   = if (inSS) ss$n_cells[match(cl, ss$subcluster)] else NA_integer_,
+        `Top markers` = chips(gs),
+        `Identity (top GO BP)` = topOf(idgo, cl, "p.adjust", "Description"),
+        `KO-vs-WT (top GSEA pathway)` = topOf(gsea, cl, "padj", "pathway"),
+        `KO-up genes`   = if (inSS) chips(ss$top_KO_up[match(cl, ss$subcluster)], "#fdecea") else "—",
+        `KO-down genes` = if (inSS) chips(ss$top_KO_down[match(cl, ss$subcluster)], "#e8f0fe") else "—",
+        check.names = FALSE, stringsAsFactors = FALSE)
+    })
+    DT::datatable(do.call(rbind, rows), rownames = FALSE, escape = FALSE, selection = "none",
+      options = list(pageLength = 15, dom = "t", ordering = FALSE, scrollX = TRUE),
+      class = "compact stripe hover")
+  })
+
+  # ---- CM per-subcluster enrichment (precomputed in ENR$sub; res 0.2) ----
+  local({
+    avail <- if (!is.null(ENR$sub)) sort(unique(c(ENR$sub$identity_go$subcluster,
+                                                   ENR$sub$go$subcluster, ENR$sub$gsea$subcluster))) else character(0)
+    subs <- cm_subs("0.2"); subs <- if (length(avail)) subs[subs %in% avail] else subs
+    updateSelectInput(session, "cm_enr_sub",
+                      choices = setNames(subs, vapply(subs, function(s) sub_label("0.2", s), "")),
+                      selected = subs[1])
+  })
+  output$cm_sub_idgo_plot <- renderPlotly({ req(input$cm_enr_sub)
+    go_dotplot_df(enr_sub_df("identity_go", input$cm_enr_sub), paste0("Identity GO BP — ", input$cm_enr_sub)) })
+  output$cm_sub_idgo_tab <- renderDT({ req(input$cm_enr_sub)
+    d <- enr_sub_df("identity_go", input$cm_enr_sub)
+    enr_dt(d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))]) })
+  output$cm_sub_kogo_plot <- renderPlotly({ req(input$cm_enr_sub)
+    d <- enr_sub_df("go", input$cm_enr_sub); d <- d[d$direction == "KO_up", , drop = FALSE]
+    go_dotplot_df(d, paste0("GO BP enriched in KO-up genes — ", input$cm_enr_sub)) })
+  output$cm_sub_kogo_tab <- renderDT({ req(input$cm_enr_sub)
+    d <- enr_sub_df("go", input$cm_enr_sub)
+    enr_dt(d[order(d$p.adjust), intersect(c("Description","direction","FoldEnrichment","p.adjust","Count","geneID"), names(d))]) })
+  output$cm_sub_gsea_plot <- renderPlotly({ req(input$cm_enr_sub)
+    gsea_barplot_df(enr_sub_df("gsea", input$cm_enr_sub), paste0("GSEA — ", input$cm_enr_sub)) })
+  output$cm_sub_gsea_tab <- renderDT({ req(input$cm_enr_sub)
+    d <- enr_sub_df("gsea", input$cm_enr_sub)
+    enr_dt(d[order(d$padj), intersect(c("pathway","NES","padj","size","leadingEdge"), names(d))]) })
+  # "All clusters" view: one full-size plot per subcluster (two per row on screen)
+  local({
+    for (.cl in cm_subs("0.2")) local({
+      cl <- .cl; ttl <- sub_label("0.2", cl)
+      output[[paste0("cm_idgo_all_", cl)]] <- renderPlot(
+        go_dotplot_gg(enr_sub_df("identity_go", cl), ttl, topn = 8))
+      output[[paste0("cm_kogo_all_", cl)]] <- renderPlot({
+        d <- enr_sub_df("go", cl); go_dotplot_gg(d[d$direction == "KO_up", , drop = FALSE], ttl, topn = 8) })
+      output[[paste0("cm_gsea_all_", cl)]] <- renderPlot(
+        gsea_barplot_gg(enr_sub_df("gsea", cl), ttl, topn = 10))
+    })
+  })
+
+  # ---- E2F focus (E2f7 / E2f8 expression by genotype x timepoint) ----
+  e2f_plot <- reactive({
+    req(input$e2f_ct)
+    bs <- input$e2f_basesize %||% 13; ch <- input$e2f_palette %||% "Default"; rn <- e2f_rn()
+    df <- meta
+    if (input$e2f_ct != "All" && has("celltype")) df <- df[df$celltype == input$e2f_ct, ]
+    validate(need(nrow(df) > 0, "No cells for this cell type."))
+    eg <- intersect(c("E2f7","E2f8"), c(rownames(expr), if (!is.null(EXPR)) rownames(EXPR)))
+    validate(need(length(eg) > 0, "E2f7/E2f8 not present in this data build."))
+    long <- do.call(rbind, lapply(eg, function(g) {
+      v <- expr_vec(g, df$cell)
+      data.frame(gene = g, expr = v, genotype = df$genotype,
+                 timepoint = if (has("timepoint", df)) df$timepoint else "all",
+                 stringsAsFactors = FALSE)
+    }))
+    long <- long[is.finite(long$expr), ]
+    validate(need(nrow(long) > 0, "No expression values (gene only in the broad subset with no overlap here)."))
+    glv <- levels(factor(meta$genotype))
+    long$genotype <- factor(relab(long$genotype, rn), levels = relab(glv, rn))
+    fillv <- if (ch == "Default") setNames(c("#c62828","#1565c0"), relab(c("KO","WT"), rn))
+             else disc_pal(relab(glv, rn), ch)
+    ggplot(long, aes(genotype, expr, fill = genotype)) +
+      geom_violin(scale = "width", trim = TRUE, alpha = .55, linewidth = .2) +
+      stat_summary(fun = mean, geom = "point", size = 2.4, color = "black") +
+      facet_grid(gene ~ timepoint, scales = "free_y") +
+      scale_fill_manual(values = fillv, na.value = "grey70") +
+      theme_minimal(base_size = bs) + guides(fill = "none") +
+      labs(x = "genotype", y = "log-norm expression",
+           title = paste0("E2f7 / E2f8 — ", gsub("_", " ", input$e2f_ct),
+                          " (black dot = mean; descriptive, n = 1)"))
+  })
+  output$e2f_expr <- renderPlot(apply_fig_opts(e2f_plot(), "e2f", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("e2f_dl_", f)]] <- dl_ggplot("e2f", e2f_plot, input, f) })
+
+  # downstream E2F targets: gene set (from the shared GENE_SETS list), panel genes only
+  e2f_targets <- reactive({
+    s <- input$e2f_set %||% "E2F targets"; if (!s %in% names(GENE_SETS)) s <- "E2F targets"
+    intersect(GENE_SETS[[s]], rownames(expr))
+  })
+  # per-gene KO-vs-WT fold change of the downstream targets (from precomputed DE)
+  e2f_fc_plot <- reactive({
+    tg <- e2f_targets(); validate(need(length(tg) >= 1, "No target genes."))
+    ct <- if (input$e2f_ct == "All" || is.null(input$e2f_ct)) "Cardiomyocyte" else input$e2f_ct
+    bs <- input$e2ffc_basesize %||% 13
+    rows <- do.call(rbind, lapply(c("P0","P7"), function(tp) {
+      d <- ctDE[[paste(tp, ct, sep = "_")]]; if (is.null(d)) return(NULL)
+      i <- match(tg, d$gene); i <- i[!is.na(i)]
+      if (!length(i)) return(NULL)
+      data.frame(gene = d$gene[i], timepoint = tp, lfc = d$log2FoldChange[i], padj = d$padj[i])
+    }))
+    validate(need(!is.null(rows) && nrow(rows), sprintf("No DE for %s targets.", ct)))
+    rows$dir <- ifelse(rows$lfc >= 0, "up in KO", "up in WT")
+    rows$gene <- factor(rows$gene, levels = unique(rows$gene[order(ave(rows$lfc, rows$gene, FUN = mean))]))
+    ggplot(rows, aes(lfc, gene, color = dir)) +
+      geom_vline(xintercept = 0, color = "grey70") +
+      geom_segment(aes(x = 0, xend = lfc, yend = gene), linewidth = .5) + geom_point(size = 2) +
+      facet_wrap(~timepoint) + scale_color_manual(values = VOLC_PAL, guide = guide_legend(title = NULL)) +
+      theme_minimal(base_size = bs) +
+      labs(x = "log2 fold change (KO / WT)", y = NULL,
+           title = paste0(input$e2f_set, " — KO vs WT in ", gsub("_", " ", ct),
+                          if (input$e2f_ct == "All") " (all-cells → CM shown)" else ""))
+  })
+  output$e2f_fc <- renderPlot(apply_fig_opts(e2f_fc_plot(), "e2ffc", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("e2ffc_dl_", f)]] <- dl_ggplot("e2ffc", e2f_fc_plot, input, f) })
+
+  # ---- Subset & DEGs (interactive descriptive DE) ----
+  observeEvent(input$deg_by, {
+    lv <- sort(unique(as.character(DMETA[[input$deg_by]])))
+    defA <- defB <- NULL
+    if (input$deg_by == "genotype")      { defA <- "KO";  defB <- "WT" }
+    else if (input$deg_by == "timepoint"){ defA <- "P0";  defB <- "P7" }
+    else if (input$deg_by == "cycling")  { defA <- "TRUE"; defB <- "FALSE" }
+    else if (input$deg_by == "Phase")    { defA <- intersect("G2M", lv); defB <- intersect("G1", lv) }
+    defA <- intersect(defA, lv); defB <- intersect(defB, lv)
+    updateSelectizeInput(session, "deg_a", choices = lv, selected = defA)
+    updateSelectizeInput(session, "deg_b", choices = lv, selected = defB)
+  }, ignoreNULL = FALSE)
+
+  deg_lab <- function(x) if (length(x)) paste(x, collapse = "/") else "?"
+  deg_res <- eventReactive(input$deg_run, {
+    req(input$deg_by, input$deg_a, input$deg_b)
+    validate(need(!length(intersect(input$deg_a, input$deg_b)),
+                  "Groups A and B overlap — pick distinct levels."))
+    filters <- setNames(lapply(CAT_COLS, function(c) input[[paste0("degf_", c)]]), CAT_COLS)
+    deg_compute(deg_mask(filters), input$deg_by, input$deg_a, input$deg_b)
+  }, ignoreNULL = FALSE)
+  deg_pick <- reactiveVal(NULL)
+  observeEvent(input$deg_run, deg_pick(NULL))                 # reset selection on a new run
+  deg_tab <- reactive(de_table(drop_conf(deg_res(), input$deg_hideconf)))   # full table
+  deg_dt_proxy <- DT::dataTableProxy("deg_table")
+  output$deg_n <- renderText({
+    d <- deg_res()
+    sprintf("Group A (%s): %d cells   |   Group B (%s): %d cells   |   %d genes tested",
+            deg_lab(isolate(input$deg_a)), d$n_A[1], deg_lab(isolate(input$deg_b)), d$n_B[1], nrow(d))
+  })
+  output$deg_volcano <- renderPlotly({
+    d <- drop_conf(deg_res(), input$deg_hideconf)
+    de_volcano_ly(d, paste0(deg_lab(isolate(input$deg_a)), "  vs  ", deg_lab(isolate(input$deg_b))),
+                  "deg_volcano", pos = paste0("up in ", deg_lab(isolate(input$deg_a))),
+                  neg = paste0("up in ", deg_lab(isolate(input$deg_b))),
+                  xlab = "logFC  (A / B)", highlight = deg_pick())
+  })
+  outputOptions(output, "deg_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
+  output$deg_table   <- renderDT(de_datatable(deg_tab()))
+  output$deg_pick_ui <- renderUI(pick_banner(deg_pick(), "deg_clear"))
+  output$deg_geneinfo <- renderUI(gene_info_card(deg_pick(), "deg_infoclose"))
+  observeEvent(event_data("plotly_click", source = "deg_volcano"),
+    deg_pick(event_data("plotly_click", source = "deg_volcano")$customdata))
+  observeEvent(input$deg_table_rows_selected, {                          # table row -> selected gene
+    r <- input$deg_table_rows_selected; g <- if (length(r)) deg_tab()$gene[r] else NULL
+    if (!identical(g, deg_pick())) deg_pick(g)
+  }, ignoreNULL = FALSE)
+  observeEvent(deg_pick(), {                                             # selected gene -> highlight table row
+    g <- deg_pick(); rows <- if (!is.null(g)) which(deg_tab()$gene == g) else integer(0)
+    if (!identical(as.integer(rows), as.integer(input$deg_table_rows_selected)))
+      DT::selectRows(deg_dt_proxy, if (length(rows)) rows else NULL)
+  }, ignoreNULL = FALSE)
+  observeEvent(input$deg_clear, deg_pick(NULL))
+  observeEvent(input$deg_infoclose, deg_pick(NULL))
+
+  # ---- Pathways & enrichment (precomputed) ----
+  if (!is.null(ENR)) {
+    cts <- enr_celltypes()
+    updateSelectInput(session, "enr_ct", choices = cts,
+                      selected = if ("Cardiomyocyte" %in% cts) "Cardiomyocyte" else cts[1])
+  }
+  output$enr_gsea_plot <- renderPlotly({ req(input$enr_ct); enr_gsea_plot(input$enr_ct, input$enr_tp) })
+  output$enr_gsea_tab  <- renderDT({ req(input$enr_ct); enr_gsea_table(input$enr_ct, input$enr_tp) })
+  output$enr_go_plot   <- renderPlotly({ req(input$enr_ct); enr_go_plot(input$enr_ct, input$enr_tp) })
+  output$enr_go_tab    <- renderDT({ req(input$enr_ct); enr_go_table(input$enr_ct, input$enr_tp) })
+  output$enr_e2f_heat  <- renderPlotly(enr_e2f_heat())
+  output$enr_tf_top    <- renderPlotly({ req(input$enr_ct); enr_tf_top(input$enr_ct) })
 
   # ---- QC & normalization (embedded figures) ----
   figcard <- function(uri, title, desc) {
@@ -547,9 +1587,50 @@ server <- function(input, output, session) {
     "extreme p-values &mdash; many so small they underflow to 0 in double precision. The plot floors these at ",
     "1e-300, so points pinned at <code>-log10 p = 300</code> simply mean &ldquo;smaller than the computer can ",
     "represent,&rdquo; not a real significance level. Use the vertical axis only to rank candidate genes.</li></ul></div>",
-    "<p style='color:#777;font-size:12px'>Live views show a stratified sample of ", format(nrow(meta), big.mark = ","),
-    " cells over a ", length(genes), "-gene panel; differential-expression tables and heatmaps are computed from the FULL data. ",
-    "Built ", app$built, ".</p>")))
+    "<p style='color:#777;font-size:12px'>Live views colour a stratified sample of ", format(nrow(meta), big.mark = ","),
+    " cells over a ", length(genes), "-gene curated panel at full resolution. Any other gene seen in a volcano ",
+    "can still be plotted from a broader ~", format(if (!is.null(EXPR)) ncol(EXPR) else 0L, big.mark = ","),
+    "-cell subset (the UMAP title flags when this fallback is in use). Differential-expression tables and heatmaps ",
+    "are computed from the FULL data. Built ", app$built, ".</p>")))
+
+  # ---- Cell-cycle exit & ploidy (module scores from build_signature_scores.R) ----
+  cyc_violins_plot <- reactive({
+    bs <- input$cyc_basesize %||% 13; ch <- input$cyc_palette %||% "Default"; ct <- input$cyc_ct
+    cols <- intersect(c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy"), names(meta))
+    validate(need(length(cols), "Run build_signature_scores.R for these scores, then redeploy."))
+    df <- meta; if (ct != "All" && has("celltype")) df <- df[as.character(df$celltype) == ct, ]
+    has_tp <- "timepoint" %in% names(df)
+    long <- do.call(rbind, lapply(cols, function(c) {
+      d <- df[!is.na(df[[c]]), , drop = FALSE]; if (!nrow(d)) return(NULL)
+      data.frame(genotype = d$genotype, timepoint = if (has_tp) as.character(d$timepoint) else "all",
+                 score = labof(c), value = d[[c]], stringsAsFactors = FALSE)
+    }))
+    validate(need(!is.null(long) && nrow(long), "No scored cells for this selection."))
+    long$score <- factor(long$score, levels = labof(cols))
+    p <- ggplot(long, aes(genotype, value, fill = timepoint)) +
+      geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2, position = position_dodge(.9)) +
+      facet_wrap(~ score, scales = "free_y") + theme_minimal(base_size = bs) +
+      labs(x = NULL, y = "module score", fill = "timepoint", title = paste0("Cycle-exit / ploidy scores — ", ct))
+    if (ch != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(factor(long$timepoint)), ch))
+    p
+  })
+  output$cyc_violins <- renderPlot(apply_fig_opts(cyc_violins_plot(), "cyc", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("cyc_dl_", f)]] <- dl_ggplot("cyc", cyc_violins_plot, input, f) })
+  output$cyc_scatter <- renderPlot(ploidy_scatter(input$cyc_ct, input$cyc_basesize %||% 13))
+
+  # ---- Maturation & metabolism ----
+  mat_violin_plot <- reactive(score_violin(input$mat_score, input$mat_ct, input$mat_basesize %||% 13, input$mat_palette %||% "Default"))
+  output$mat_violin <- renderPlot(apply_fig_opts(mat_violin_plot(), "mat", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("mat_dl_", f)]] <- dl_ggplot("mat", mat_violin_plot, input, f) })
+  output$mat_scatter <- renderPlot(mat_scatter(input$mat_ct, input$mat_basesize %||% 13))
+
+  # ---- Cell-cell signalling (curated L-R; build_communication.R) ----
+  output$cc_heat <- renderPlotly(commun_heat(input$cc_pathway, input$cc_tp, input$cc_metric))
+  output$cc_tab  <- renderDT(commun_table(input$cc_pathway, input$cc_tp))
+
+  # ---- Annotation check (reference-marker concordance; build_refmap.R) ----
+  output$ann_heat <- renderPlotly(refmap_heat())
+  output$ann_tab  <- renderDT(refmap_table())
 }
 
 shinyApp(ui, server)

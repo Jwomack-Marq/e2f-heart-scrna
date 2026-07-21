@@ -1,0 +1,22 @@
+# R / RStudio
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+
+# Data snapshots / backups
+*.bak.rds
+# Data bundle: build artifact, gzip-compressed ~108MB (over GitHub's 100MB limit).
+# Built by build_app_data.R; shipped to shinyapps.io via rsconnect, not via git.
+shiny_app/app_data.rds
+
+# RStudio project files
+*.Rproj
+
+# OS / shell junk
+*.stackdump
+.DS_Store
+
+# rsconnect deploy logs (the .dcf deployment record IS tracked)
+rsconnect/*.log
+shiny_app/rsconnect/**/*.log
