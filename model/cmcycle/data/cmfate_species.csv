@@ -1,0 +1,56 @@
+ID,name,Yinit,Ymax,tau,module,genes,data_orient,notes
+Clonidine,Clonidine (imidazoline-I1 / alpha2),0,1,1,input,Nisch,direct,Drug. Nisch is 100% detected and FALLS with maturation; Adra2a/b/c are absent from the store so the alpha2 arm is unmeasurable here.
+BetaAR,beta-adrenergic tone,0.5,1,1,input,Adrb1,direct,Liu 2019 Sci Transl Med: beta-AR controls CM cytokinesis. Adrb1 RISES with maturation.
+Nrg1,Nrg1 / ErbB2,0.3,1,1,input,Nrg1;Erbb2,direct,Erbb2 is P0-enriched (Baniol Fig 6).
+IGF1,IGF axis,0.3,1,1,input,Igf2;H19,direct,The P0-enriched Igf2/H19 locus. Igf1 itself is largely non-myocyte here.
+MechLoad,mechanical load,0.8,1,1,input,,,The in-vivo vs in-vitro discriminator on mitotic entry.
+ROSenv,environmental oxidative stress,0.3,1,1,input,,,Puente 2014 Cell: the oxygen-rich postnatal environment.
+Maturation,developmental stage,0.5,1,1,input,,,"hiPSC 0.12 / P0 0.30 / P7 0.55 / P15 0.75 / adult 0.95. Composite anchor: FAO up, Amotl1 down, Tubb2b->Tuba4a."
+InVitro,culture flag,0,1,1,input,,,21% O2 and no load. Required to get one drug and three outcomes.
+cAMP,cAMP,0,1,1,signaling,Adcy6;Pde4d,excluded,Second messenger; convergence hub for Clonidine (down) and BetaAR (up).
+PKA,PKA,0,1,1,signaling,Prkaca,excluded,Activity is cAMP-dependent rather than transcriptional.
+ERK,ERK1/2,0,1,1,signaling,Mapk1;Mapk3,excluded,Mitogenic arm; phospho-regulated.
+Akt,PI3K / Akt,0,1,1,signaling,Pik3ca;Akt1,excluded,Merged to hold the depth budget.
+Autophagy,autophagy,0,1,1,signaling,Map1lc3b;Becn1;Atg7;Sqstm1,direct,Murganti screened 94 autophagy compounds; clonidine's proposed mechanism.
+p38,p38 (gamma),0,1,1,signaling,Mapk12,direct,t=+4.49 on the maturation axis. Mapk14 (p38-alpha) goes the OTHER way (t=-1.28) - do not use it.
+YAP,YAP / TAZ,0,1,1,signaling,Yap1;Wwtr1,excluded,Localization-controlled; Yap1 mRNA is flat. Qualitative only.
+Amotl1,Amotl1,0,1,1,signaling,Amotl1,direct,t=-6.56 - the largest single-gene maturation anchor in the panel.
+ROS,reactive oxygen species,0,1,1,stress,,,Integrator: environment OR culture OR fatty-acid oxidation OR unloaded.
+DDR,DNA-damage response,0,1,1,stress,Chek1;Timeless;Ung;Msh6,direct,HYPOTHESIS-ONLY. All four genes are FLAT on the maturation axis (t = +0.41/+0.64/-0.14/-0.91); the evidence is Puente 2014 rather than this dataset.
+Ccng1,cyclin G1,0,1,1,stress,Ccng1,direct,"t=+1.85, and noncycling > cycling in 4/4 group pairs. G2/M arrest, linked to CM polyploidy."
+p21,p21 (Cdkn1a),0,1,1,stress,Cdkn1a,direct,t=+1.55; not in the phase-calling lists.
+Glycolysis,glycolysis,0,1,1,metabolic,Slc2a1;Hk1;Hk2;Pfkm;Ldha;Pkm,direct,P0-high. Slc2a1 0.22 -> 0.05.
+FAO,fatty-acid oxidation,0,1,1,metabolic,Hmgcs2;Fabp3;Pdk4;Ucp2,direct,The four largest effects in the whole panel (t = +5 to +11). P7-high.
+CycD,cyclin D / Cdk4-6,0,1,1,e2f,Cdk4;Cdk6;Ccnd2,direct,Ccnd1 is dropped - 0-25% detection. Ccnd2 is in ~100% of cells.
+Rb,Rb (hypophosphorylated),0,1,2,e2f,Rb1,inverse,"TRAP: Rb1 mRNA is 2.8x UP in cycling cells because it is itself an E2F target, while Rb ACTIVITY must be down. Never score naively."
+E2F1,E2F1,0,1,1,e2f,E2f1,direct,Activator. Cycling-restricted; flat on maturation.
+E2F2,E2F2,0,1,1,e2f,E2f2,direct,t=+2.18 - the only E2F activator that RISES with maturation in cycling cells. The endoreplication candidate.
+E2F3,E2F3,0,1,1,e2f,E2f3,direct,t=-0.07 - a free pre-registered NEGATIVE CONTROL. The model must not move it.
+E2F6,E2F6,0,1,8,e2f,E2f6,direct,"t=+4.12; the only member expressed in noncycling cells (100% of noncycling P7 vCM). Exit enforcer. Slow tau: the delay is the mechanism."
+E2F7,E2F7,0,1,6,e2f,E2f7,direct,t=-0.20 - FLAT on maturation. Must be a separate node from E2F8.
+E2F8,E2F8,0,1,6,e2f,E2f8,direct,"t=+2.28. In the S-phase gene list, so circular on the cycling axis but clean on the maturation axis."
+E2Frep,E2F repressor pool,0,1,1,e2f,,,Integrator: OR-pool over E2F6/7/8. Semantics - any repressor suffices.
+E2Fact,E2F activity,0,1,1,e2f,,,Integrator: activators AND NOT repressors. Closes the delayed negative-feedback loop and holds the depth budget.
+CycE,cyclin E / Cdk2,0,1,1,e2f,Ccne1;Ccne2,direct,Both RISE with maturation in cycling cells (t = +2.23 / +2.39) - the G1/S delay Baniol describes at P7.
+p27,p27 (Cdkn1b),0,1,1,e2f,Cdkn1b,direct,t=-1.67 - predicted mild decrease.
+SPhase,S-phase entry,0,1,1,cellcycle,Cdt1;Mcm2;Pcna;Rrm2,direct,"The PREVALENCE node - the only one that carries how many cells cycle. Calibration target 0.0992 at the hiPSC context."
+CycA,cyclin A / Cdk2,0,1,1,cellcycle,Ccna2,direct,t=-0.85 (flat) - a clean comparator for Ect2 and not in the phase lists.
+CycB,cyclin B / Cdk1,0,1,1,cellcycle,Ccnb1;Cdk1,direct,Ccnb1 t=-2.12; Ccnb1 is not in the phase lists.
+Pkmyt1,Myt1,0,1,1,cellcycle,Pkmyt1,direct,t=+2.81 - the mitotic brake that actually rises. Wee1 goes the other way (t=-1.32).
+Cdc25,Cdc25 phosphatases,0,1,1,cellcycle,Cdc25a;Cdc25b,excluded,Opposes Pkmyt1. Cdc25b 0.90 -> 0.61.
+MitCompRaw,mitotic competence (raw),0,1,1,cellcycle,,,Brakes only - deliberately NOT gated on SPhase. Competence is conditional on entry; prevalence lives in SPhase alone.
+MitoticEntry,mitotic entry / NEB,0,1,4,cellcycle,,,"Sharpening gate. If this never fires: G2 arrest, no envelope breakdown, nuclear polyploidization. Target 0.7698 at hiPSC."
+Cdc20,Cdc20 / APC-C,0,1,1,cellcycle,Cdc20;Fzr1,direct,"Fzr1 is the APC/C co-activator; Cdh1 in the gene list is E-CADHERIN (4->0% detected). Murganti: polyploid cells show no APC activation."
+Ect2,Ect2 (RhoGEF),0,1,3,cytokinesis,Ect2,direct,"t=-6.17, 3rd percentile genome-wide. THE maturational lesion, and a known E2F7/8 repression target (Pandit 2012)."
+RhoA,RhoA,0,1,2,cytokinesis,Rhoa,direct,"t=-3.82 but the 29th percentile genome-wide - significant, NOT specific. Included as Ect2's substrate, not as an independent finding."
+Centralspindlin,centralspindlin,0,1,1,cytokinesis,Racgap1;Kif23,direct,Comparator: essentially flat (t = -1.73 / -1.49). Driven by E2F activity only - no maturation term.
+AurKB,Aurora B / borealin,0,1,1,cytokinesis,Aurkb;Birc5;Incenp;Cdca8,direct,Comparator: t=+1.17 (up if anything). Murganti's midbody readout.
+Anillin,anillin,0,1,1,cytokinesis,Anln;Cit;Prc1,direct,Comparator: flat (t=-1.48).
+Midbody,midbody / Cep55,0,1,1,cytokinesis,Cep55,direct,ESCRT recruitment for abscission.
+AbsRaw,abscission competence (raw),0,1,1,cytokinesis,,,Competence gate input.
+Abscission,abscission,0,1,3,cytokinesis,,,"Sharpening gate. Mitosis WITHOUT this = binucleation. Target 0.5028 at hiPSC."
+Ki67,Ki-67,0,1,1,observable,Mki67,direct,"2.28 in cycling vs 0.02 in noncycling. An explicit instantaneous-prevalence output, kept distinct from the cumulative fate fractions."
+Quiescent,quiescent / exited,0,1,24,fate,,,Fate 1.
+Division,productive division,0,1,23.6,fate,,,"Fate 2. tau from the measured 16.38 h S/G2/M (0.693*tau); a definition, not a prediction."
+Binucleation,binucleation,0,1,24.9,fate,,,Fate 3. tau from 17.29 h.
+Polyploidization,nuclear polyploidization,0,1,35.3,fate,,,Fate 4. tau from 24.50 h - the significantly longer one.

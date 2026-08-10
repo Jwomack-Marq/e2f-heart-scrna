@@ -1,0 +1,47 @@
+key       = "cmfate"
+label     = "Cardiomyocyte cell-cycle fate — E2F / clonidine"
+version   = "0.1.0"
+time_unit = "hours"
+cite      = "Baniol 2021 Exp Cell Res 408:112880 · Murganti 2022 Front Cardiovasc Med 9:840147 · Liu 2019 Sci Transl Med · Puente 2014 Cell"
+blurb     = """A ~55-node normalized-Hill network whose outputs are the four cardiomyocyte
+cell-cycle fates. Set the maturation coordinate (hiPSC-CM -> P0 -> P7 -> adult) and an
+in-vitro flag, then dose clonidine and watch the outcome switch between division,
+binucleation and nuclear polyploidization."""
+
+fate_nodes = ["Quiescent", "Division", "Binucleation", "Polyploidization"]
+gate_nodes = ["SPhase", "MitoticEntry", "Abscission"]
+outputs    = ["Quiescent", "Division", "Binucleation", "Polyploidization", "Ki67", "Cdc20", "AurKB", "Centralspindlin"]
+default_on = ["Maturation", "BetaAR", "MechLoad", "ROSenv", "Nrg1", "IGF1"]
+
+# Calibrated weights, one per gate. Each gate is independent of the other two by
+# construction (competence is not gated on prevalence), so each is a single
+# one-dimensional solve rather than a joint fit.
+[calibration]
+context = "hipsc_cm"
+targets = { SPhase = 0.0992, MitoticEntry = 0.7698, Abscission = 0.5028 }
+knobs   = { SPhase = "r063", MitoticEntry = "r069", Abscission = "r080" }
+source  = "Murganti 2022 Fig 2A, n=570 cells from 20 movies, inverted through the fate partition"
+
+[contexts.hipsc_cm]
+label  = "hiPSC-CM (least mature, in vitro)"
+inputs = { Maturation = 0.12, InVitro = 1.0, MechLoad = 0.10, BetaAR = 0.10, ROSenv = 0.25, Nrg1 = 0.45, IGF1 = 0.45 }
+
+[contexts.mncm_invitro]
+label  = "Mouse neonatal CM, in vitro"
+inputs = { Maturation = 0.50, InVitro = 1.0, MechLoad = 0.10, BetaAR = 0.45, ROSenv = 0.25 }
+
+[contexts.mouse_p1_invivo]
+label  = "Neonatal mouse, in vivo (P1)"
+inputs = { Maturation = 0.50, InVitro = 0.0, MechLoad = 0.85, BetaAR = 0.55, ROSenv = 0.20 }
+
+[contexts.mouse_p0_invivo]
+label  = "Mouse P0, in vivo"
+inputs = { Maturation = 0.30, InVitro = 0.0, MechLoad = 0.80, BetaAR = 0.40, ROSenv = 0.20 }
+
+[contexts.mouse_p7_invivo]
+label  = "Mouse P7, in vivo"
+inputs = { Maturation = 0.55, InVitro = 0.0, MechLoad = 0.85, BetaAR = 0.60, ROSenv = 0.20 }
+
+[contexts.adult]
+label  = "Adult mouse"
+inputs = { Maturation = 0.95, InVitro = 0.0, MechLoad = 0.90, BetaAR = 0.80, Nrg1 = 0.10, IGF1 = 0.20 }

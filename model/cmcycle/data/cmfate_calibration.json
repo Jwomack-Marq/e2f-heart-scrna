@@ -1,0 +1,23 @@
+{
+ "fingerprint": "6d8a80ab4fe20fd6",
+ "calibrated": {
+  "SPhase": {
+   "reaction": "r063",
+   "weight": 0.552662652800791,
+   "target": 0.0992,
+   "achieved": 0.09919999999205724
+  },
+  "MitoticEntry": {
+   "reaction": "r069",
+   "weight": 0.787022165604867,
+   "target": 0.7698,
+   "achieved": 0.7697999999134808
+  },
+  "Abscission": {
+   "reaction": "r080",
+   "weight": 0.7094992044148967,
+   "target": 0.5028,
+   "achieved": 0.5028000000414337
+  }
+ }
+}

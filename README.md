@@ -10,6 +10,11 @@ subcluster identity / cell-cycle state, and browse pathway/enrichment results.
 > All KO-vs-WT differences are hypothesis-generating only. See the **About / caveats**
 > tab in the app.
 
+The repo also holds a **mechanistic model** of the cardiomyocyte cell-cycle fate
+decision, built from two FUCCI papers — see [model/](model/) and its
+[RESULTS.md](model/RESULTS.md) / [TODO.md](model/TODO.md). The app is the
+descriptive half; `model/` is the quantitative half.
+
 ## Layout
 
 ```
@@ -17,6 +22,10 @@ shiny_app/
   app.R           # the whole app (UI + server)
   app_data.rds    # data bundle (built by build_app_data.R) — NOT in git, see below
   rsconnect/      # shinyapps.io deployment record
+model/
+  cmcycle/        # cell-cycle fate model + re-analysis of the FUCCI papers (Python, stdlib only)
+  figures/        # generated SVGs
+  tests/          # 32 tests
 ```
 
 At runtime the app needs only `app_data.rds` (no Seurat / source objects). The bundle

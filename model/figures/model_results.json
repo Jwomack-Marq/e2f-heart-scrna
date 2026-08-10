@@ -1,0 +1,671 @@
+{
+ "calibrated": {
+  "Abscission": {
+   "achieved": 0.5028000000414337,
+   "reaction": "r080",
+   "target": 0.5028,
+   "weight": 0.7094992044148967
+  },
+  "MitoticEntry": {
+   "achieved": 0.7697999999134808,
+   "reaction": "r069",
+   "target": 0.7698,
+   "weight": 0.787022165604867
+  },
+  "SPhase": {
+   "achieved": 0.09919999999205724,
+   "reaction": "r063",
+   "target": 0.0992,
+   "weight": 0.552662652800791
+  }
+ },
+ "fit_context": "hipsc_cm",
+ "gate_targets": {
+  "Abscission": 0.5028,
+  "MitoticEntry": 0.7698,
+  "SPhase": 0.0992
+ },
+ "inputs": [
+  "Clonidine",
+  "BetaAR",
+  "Nrg1",
+  "IGF1",
+  "MechLoad",
+  "ROSenv",
+  "Maturation",
+  "InVitro"
+ ],
+ "ko": [
+  {
+   "Maturation": 0.3,
+   "context": "mouse_p0_invivo",
+   "double": {
+    "Binucleation": 0.0019882181414322235,
+    "Division": 0.016261951198155707,
+    "E2Fact": 0.39283773742556044,
+    "Ect2": 0.4374609591634889,
+    "Ki67": 0.02588133312529028,
+    "Polyploidization": 0.0033479238113012576,
+    "Quiescent": -0.02159809315088923,
+    "SPhase": 0.021682841519952797
+   },
+   "epistasis": {
+    "Binucleation": -0.0028883553914113153,
+    "Division": 0.006645353501316727,
+    "E2Fact": 0.13841726510242686,
+    "Ect2": 0.18395981147525747,
+    "Ki67": 0.005220683464666583,
+    "Polyploidization": 0.0006621013325522787,
+    "Quiescent": -0.0044190994424576635,
+    "SPhase": 0.0035115764174219813
+   },
+   "single_E2F7": {
+    "Binucleation": 0.005597971350060932,
+    "Division": 0.0007696307615798438,
+    "E2Fact": 0.11025690978000918,
+    "Ect2": 0.009228053122363272,
+    "Ki67": 0.009081747478982483,
+    "Polyploidization": 0.0011812389479169548,
+    "Quiescent": -0.007548841059557776,
+    "SPhase": 0.0080291007265327
+   },
+   "single_E2F8": {
+    "Binucleation": -0.0007213978172173931,
+    "Division": 0.008846966935259135,
+    "E2Fact": 0.1441635625431244,
+    "Ect2": 0.24427309456586818,
+    "Ki67": 0.011578902181641215,
+    "Polyploidization": 0.001504583530832024,
+    "Quiescent": -0.009630152648873791,
+    "SPhase": 0.010142164375998117
+   }
+  },
+  {
+   "Maturation": 0.55,
+   "context": "mouse_p7_invivo",
+   "double": {
+    "Binucleation": 0.0013876908079534147,
+    "Division": 0.0002857449891911884,
+    "E2Fact": 0.352152014356907,
+    "Ect2": 0.24070277224362582,
+    "Ki67": 0.0027795964126537645,
+    "Polyploidization": 0.0006095343360410365,
+    "Quiescent": -0.00228297013318568,
+    "SPhase": 0.004069500413915669
+   },
+   "epistasis": {
+    "Binucleation": 0.00019228870474265842,
+    "Division": 0.00022784877744728873,
+    "E2Fact": 0.12697354742898503,
+    "Ect2": 0.09903984895463935,
+    "Ki67": 0.0006534392051046286,
+    "Polyploidization": 0.00011723797022956343,
+    "Quiescent": -0.0005373754524194974,
+    "SPhase": 0.0007925416831461272
+   },
+   "single_E2F7": {
+    "Binucleation": 0.0005113556441224826,
+    "Division": 2.1563753468887908e-07,
+    "E2Fact": 0.09057640030922232,
+    "Ect2": 0.007306276217185048,
+    "Ki67": 0.0008708263541940052,
+    "Polyploidization": 0.00020334731736604533,
+    "Quiescent": -0.0007149185990232843,
+    "SPhase": 0.0013527962599905637
+   },
+   "single_E2F8": {
+    "Binucleation": 0.0006840464590882737,
+    "Division": 5.768057420921083e-05,
+    "E2Fact": 0.13460206661869967,
+    "Ect2": 0.13435664707180142,
+    "Ki67": 0.0012553308533551307,
+    "Polyploidization": 0.0002889490484454277,
+    "Quiescent": -0.0010306760817428984,
+    "SPhase": 0.0019241624707789784
+   }
+  }
+ ],
+ "maturation": [
+  {
+   "Abscission": 0.04477041954383565,
+   "Binucleation": 0.01621796060755153,
+   "Division": 0.0005535189573959861,
+   "Ect2": 0.19770726774563618,
+   "Ki67": 0.023474179249223796,
+   "Maturation": 0.05,
+   "MitoticEntry": 0.7864335156676624,
+   "Polyploidization": 0.0025724088999747327,
+   "Quiescent": 0.9806561115350777,
+   "SPhase": 0.030381541747201743,
+   "productive_share": 0.028614668576058235
+  },
+  {
+   "Abscission": 0.037921534328577394,
+   "Binucleation": 0.015151574270580767,
+   "Division": 0.0004087604952902568,
+   "Ect2": 0.18575764582784038,
+   "Ki67": 0.021822222751067644,
+   "Maturation": 0.1,
+   "MitoticEntry": 0.7845126942825063,
+   "Polyploidization": 0.0024152998706545685,
+   "Quiescent": 0.9820243653634744,
+   "SPhase": 0.028812989758339385,
+   "productive_share": 0.022739697571493574
+  },
+  {
+   "Abscission": 0.03032638110369922,
+   "Binucleation": 0.01373735985436929,
+   "Division": 0.00027028195779787555,
+   "Ect2": 0.17193348915735615,
+   "Ki67": 0.01971538771753142,
+   "Maturation": 0.15,
+   "MitoticEntry": 0.7808048661460605,
+   "Polyploidization": 0.0022245160390019607,
+   "Quiescent": 0.9837678421488308,
+   "SPhase": 0.02676719441861409,
+   "productive_share": 0.016651018322767754
+  },
+  {
+   "Abscission": 0.02286420685870669,
+   "Binucleation": 0.012114257368586878,
+   "Division": 0.00016010728064437196,
+   "Ect2": 0.15723108630047314,
+   "Ki67": 0.017377723793650848,
+   "Maturation": 0.2,
+   "MitoticEntry": 0.7744960135687441,
+   "Polyploidization": 0.0020253099872430034,
+   "Quiescent": 0.9857003253635257,
+   "SPhase": 0.024429148914342252,
+   "productive_share": 0.011196568083862936
+  },
+  {
+   "Abscission": 0.01618296148868378,
+   "Binucleation": 0.010397259399751066,
+   "Division": 8.453799367872162e-05,
+   "Ect2": 0.14227641241595348,
+   "Ki67": 0.01497809079775011,
+   "Maturation": 0.25,
+   "MitoticEntry": 0.7643794373708105,
+   "Polyploidization": 0.001836364010237098,
+   "Quiescent": 0.9876818385963331,
+   "SPhase": 0.021940913449944078,
+   "productive_share": 0.006862874329082605
+  },
+  {
+   "Abscission": 0.010701789987331725,
+   "Binucleation": 0.008679636268541997,
+   "Division": 3.950002735992139e-05,
+   "Ect2": 0.12749889631326408,
+   "Ki67": 0.012638804592306492,
+   "Maturation": 0.3,
+   "MitoticEntry": 0.7488620794924812,
+   "Polyploidization": 0.0016694836840606792,
+   "Quiescent": 0.9896113800200375,
+   "SPhase": 0.019410403700546287,
+   "productive_share": 0.0038022400892619426
+  },
+  {
+   "Abscission": 0.006582996375034504,
+   "Binucleation": 0.007039849054740951,
+   "Division": 1.6212099329555316e-05,
+   "Ect2": 0.11319612178359496,
+   "Ki67": 0.010452550913638406,
+   "Maturation": 0.35,
+   "MitoticEntry": 0.7259896558983301,
+   "Polyploidization": 0.001531151944795225,
+   "Quiescent": 0.9914127869011342,
+   "SPhase": 0.016928273091640193,
+   "productive_share": 0.001887934903082438
+  },
+  {
+   "Abscission": 0.0037521010713606733,
+   "Binucleation": 0.005540690705261518,
+   "Division": 5.805265875540365e-06,
+   "Ect2": 0.09956816748868028,
+   "Ki67": 0.008488457964578967,
+   "Maturation": 0.4,
+   "MitoticEntry": 0.6935238313093208,
+   "Polyploidization": 0.0014239326771344847,
+   "Quiescent": 0.9930295713517284,
+   "SPhase": 0.014574474857018896,
+   "productive_share": 0.0008328420199781969
+  },
+  {
+   "Abscission": 0.0019744726765041102,
+   "Binucleation": 0.004223391369420095,
+   "Division": 1.8007908783748122e-06,
+   "Ect2": 0.08674090630723784,
+   "Ki67": 0.006788461402507016,
+   "Maturation": 0.45,
+   "MitoticEntry": 0.6491639540309886,
+   "Polyploidization": 0.001347045600357498,
+   "Quiescent": 0.994427762239344,
+   "SPhase": 0.012412939607770908,
+   "productive_share": 0.0003231719384068102
+  },
+  {
+   "Abscission": 0.0009554681096516531,
+   "Binucleation": 0.00310543107187562,
+   "Division": 4.792362065943124e-07,
+   "Ect2": 0.07478401545320017,
+   "Ki67": 0.0053650065235807684,
+   "Maturation": 0.5,
+   "MitoticEntry": 0.5910291326231647,
+   "Polyploidization": 0.0012964363687621033,
+   "Quiescent": 0.9955976533231556,
+   "SPhase": 0.010484468127668607,
+   "productive_share": 0.0001088592611561063
+  },
+  {
+   "Abscission": 0.00042284321620990643,
+   "Binucleation": 0.002185266413266017,
+   "Division": 1.0771174459474674e-07,
+   "Ect2": 0.06372553085432538,
+   "Ki67": 0.004205369045526727,
+   "Maturation": 0.55,
+   "MitoticEntry": 0.5184776957436193,
+   "Polyploidization": 0.0012644787759624216,
+   "Quiescent": 0.996550147099027,
+   "SPhase": 0.008805066712649504,
+   "productive_share": 3.1222126764989476e-05
+  },
+  {
+   "Abscission": 0.0001696833272155758,
+   "Binucleation": 0.0014512618528092357,
+   "Division": 1.9922427259630228e-08,
+   "Ect2": 0.053563602096225,
+   "Ki67": 0.003280456996996466,
+   "Maturation": 0.6,
+   "MitoticEntry": 0.4331901666267265,
+   "Polyploidization": 0.0012392436607975741,
+   "Quiescent": 0.9973094745639659,
+   "SPhase": 0.007370049729170064,
+   "productive_share": 7.404660440228581e-06
+  },
+  {
+   "Abscission": 6.090253546820324e-05,
+   "Binucleation": 0.000890152732402048,
+   "Division": 2.911078654913441e-09,
+   "Ect2": 0.044275703108023506,
+   "Ki67": 0.0025539259979382328,
+   "Maturation": 0.65,
+   "MitoticEntry": 0.34010839517259905,
+   "Polyploidization": 0.0012041374735845451,
+   "Quiescent": 0.9979057068829348,
+   "SPhase": 0.00616087247665099,
+   "productive_share": 1.3900053584632707e-06
+  },
+  {
+   "Abscission": 1.9117988201985726e-05,
+   "Binucleation": 0.0004900809595551808,
+   "Division": 3.1650920522181127e-10,
+   "Ect2": 0.03582574255090496,
+   "Ki67": 0.001988974695719796,
+   "Maturation": 0.7,
+   "MitoticEntry": 0.24738941726620886,
+   "Polyploidization": 0.001140720568217824,
+   "Quiescent": 0.9983691981557178,
+   "SPhase": 0.005151766346346569,
+   "productive_share": 1.9408195197444196e-07
+  },
+  {
+   "Abscission": 5.056144045138736e-06,
+   "Binucleation": 0.00023503544914130276,
+   "Division": 2.358196240339312e-11,
+   "Ect2": 0.028169254417582633,
+   "Ki67": 0.0015522810030237444,
+   "Maturation": 0.75,
+   "MitoticEntry": 0.1645514796569354,
+   "Polyploidization": 0.0010375825042346618,
+   "Quiescent": 0.9987273820230421,
+   "SPhase": 0.004314761496256382,
+   "productive_share": 1.8530276037561226e-08
+  },
+  {
+   "Abscission": 1.0550199497825084e-06,
+   "Binucleation": 9.610506242067619e-05,
+   "Division": 1.0750051646688465e-12,
+   "Ect2": 0.021257043771113662,
+   "Ki67": 0.001215650877446818,
+   "Maturation": 0.8,
+   "MitoticEntry": 0.09914168398530471,
+   "Polyploidization": 0.0009004527326172092,
+   "Quiescent": 0.9990034422038871,
+   "SPhase": 0.0036228470507995774,
+   "productive_share": 1.0787183331081675e-09
+  },
+  {
+   "Abscission": 1.5305048060484027e-07,
+   "Binucleation": 3.3372936471081126e-05,
+   "Division": 2.501856186524006e-14,
+   "Ect2": 0.015037486401633205,
+   "Ki67": 0.0009562427349134579,
+   "Maturation": 0.85,
+   "MitoticEntry": 0.05393410160960372,
+   "Polyploidization": 0.000750481652402513,
+   "Quiescent": 0.9992161454111014,
+   "SPhase": 0.003051637113984215,
+   "productive_share": 3.191735076832736e-11
+  },
+  {
+   "Abscission": 1.1568881556419481e-08,
+   "Binucleation": 1.0020592506925138e-05,
+   "Division": 2.0211598818916757e-16,
+   "Ect2": 0.009457729892695822,
+   "Ki67": 0.0007560622376960845,
+   "Maturation": 0.9,
+   "MitoticEntry": 0.02669225988792105,
+   "Polyploidization": 0.0006097124262562977,
+   "Quiescent": 0.9993802669812366,
+   "SPhase": 0.002580015414423908,
+   "productive_share": 3.261339674824115e-13
+  },
+  {
+   "Abscission": 1.8011506892780555e-10,
+   "Binucleation": 2.7322244538808778e-06,
+   "Division": 1.623251396317144e-19,
+   "Ect2": 0.00446385635284588,
+   "Ki67": 0.000601187220031298,
+   "Maturation": 0.95,
+   "MitoticEntry": 0.012368883126758677,
+   "Polyploidization": 0.000490034244088909,
+   "Quiescent": 0.9995072335314572,
+   "SPhase": 0.0021901872088310615,
+   "productive_share": 3.2941596069177074e-16
+  }
+ ],
+ "n_reactions": 78,
+ "n_species": 55,
+ "screen": [
+  {
+   "d_division": 0.0003295394911279818,
+   "d_entry": -6.31175112175697e-11,
+   "d_share": 0.12214301610509624,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "Midbody",
+   "share_hit": true
+  },
+  {
+   "d_division": 0.005099984579938019,
+   "d_entry": 0.06630541544264634,
+   "d_share": 0.07389140663961595,
+   "entry_hit": true,
+   "mode": "knockdown",
+   "node": "cAMP",
+   "share_hit": true
+  },
+  {
+   "d_division": 0.005099984579938019,
+   "d_entry": 0.06630541544264634,
+   "d_share": 0.07389140663961595,
+   "entry_hit": true,
+   "mode": "knockdown",
+   "node": "PKA",
+   "share_hit": true
+  },
+  {
+   "d_division": 0.00016482051561688888,
+   "d_entry": -7.4863226728894e-11,
+   "d_share": 0.06109032611623287,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "RhoA",
+   "share_hit": true
+  },
+  {
+   "d_division": 0.00016482051029038168,
+   "d_entry": -4.114608653793539e-11,
+   "d_share": 0.06109032337828855,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "Ect2",
+   "share_hit": true
+  },
+  {
+   "d_division": 5.768057420921083e-05,
+   "d_entry": 0.0010306760817428984,
+   "d_share": 0.015464418254666929,
+   "entry_hit": false,
+   "mode": "knockdown",
+   "node": "E2F8",
+   "share_hit": true
+  },
+  {
+   "d_division": 4.2873113845930314e-07,
+   "d_entry": -7.531353318768197e-11,
+   "d_share": 0.00015890816174125746,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "Anillin",
+   "share_hit": false
+  },
+  {
+   "d_division": 4.693734244826829e-07,
+   "d_entry": 0.0010870250413230753,
+   "d_share": 0.00011869590065533781,
+   "entry_hit": false,
+   "mode": "knockdown",
+   "node": "E2F6",
+   "share_hit": false
+  },
+  {
+   "d_division": 2.1563753468887908e-07,
+   "d_entry": 0.0007149185990232843,
+   "d_share": 5.9308029532939484e-05,
+   "entry_hit": false,
+   "mode": "knockdown",
+   "node": "E2F7",
+   "share_hit": false
+  },
+  {
+   "d_division": 5.68813509589588e-08,
+   "d_entry": 0.0002784066620480363,
+   "d_share": 1.738051191288926e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "E2F3",
+   "share_hit": false
+  },
+  {
+   "d_division": 4.292775628271939e-08,
+   "d_entry": 0.0002237277739759458,
+   "d_share": 1.3276150083600814e-05,
+   "entry_hit": false,
+   "mode": "knockdown",
+   "node": "Rb",
+   "share_hit": false
+  },
+  {
+   "d_division": 1.8032179496088155e-07,
+   "d_entry": 0.0045476884698603115,
+   "d_share": 1.3276150083600814e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "CycE",
+   "share_hit": false
+  }
+ ],
+ "screen_context": "mouse_p7_invivo",
+ "screen_worst": [
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.002697980689742918,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "Ccng1",
+   "share_hit": false
+  },
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.002697980689742918,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "p21",
+   "share_hit": false
+  },
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.0022699738095759425,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "Rb",
+   "share_hit": false
+  },
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.0005705724925997302,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "E2F8",
+   "share_hit": false
+  },
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.0022699738095759425,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "E2Frep",
+   "share_hit": false
+  },
+  {
+   "d_division": -4.990965689094628e-08,
+   "d_entry": -0.002697980689742918,
+   "d_share": -1.8498893294785485e-05,
+   "entry_hit": false,
+   "mode": "overexpress",
+   "node": "p27",
+   "share_hit": false
+  }
+ ],
+ "specificity": {
+  "baseline_entry": 0.09651175118533395,
+  "baseline_share": 0.5274457326472365,
+  "both": 2,
+  "context": "hipsc_cm",
+  "criterion": {
+   "floor_pp": 1.0,
+   "fold": 1.5
+  },
+  "entry_hit_rate": 0.10526315789473684,
+  "entry_hits": 8,
+  "entry_hits_that_help": 0.25,
+  "n_tested": 76,
+  "rank_agreement_rho": 0.7134165994691136,
+  "share_hits": 10,
+  "wet_hit_rate": 0.06382978723404255,
+  "wet_survival": 0.3333333333333333
+ },
+ "triad": [
+  {
+   "InVitro": 1.0,
+   "Maturation": 0.12,
+   "base": {
+    "Binucleation": 0.03160551519515367,
+    "Division": 0.050904711313016285,
+    "Polyploidization": 0.014001524677164052,
+    "Quiescent": 0.903488248814666
+   },
+   "context": "hipsc_cm",
+   "delta": {
+    "Binucleation": 0.0055044860813239505,
+    "Division": 0.07685579407756378,
+    "Polyploidization": 0.013973001379196198
+   },
+   "dosed": {
+    "Binucleation": 0.03711000127647762,
+    "Division": 0.12776050539058006,
+    "Polyploidization": 0.02797452605636025,
+    "Quiescent": 0.8071549672765821
+   },
+   "entry_fold": 1.717768873687574,
+   "gates": {
+    "Abscission": 0.5027994026600983,
+    "MitoticEntry": 0.7698000091504654,
+    "SPhase": 0.09920002506956531
+   },
+   "hit": true,
+   "ki67_fold": 1.9462505692646364,
+   "ki67_fold_observed": 2.4444444444444446,
+   "label": "hiPSC-CM (least mature, in vitro)",
+   "note": "AurKB+ midbodies doubled; ploidy and binucleation flat",
+   "observed": "Division",
+   "predicted": "Division"
+  },
+  {
+   "InVitro": 1.0,
+   "Maturation": 0.5,
+   "base": {
+    "Binucleation": 0.00045263257835866214,
+    "Division": 1.8873968224692894e-07,
+    "Polyploidization": 0.0007949175647180907,
+    "Quiescent": 0.998752261117241
+   },
+   "context": "mncm_invitro",
+   "delta": {
+    "Binucleation": 0.00395079251035189,
+    "Division": 0.0015518748525620272,
+    "Polyploidization": 0.009386495309323553
+   },
+   "dosed": {
+    "Binucleation": 0.004403425088710552,
+    "Division": 0.0015520635922442742,
+    "Polyploidization": 0.010181412874041644,
+    "Quiescent": 0.9838630984450035
+   },
+   "entry_fold": 6.265145522775949,
+   "gates": {
+    "Abscission": 0.001943277023395476,
+    "MitoticEntry": 0.2930267681267016,
+    "SPhase": 0.004254294025323406
+   },
+   "hit": true,
+   "ki67_fold": 12.878398419652626,
+   "ki67_fold_observed": 2.1175934366453966,
+   "label": "Mouse neonatal CM, in vitro",
+   "note": "tetraploid 26.5->38.9%; ZERO midbodies in >10,000 cells",
+   "observed": "Polyploidization",
+   "predicted": "Polyploidization"
+  },
+  {
+   "InVitro": 0.0,
+   "Maturation": 0.5,
+   "base": {
+    "Binucleation": 0.00310543107187562,
+    "Division": 4.792362065943124e-07,
+    "Polyploidization": 0.0012964363687621033,
+    "Quiescent": 0.9955976533231556
+   },
+   "context": "mouse_p1_invivo",
+   "delta": {
+    "Binucleation": 0.04284828686624681,
+    "Division": 0.016423637976173484,
+    "Polyploidization": 0.02455598585367796
+   },
+   "dosed": {
+    "Binucleation": 0.04595371793812243,
+    "Division": 0.016424117212380077,
+    "Polyploidization": 0.025852422222440063,
+    "Quiescent": 0.9117697426270575
+   },
+   "entry_fold": 8.840072471356713,
+   "gates": {
+    "Abscission": 0.0009554681096516531,
+    "MitoticEntry": 0.5910291326231647,
+    "SPhase": 0.010484468127668607
+   },
+   "hit": true,
+   "ki67_fold": 19.57550605942034,
+   "ki67_fold_observed": 1.52,
+   "label": "Neonatal mouse, in vivo (P1)",
+   "note": "mononucleated 22.3->14.8%; ploidy flat; EdU fold is saturation-corrected",
+   "observed": "Binucleation",
+   "predicted": "Binucleation"
+  }
+ ]
+}

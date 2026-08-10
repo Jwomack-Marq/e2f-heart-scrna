@@ -1,0 +1,79 @@
+ID,Rule,Weight,n,EC50,evidence
+r001,=> Clonidine,0.00,1.4,0.35,Dose slider. 0 or 1 (25 uM in Murganti).
+r002,=> BetaAR,0.50,1.4,0.35,Context; ordered by Adrb1 which rises with maturation.
+r003,=> Nrg1,0.30,1.4,0.35,Erbb2 t=-3.17 (P0-enriched).
+r004,=> IGF1,0.30,1.4,0.35,Igf2/H19 P0-enriched.
+r005,=> MechLoad,0.80,1.4,0.35,0.10 in vitro / 0.85 in vivo.
+r006,=> ROSenv,0.30,1.4,0.35,Puente 2014 Cell.
+r007,=> Maturation,0.50,1.4,0.35,Context; the model's slow axis.
+r008,=> InVitro,0.00,1.4,0.35,Culture flag.
+r010,BetaAR & !Clonidine => cAMP,0.95,1.4,0.35,Liu 2019 (beta-AR raises cAMP); Murganti 2022 (clonidine I1 lowers it).
+r011,!Clonidine => cAMP,0.20,1.4,0.50,Tonic cAMP that clonidine can suppress.
+r012,cAMP => PKA,1.00,1.4,0.35,Canonical.
+r013,Clonidine => Autophagy,0.85,1.4,0.35,"Murganti 2022 autophagy screen. NOTE the absence of an mTOR reactant - that absence IS the mTOR-independence claim."
+r016,Nrg1 => ERK,0.85,1.4,0.35,Nrg1/ErbB2 -> ERK.
+r017,Autophagy => ERK,0.45,1.4,0.35,The clonidine -> proliferation route.
+r018,Nrg1 => Akt,0.60,1.4,0.35,Canonical.
+r019,IGF1 => Akt,0.80,1.4,0.35,Canonical.
+r022,Maturation => p38,0.65,1.4,0.50,Mapk12 t=+4.49.
+r023,ROS => p38,0.50,1.4,0.35,Canonical stress-p38.
+r024,!Maturation => Amotl1,1.00,1.4,0.50,Amotl1 t=-6.56.
+r025,MechLoad => YAP,0.70,1.4,0.35,Hippo mechanotransduction.
+r026,Amotl1 => YAP,0.55,1.4,0.35,SIGN UNCERTAIN - angiomotins can sequester or stabilise YAP. Sensitivity test required.
+r027,ROSenv => ROS,0.45,1.4,0.35,Environmental oxygen.
+r028,InVitro => ROS,0.70,1.4,0.35,21% O2 incubator - a KEY in-vitro/in-vivo discriminator.
+r029,FAO => ROS,0.40,1.4,0.35,Fatty-acid oxidation raises ROS; the P7 metabolic switch.
+r030,!MechLoad => ROS,0.45,1.4,0.35,Unloaded culture.
+r031,ROS & Maturation => DDR,1.00,1.4,0.50,"Puente 2014. HYPOTHESIS-ONLY - the four DDR genes are flat on our primary axis."
+r032,DDR => Ccng1,0.90,1.4,0.35,Ccng1 t=+1.85; G2/M arrest and CM polyploidy.
+r033,Maturation => Ccng1,0.35,1.4,0.50,Ccng1 is higher in noncycling cells in 4/4 group pairs.
+r034,DDR => p21,0.80,1.4,0.35,Cdkn1a t=+1.55.
+r035,p38 => p21,0.45,1.4,0.35,Canonical.
+r036,DDR => Pkmyt1,0.85,1.4,0.35,Pkmyt1 t=+2.81.
+r037,Maturation => Pkmyt1,0.30,1.4,0.50,Same anchor.
+r038,!Maturation => Glycolysis,0.85,1.4,0.50,Slc2a1 0.22 -> 0.05; Ldha 2.72 -> 2.12.
+r039,!E2F6 => Glycolysis,0.40,1.4,0.50,E2F6 overexpression lowers glycolysis (Baniol discussion).
+r040,Maturation => FAO,0.95,1.4,0.50,Hmgcs2/Fabp3/Pdk4/Ucp2 t = +5 to +11.
+r041,ERK & !PKA => CycD,0.62,1.4,0.35,"Mitogen arm with the PKA brake (Liu 2019). Weight reduced from 0.85: CycD saturated at baseline, so relieving the brake had nowhere to go."
+r041b,Glycolysis => CycD,0.40,1.4,0.35,Glycolysis is P0-high and supports G1 progression; Baniol cites substrate utilisation as a gate on cycle progression.
+r042,Akt => CycD,0.60,1.4,0.35,Canonical.
+r043,YAP & !Maturation => CycD,0.60,1.4,0.35,Amotl1/YAP is P0-enriched.
+r044,!CycD & !CycE => Rb,1.00,1.4,0.50,Canonical; CycE closes the restriction-point loop.
+r045,!Rb => E2F1,1.00,1.4,0.50,E2f1 0.19 in cycling vs 0.01 in noncycling.
+r046,!Rb => E2F3,0.60,1.4,0.50,E2f3 t=-0.07 - predicted FLAT. Negative control.
+r047,Maturation => E2F2,0.60,1.4,0.50,E2f2 t=+2.18 - the endoreplication node.
+r048,Maturation => E2F6,0.80,1.4,0.50,E2f6 t=+4.12.
+r049,E2F1 => E2F6,0.30,1.4,0.35,Weak activator arm.
+r050,E2Fact => E2F7,0.80,1.4,0.35,E2F1-induced atypical repressor. Measured: E2f1~E2f7 rho=+0.49.
+r051,E2Fact => E2F8,0.85,1.4,0.35,Measured: E2f1~E2f8 rho=+0.46.
+r052,Maturation => E2F8,0.35,1.4,0.50,E2f8 t=+2.28 - the E2F7/E2F8 asymmetry (E2f7 is flat).
+r054,E2F6 => E2Frep,0.50,1.4,0.35,"OR-pool over the repressors. Weights reduced from 0.80/0.70/0.75: with weighted-OR accumulation, three members at that level saturate the pool so 'any repressor suffices' becomes 'the pool is always on', which over-damps E2F activity even at low maturation."
+r055,E2F7 => E2Frep,0.45,1.4,0.35,OR-pool - see r054.
+r056,E2F8 => E2Frep,0.48,1.4,0.35,OR-pool - see r054.
+r058,E2F1 & !E2Frep => E2Fact,1.00,1.4,0.50,The delayed negative-feedback loop closes here.
+r059,E2F3 & !E2Frep => E2Fact,0.45,1.4,0.50,Secondary activator arm.
+r060,E2Fact => CycE,0.85,1.4,0.35,Ccne1/Ccne2 are E2F targets. Measured: E2f1~Ccne1 rho=+0.56.
+r061,E2F2 & Maturation => CycE,0.50,1.4,0.35,The P7 endoreplication drive; Ccne1/2 rise with maturation.
+r062,Maturation => p27,0.30,1.4,0.50,Cdkn1b t=-1.67 - predicted mild decrease.
+r063,CycE & !p21 & !p27 & !Ccng1 & !PKA => SPhase,0.55,1.4,0.50,PREVALENCE. Calibrated knob - target 0.0992 at hiPSC. p21 and p27 are the canonical G1/S CKIs.
+r064,E2Fact => CycA,0.90,1.4,0.35,"Ccna2 is flat (t=-0.85). Driven by E2F activity, NOT by SPhase: SPhase is a population fraction while every other node is a per-cell activity, so hanging the cascade off it would compound prevalence three times through the fate partition and collapse the fractions."
+r065,CycA & !E2F6 => CycB,0.95,1.4,0.50,E2F6 lowers Cyclin B1 (Baniol discussion); Ccnb1 t=-2.12.
+r067,!Maturation => Cdc25,0.60,1.4,0.50,Cdc25b 0.90 -> 0.61.
+r067b,Cdc25 => CycB,0.55,1.4,0.35,Cdc25 activates the cyclin B-Cdk1 complex - canonical mitotic-entry step.
+r068,!Ccng1 & !Pkmyt1 => MitCompRaw,1.00,1.4,0.50,"COMPETENCE = P(complete mitosis | entered S). A permissive baseline pulled down by its brakes, deliberately NOT gated on SPhase or on anything downstream of it."
+r068b,CycB => MitCompRaw,0.55,1.4,0.35,Cyclin B-Cdk1 promotes mitotic entry; OR'd so the brakes stay able to close the gate.
+r069,MitCompRaw => MitoticEntry,1.00,3.0,0.45,Sharpening gate. Calibrated knob - target 0.7698 at hiPSC.
+r070,MitoticEntry => Cdc20,0.90,1.4,0.35,Murganti: polyploid cells show NO APC activation.
+r071,E2Fact & !Maturation & !E2F8 => Ect2,1.00,1.4,0.50,"t=-6.17, 3rd percentile genome-wide. The !Maturation EC50=0.50 is IDENTIFIED by the measured 1.83x drop between hiPSC and P7. !E2F8 from Pandit 2012 (E2F7/8 repress Ect2). An earlier version OR'd a second !E2F7 reaction onto this node; that acted as a floor and flattened the maturation response to 1.20x, so E2F7 now acts through the E2Frep pool instead."
+r073,Ect2 => RhoA,1.00,1.4,0.35,Ect2 is RhoA's GEF.
+r074,E2Fact => Centralspindlin,0.90,1.4,0.35,Racgap1/Kif23 are FLAT - driven by E2F activity only. This is the specificity claim.
+r075,E2Fact => AurKB,0.85,1.4,0.35,Aurkb is flat/up - no maturation term.
+r076,E2Fact => Anillin,0.85,1.4,0.35,Anln is flat - no maturation term.
+r077,RhoA & Anillin => Midbody,1.00,1.4,0.35,"Furrow -> midbody, with RhoA OBLIGATORY. An earlier version OR'd a second route (Centralspindlin & AurKB) onto this node; that bypassed the Ect2/RhoA arm entirely and made it impossible for Ect2 to be rate-limiting, which is the model's central claim. Centralspindlin and AurKB are now declared MARKERS rather than drivers - their role in the argument is precisely that they stay flat while Ect2 falls."
+r079,Midbody & !PKA => AbsRaw,1.00,1.4,0.35,"Transduction class (EC50=0.35), amplifying: at 0.50 this four-hop arm attenuated E2F activity of ~0.4 down to ~0.02 at AbsRaw. Liu 2019: beta-AR/PKA blocks CM cytokinesis. RhoA is deliberately NOT a second multiplicand here - it already gates the furrow route in r077, and using it twice double-counts one piece of evidence."
+r080,AbsRaw => Abscission,1.00,2.0,0.090,"Sharpening gate; the knob is the WEIGHT, target 0.5028 at hiPSC. n and EC50 are chosen so the switch sits inside the arm's operating range: with RhoA obligatory, AbsRaw spans 42x between hiPSC (0.140) and mouse P1 (0.0033), and this switch maps that to 0.71 vs 0.001. That is the modelling commitment behind the central claim - abscission is rate-limiting because the switch sits where the Ect2/RhoA arm sits. It is also the model's largest single sensitivity, and the switch POSITION is a fitted quantity, not an evidence-derived one."
+r081,SPhase => Ki67,0.95,1.4,0.35,"Mki67 2.28 in cycling vs 0.02 in noncycling. Ki-67 is a PREVALENCE observable, so it tracks SPhase alone. An earlier version OR'd a MitoticEntry term onto it, which is dimensionally wrong - MitoticEntry is a per-cell conditional competence, not a fraction - and because that node is near-saturated it pinned the Ki-67 fold at ~1.1x."
+r083,!SPhase => Quiescent,1.00,1.4,0.40,"Murganti Fig 2: Q=90.35%. Complementary-product fate idiom - see spec.py."
+r084,SPhase & MitoticEntry & Abscission => Division,1.00,1.4,0.40,D=5.09%.
+r085,SPhase & MitoticEntry & !Abscission => Binucleation,1.00,1.4,0.40,"B=3.16%. Mitosis happens, the furrow fails."
+r086,SPhase & !MitoticEntry => Polyploidization,1.00,1.4,0.40,"P=1.40%. G2 arrest - APC/C never fires, no envelope breakdown."

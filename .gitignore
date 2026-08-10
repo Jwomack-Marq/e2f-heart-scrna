@@ -20,3 +20,12 @@ shiny_app/app_data.rds
 # rsconnect deploy logs (the .dcf deployment record IS tracked)
 rsconnect/*.log
 shiny_app/rsconnect/**/*.log
+
+# Python model (model/) — build artefacts, not sources
+__pycache__/
+*.py[cod]
+model/.venv/
+.pytest_cache/
+
+# generated report (rebuild: python3 tools/build_report_page.py)
+model/report.html
