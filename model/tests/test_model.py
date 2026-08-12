@@ -232,3 +232,86 @@ def test_an_entry_scored_screen_mostly_finds_things_that_do_not_help():
     assert sp["entry_hits_that_help"] < 0.5
     assert abs(sp["entry_hit_rate"] - sp["wet_hit_rate"]) < 0.06
     assert abs(sp["entry_hits_that_help"] - sp["wet_survival"]) < 0.20
+
+
+def test_compiled_cache_notices_a_structural_edit():
+    """Keying the compiled-reaction cache on weights alone was a correctness bug:
+    replacing a reaction to change its reactants left the key unchanged, so the edit
+    was silently ignored. It produced a diagnosis that had to be thrown away."""
+    net = spec.load_calibrated()
+    inp = model.contexts(net)["hipsc_cm"]
+    before = net.ss(inputs=inp)["Rb"]
+    j = net.meta["rid"]["r044"]
+    r = net.reactions[j]
+    # drop the CycE leg of `!CycD & !CycE => Rb`, changing nothing else
+    net.reactions[j] = logic.Reaction(
+        target=r.target, reactants=[(net.idx["CycD"], True)],
+        w=r.w, n=r.n, ec50=r.ec50, is_input=r.is_input, rid="r044")
+    after = net.ss(inputs=inp)["Rb"]
+    assert after != pytest.approx(before, abs=1e-6), (
+        "structural edit was ignored -- the compiled cache did not invalidate")
+
+
+def test_the_g1s_switch_is_functionally_disconnected():
+    """A pinned DEFECT, not a passing claim -- see TODO item 1.
+
+    The Rb-E2F restriction point is present and wired but contributes almost nothing
+    to entry: across every context E2F1 spans 1.4x and CycE 1.2x, while S-phase entry
+    spans 142x. Essentially all of that variation comes from the p21/p27/Ccng1 brakes
+    multiplying inside one reaction, downstream of the switch.
+
+    The consequence is that no upstream mitogen route can reach entry, which is why
+    clonidine's effect had to be wired directly onto the S-phase reaction as `!PKA`,
+    and why removing that double-count collapses the drug response to 1.0x.
+
+    When the loop is re-tuned so the switch actually travels, this test must be
+    rewritten -- that is the point of pinning it.
+    """
+    net = spec.load_calibrated()
+    span = lambda n: (lambda v: max(v) / max(min(v), 1e-12))(
+        [model.state(net, c)[n] for c in net.meta["contexts"]])
+    assert span("E2F1") < 2.0, "E2F1 has gained travel -- update this test"
+    assert span("CycE") < 2.0, "CycE has gained travel -- update this test"
+    assert span("SPhase") > 50.0        # entry varies a lot...
+    # ...but not because anything upstream of the switch reaches it
+    inp = model.contexts(net)["adult"]
+    base = net.ss(inputs=inp)["SPhase"]
+    for node in ("ERK", "Akt", "Autophagy", "CycD"):
+        got = net.ss(inputs=inp, overexpress=[node])["SPhase"]
+        assert got / base < 1.25, f"{node} now reaches entry -- update this test"
+
+
+def test_the_restriction_point_is_bistable_but_never_switches():
+    """Which leg of `!CycD & !CycE => Rb` holds the switch, established AFTER the
+    compiled-cache bug was fixed -- an earlier reading of this came from stale
+    compiled state and was wrong in the opposite direction.
+
+    The truth: CycD's constitutive drive is what pins the loop on. Its leg alone
+    gives Rb a real 5x travel that rises correctly with maturation (0.15 -> 0.73).
+    Remove that leg and keep only the CycE feedback, and the loop falls to its OFF
+    branch (Rb ~ 1.0) in every context -- so both branches exist and the model simply
+    never leaves the ON one across the whole hiPSC-to-adult range.
+    """
+    net = spec.load_calibrated()
+    j = net.meta["rid"]["r044"]
+    orig = net.reactions[j]
+
+    def rb_across(reactants):
+        net.reactions[j] = logic.Reaction(
+            target=orig.target, reactants=reactants, w=orig.w, n=orig.n,
+            ec50=orig.ec50, is_input=orig.is_input, rid="r044")
+        try:
+            return [net.ss(inputs=model.contexts(net)[c])["Rb"]
+                    for c in ("hipsc_cm", "adult")]
+        finally:
+            net.reactions[j] = orig
+
+    cycd_only = rb_across([(net.idx["CycD"], True)])
+    cyce_only = rb_across([(net.idx["CycE"], True)])
+    # CycD leg: correct direction and real travel
+    assert cycd_only[1] > 4 * cycd_only[0]
+    # CycE leg alone: the loop settles on its OFF branch everywhere
+    assert min(cyce_only) > 0.95
+    # both legs together: stuck low, i.e. on the ON branch, in every context
+    both = [model.state(net, c)["Rb"] for c in net.meta["contexts"]]
+    assert max(both) < 0.4

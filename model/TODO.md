@@ -19,7 +19,7 @@ a stale one is easy to spot and drop.
   up at P7 against a housekeeping baseline near zero; HALLMARK_E2F_TARGETS regulon
   activity KO−WT = +1.12 (P0) and +3.15 (P7).
 - **Built and calibrated the Tier-1 logic network** (`cmfate`): 55 nodes, 78
-  reactions, stdlib-only, 51 tests. Reproduces the fit context to 1e-5 and gets
+  reactions, stdlib-only, 53 tests. Reproduces the fit context to 1e-5 and gets
   3/3 held-out clonidine outcomes.
 - **Fixed the screen's scoring.** Two errors, both flattering the model: the hit test
   was purely relative and applied at P7 where baseline entry is 0.27%, so a
@@ -29,6 +29,12 @@ a stale one is easy to spot and drop.
   10.5% hit rate against their 6.4%, and 25% of hits also raising the division
   share against their 2 of 6 — the model now agrees with the wet screen instead of
   contradicting it.
+- **Fixed a third engine bug, found mid-diagnosis.** `_compiled()` cached the
+  flattened reaction list keyed on weights alone, so replacing a reaction to change
+  its reactants, `n` or `EC50` was silently ignored and the model kept running the
+  old structure. It invalidated a diagnosis and produced a conclusion that was wrong
+  in the opposite direction. Now keyed on weights *and* reaction identity, with the
+  mutation contract documented and a regression test.
 - **Fixed the two engine bugs** the old plan listed: the `EC50**n >= 0.5` sign
   inversion now raises, and `perturbation_matrix` takes a tuple so the double
   knockout is expressible.
@@ -37,16 +43,45 @@ a stale one is easy to spot and drop.
 
 ## Blocking — the model's known misses
 
-### 1. The entry-response magnitude is wrong at high maturation
-The model predicts a 6.3× and 8.8× rise in S-phase entry under clonidine in the two
-mature contexts, against observed 2.12× and 1.52×. (hiPSC is fine: 1.72× vs 2.44×.)
-Cause is diagnosed: clonidine acts by relieving the PKA brake, baseline PKA scales
-with β-adrenergic tone, and the model raises that tone steeply with maturation — so
-the *relative* effect of removing it is largest exactly where the data says it
-should be smallest. Candidate fixes: narrow the β-AR range across contexts, or move
-part of clonidine's entry effect off the PKA axis. Pinned by
-`test_entry_response_is_over_predicted_at_high_maturation` so a fix shows up as a
-test change rather than a silent improvement.
+### 1. The G1/S switch is functionally disconnected
+This was filed as "the entry-response magnitude is wrong at high maturation" (6.3×
+and 8.8× predicted against 2.12× and 1.52× observed). That is real, but it is a
+symptom. Diagnosed properly, the cause is bigger:
+
+**The Rb–E2F restriction point is present, wired, and contributes almost nothing to
+entry.** Across all six contexts, hiPSC-CM to adult, `E2F1` spans **1.4×** and `CycE`
+**1.2×**, while S-phase entry spans **142×**. Essentially all of that variation comes
+from the p21/p27/Ccng1 brakes multiplying inside a single reaction (`r063`),
+downstream of the switch.
+
+Two consequences, both verified:
+
+- **No upstream route reaches entry.** Overexpressing ERK or Autophagy changes it by
+  1.00×; CycD by 1.10×; even E2Fact only 1.65×. That is why clonidine's effect had to
+  be wired directly onto the S-phase reaction as `!PKA`, and why removing that
+  double-count collapses the drug response to 1.0× everywhere — strengthening the
+  autophagy arm instead does nothing, because nothing gets through.
+- **The loop is bistable but never switches.** CycD's constitutive drive pins it on:
+  its leg of `!CycD & !CycE => Rb` alone gives Rb a correct 5× travel
+  (0.15 → 0.73 with maturation), while the CycE feedback leg alone lets the loop fall
+  to its OFF branch (Rb ≈ 1.0) in every context. Both branches exist; the model simply
+  never leaves the ON one.
+
+It also means Baniol's actual G1/S biology cannot be represented while CycE is pinned
+— premature exit at P0 versus genuine delay at P7, and Ccne1/Ccne2 rising with
+maturation, all live in a module that currently has no travel.
+
+**The fix is a scoped re-tune of the Rb/E2F/CycE loop as a unit** so the fold sits
+inside the context range rather than below it: weaken CycD's drive substantially (3×
+was not nearly enough — Rb only reached 0.23), give CycE real travel, and let entry be
+driven *through* the switch rather than around it via the CKI product. Because Ect2
+hangs off `E2Fact`, this changes the cytokinesis arm too, so it needs full
+re-calibration and re-validation of the triad, the KO prediction and the negative
+controls. Treat it as its own pass, not a weight tweak.
+
+Pinned by `test_the_g1s_switch_is_functionally_disconnected` and
+`test_the_restriction_point_is_bistable_but_never_switches`, both of which must be
+rewritten when it is fixed — that is the point of them.
 
 ### 2. Widen the curated gene panel
 Only **29 of 63** model node genes are in the 2,181-gene panel. E2f2–E2f6, Rb1,
@@ -186,7 +221,7 @@ Ranked by how cleanly each could be run with assays both papers already use.
 
 ### 9. Nothing is committed
 `model/` is still untracked and `.gitignore` / `README.md` are modified in the working
-tree. 13 figures, 51 tests and the calibration cache are all sitting uncommitted.
+tree. 13 figures, 53 tests and the calibration cache are all sitting uncommitted.
 
 ### 10. The pathway map is dense in the middle columns
 93 edges in one figure is legible on screen but marginal for a slide or print. If it

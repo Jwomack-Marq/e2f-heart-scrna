@@ -37,8 +37,8 @@ tools/
   extract_ko_bundle.R     one-shot Docker extraction of the KO app_data.rds
   build_report_page.py    builds the shareable HTML report from figures/
 data/ko_export/           small derived tables from the KO bundle
-tests/                    51 tests
-figures/                  10 generated SVGs + results.json + model_results.json
+tests/                    53 tests
+figures/                  13 generated SVGs + results.json + model_results.json
 ```
 
 ## The model in one paragraph
@@ -64,7 +64,7 @@ combination should be catchable before any solver exists.
 ```bash
 python3 -m cmcycle.preflight     # six checks; two flag real tensions
 python3 -m cmcycle.baniol        # the re-analysis
-python3 -m cmcycle.figures       # regenerate all 10 figures + both results.json
+python3 -m cmcycle.figures       # regenerate all 13 figures + both results.json
 python3 -c "from cmcycle import spec, model
 net = spec.load_calibrated(verbose=True)
 for r in model.clonidine_triad(net):
@@ -80,7 +80,7 @@ Tests need `pytest` only:
 
 ```bash
 uv venv --python 3.12 && uv pip install pytest
-.venv/bin/python -m pytest       # 51 passed
+.venv/bin/python -m pytest       # 53 passed
 ```
 
 ### The expression data is not in this repo
@@ -121,8 +121,11 @@ python3 tools/validate_palette.py "#2a78d6,#eb6834,#1baf7a" --mode light --pairs
 python3 tools/validate_palette.py "#3987e5,#d95926,#199e70" --mode dark  --pairs all
 ```
 
-Every figure is driven by `baniol.run()` or `preflight.run_all()`, so a figure can
-never disagree with the number it claims to show.
+Every figure is driven by `baniol.run()`, `preflight.run_all()` or `model.summary()`,
+so a figure can never disagree with the number it claims to show. Three of the
+thirteen are mechanism diagrams rather than charts — the engine, the parameter
+classes, and the full pathway map — and `fig_pathways()` asserts that all 55 nodes
+are placed, so the map cannot silently omit one.
 
 ## Relationship to the rest of the project
 
@@ -139,4 +142,4 @@ time so it cannot express the E2f7/E2f8 double knockout. Both are fixed in
 `logic.py`, and both have tests.
 
 The Tier-2 mechanistic ODE is specified but not built — it extends Gérard & Goldbeter
-2009 rather than starting over. See [TODO.md](TODO.md) item 4.
+2009 rather than starting over. See [TODO.md](TODO.md) item 3.

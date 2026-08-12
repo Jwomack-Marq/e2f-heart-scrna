@@ -445,14 +445,29 @@ contexts through the **ROS → DDR → Ccng1/Pkmyt1** arm, which collapses mitot
 entry (0.293 in vitro versus 0.591 in vivo) and so routes the flux to
 polyploidization rather than binucleation.
 
-**What it gets wrong, and this is the largest quantitative miss:** the entry-response
-magnitude. 1.72× at hiPSC against an observed 2.44× is fine; **6.3× and 8.8× in the
-two mature contexts against observed 2.12× and 1.52× is not.** The cause is
-diagnosed: clonidine's leverage on entry runs through relief of the PKA brake, and
-baseline PKA scales with β-adrenergic tone, which the model raises steeply with
-maturation — so the *relative* effect of removing it is largest exactly where the
-data says it should be smallest. This is pinned by a test so a fix shows up as a
-test change rather than a silent improvement.
+**What it gets wrong, and it is worse than a magnitude error.** The entry-response
+folds are 1.72× at hiPSC against an observed 2.44× — fine — but 6.3× and 8.8× in the
+two mature contexts against 2.12× and 1.52×. Chasing that down found the real defect:
+**the Rb–E2F restriction point is present, wired, and contributes almost nothing to
+entry.** Across all six contexts `E2F1` spans 1.4× and `CycE` 1.2×, while S-phase entry
+spans 142× — so essentially all of the entry variation comes from the p21/p27/Ccng1
+brakes multiplying inside one reaction, downstream of the switch.
+
+The consequences are concrete. Overexpressing ERK or Autophagy changes entry by 1.00×,
+CycD by 1.10×, E2Fact by only 1.65× — nothing upstream gets through. That is *why*
+clonidine's effect had to be wired directly onto the S-phase reaction as `!PKA`, and
+why removing that double-count collapses the drug response to 1.0× everywhere while
+strengthening the autophagy arm does nothing. And the loop turns out to be bistable
+but never to switch: CycD's drive pins it on, its leg alone giving Rb a correct 5×
+travel, while the CycE feedback leg alone lets the loop fall to its OFF branch in every
+context. Both branches exist; the model never leaves the ON one.
+
+This also bounds what the model can currently say about Baniol's G1/S biology —
+premature exit at P0 versus genuine delay at P7, Ccne1/Ccne2 rising with maturation —
+because all of it lives in a module with no travel. The fix is a scoped re-tune of the
+Rb/E2F/CycE loop as a unit, and because Ect2 hangs off E2Fact it touches the
+cytokinesis arm too. Both facts are pinned by tests that must be rewritten when it is
+fixed.
 
 ### 7.5 The lab's own knockout, and what else to try
 
