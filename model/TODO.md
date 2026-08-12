@@ -29,6 +29,21 @@ a stale one is easy to spot and drop.
   10.5% hit rate against their 6.4%, and 25% of hits also raising the division
   share against their 2 of 6 — the model now agrees with the wet screen instead of
   contradicting it.
+- **Fixed the G1/S switch.** Three changes: the three restriction-point reactions
+  (`r044`, `r045`, `r060`) were gate-shaped — they were the only graded ones in a model
+  whose two downstream gates are steep, so the most famous switch in the cell cycle was
+  the only one built as an interpolation and could not hold a fold; an OR'd CycE leg
+  (`E2F2 & Maturation => CycE`) that cancelled the switch's travel was removed, and E2F2
+  re-cast as an AND-term brake on mitotic competence, which is what Baniol actually
+  propose; and CycD's drive was scaled 0.70× to put the fold inside the context range.
+  The `!PKA` shortcut came off the S-phase reaction, so entry is now driven *through*
+  the switch. Result: **E2F1 travel 1.4× → 25.9×**, CycE 1.2× → ~36,000×, Rb 0.14 → 0.92
+  across contexts, **triad still 3/3**, Ect2 still rate-limiting, and the mean
+  clonidine fold error **236% → 26%**.
+- **Found the OR'd-floor pathology a fourth time, in my own fix.** Adding E2F2's brake as
+  its own reaction *raised* mitotic competence, because a separate reaction can only add
+  through the weighted OR. An inhibitor has to be an AND term inside a reaction. That is
+  now stated in `r068`'s evidence column, since it has bitten this model four times.
 - **Fixed a third engine bug, found mid-diagnosis.** `_compiled()` cached the
   flattened reaction list keyed on weights alone, so replacing a reaction to change
   its reactants, `n` or `EC50` was silently ignored and the model kept running the
@@ -43,45 +58,28 @@ a stale one is easy to spot and drop.
 
 ## Blocking — the model's known misses
 
-### 1. The G1/S switch is functionally disconnected
-This was filed as "the entry-response magnitude is wrong at high maturation" (6.3×
-and 8.8× predicted against 2.12× and 1.52× observed). That is real, but it is a
-symptom. Diagnosed properly, the cause is bigger:
+### 1. Residual tensions from fixing the G1/S switch
+The switch is **fixed** — see the Done list for what changed and what it bought. Three
+things it left behind, in order:
 
-**The Rb–E2F restriction point is present, wired, and contributes almost nothing to
-entry.** Across all six contexts, hiPSC-CM to adult, `E2F1` spans **1.4×** and `CycE`
-**1.2×**, while S-phase entry spans **142×**. Essentially all of that variation comes
-from the p21/p27/Ccng1 brakes multiplying inside a single reaction (`r063`),
-downstream of the switch.
+**The hiPSC entry fold is now too low: 1.02× against an observed 2.44×.** The failure
+flipped ends. At low maturation the restriction point is already open (Rb 0.14), so
+relieving a brake cannot open it further — which is arguably right for a permissive
+immature cell, and means clonidine's real 2.44× there must arrive through something
+other than the restriction point. The abscission/PKA arm raising the *productive*
+fraction, or the autophagy arm, are the candidates. The two mature contexts are now
+nearly exact (2.13 vs 2.12, 1.83 vs 1.52).
 
-Two consequences, both verified:
+**The comparators drifted 28%.** All five move 27–28% between P0 and P7, uniformly,
+tracking E2Fact's own 29% fall — i.e. it is the switch working, not five bad edges. The
+test bound was raised from 25% to 35% with that reasoning written into it, and it now
+asserts *uniformity* rather than just magnitude. The real refinement: truly flat targets
+under a travelling E2F activity would need their reactions to saturate, so a 29% fall in
+input gives a small fall in output. Worth doing, and it would let the bound come back down.
 
-- **No upstream route reaches entry.** Overexpressing ERK or Autophagy changes it by
-  1.00×; CycD by 1.10×; even E2Fact only 1.65×. That is why clonidine's effect had to
-  be wired directly onto the S-phase reaction as `!PKA`, and why removing that
-  double-count collapses the drug response to 1.0× everywhere — strengthening the
-  autophagy arm instead does nothing, because nothing gets through.
-- **The loop is bistable but never switches.** CycD's constitutive drive pins it on:
-  its leg of `!CycD & !CycE => Rb` alone gives Rb a correct 5× travel
-  (0.15 → 0.73 with maturation), while the CycE feedback leg alone lets the loop fall
-  to its OFF branch (Rb ≈ 1.0) in every context. Both branches exist; the model simply
-  never leaves the ON one.
-
-It also means Baniol's actual G1/S biology cannot be represented while CycE is pinned
-— premature exit at P0 versus genuine delay at P7, and Ccne1/Ccne2 rising with
-maturation, all live in a module that currently has no travel.
-
-**The fix is a scoped re-tune of the Rb/E2F/CycE loop as a unit** so the fold sits
-inside the context range rather than below it: weaken CycD's drive substantially (3×
-was not nearly enough — Rb only reached 0.23), give CycE real travel, and let entry be
-driven *through* the switch rather than around it via the CKI product. Because Ect2
-hangs off `E2Fact`, this changes the cytokinesis arm too, so it needs full
-re-calibration and re-validation of the triad, the KO prediction and the negative
-controls. Treat it as its own pass, not a weight tweak.
-
-Pinned by `test_the_g1s_switch_is_functionally_disconnected` and
-`test_the_restriction_point_is_bistable_but_never_switches`, both of which must be
-rewritten when it is fixed — that is the point of them.
+**CycE now spans ~36,000×**, reaching zero in the adult context. Arguably correct — adult
+cardiomyocytes have no cyclin E — but numerically extreme, and it suggests the fold is
+positioned near the edge of its useful range rather than centred in it.
 
 ### 2. Widen the curated gene panel
 Only **29 of 63** model node genes are in the 2,181-gene panel. E2f2–E2f6, Rb1,

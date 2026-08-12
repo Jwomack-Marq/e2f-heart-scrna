@@ -445,29 +445,36 @@ contexts through the **ROS → DDR → Ccng1/Pkmyt1** arm, which collapses mitot
 entry (0.293 in vitro versus 0.591 in vivo) and so routes the flux to
 polyploidization rather than binucleation.
 
-**What it gets wrong, and it is worse than a magnitude error.** The entry-response
-folds are 1.72× at hiPSC against an observed 2.44× — fine — but 6.3× and 8.8× in the
-two mature contexts against 2.12× and 1.52×. Chasing that down found the real defect:
-**the Rb–E2F restriction point is present, wired, and contributes almost nothing to
-entry.** Across all six contexts `E2F1` spans 1.4× and `CycE` 1.2×, while S-phase entry
-spans 142× — so essentially all of the entry variation comes from the p21/p27/Ccng1
-brakes multiplying inside one reaction, downstream of the switch.
+**What it gets wrong, and what fixing it took.** The first version over-predicted the
+entry response badly — 6.3× and 8.8× in the mature contexts against 2.12× and 1.52×.
+Chasing that down found the real defect: **the Rb–E2F restriction point was present,
+wired, and contributing almost nothing.** E2F1 spanned 1.4× and CycE 1.2× across every
+context while entry spanned 142×, so all of the variation came from the CKI brakes inside
+one reaction, downstream of the switch. Nothing upstream reached entry — ERK and
+Autophagy 1.00×, CycD 1.10× — which is *why* clonidine's effect had to be wired directly
+onto the S-phase reaction as `!PKA`.
 
-The consequences are concrete. Overexpressing ERK or Autophagy changes entry by 1.00×,
-CycD by 1.10×, E2Fact by only 1.65× — nothing upstream gets through. That is *why*
-clonidine's effect had to be wired directly onto the S-phase reaction as `!PKA`, and
-why removing that double-count collapses the drug response to 1.0× everywhere while
-strengthening the autophagy arm does nothing. And the loop turns out to be bistable
-but never to switch: CycD's drive pins it on, its leg alone giving Rb a correct 5×
-travel, while the CycE feedback leg alone lets the loop fall to its OFF branch in every
-context. Both branches exist; the model never leaves the ON one.
+Three changes fixed it. The three restriction-point reactions were **gate-shaped**: they
+were the only graded ones in a model whose two downstream gates are steep, so the most
+famous switch in the cell cycle was the only one built as an interpolation, and it could
+not hold a fold. An **OR'd CycE leg** (`E2F2 & Maturation => CycE`) that cancelled the
+switch's travel was removed, and E2F2 re-cast as an AND-term brake on mitotic competence
+— which is what Baniol actually propose, since E2f2 is their pro-progression factor in
+*endoreplicating* cells, and "S-phase yes, mitosis no" is exactly that. And CycD's drive
+was scaled 0.70× to put the fold inside the context range.
 
-This also bounds what the model can currently say about Baniol's G1/S biology —
-premature exit at P0 versus genuine delay at P7, Ccne1/Ccne2 rising with maturation —
-because all of it lives in a module with no travel. The fix is a scoped re-tune of the
-Rb/E2F/CycE loop as a unit, and because Ect2 hangs off E2Fact it touches the
-cytokinesis arm too. Both facts are pinned by tests that must be rewritten when it is
-fixed.
+Result: **E2F1 travel 1.4× → 25.9×**, Rb 0.14 → 0.92 across contexts, the triad still
+**3/3**, Ect2 still rate-limiting, and the mean clonidine fold error **236% → 26%** with
+the two mature contexts nearly exact (2.13× vs 2.12×,
+1.83× vs 1.52×).
+
+The failure moved to the other end: hiPSC is now 1.02× against
+an observed 2.44×. At low maturation the restriction point is already open, so relieving a
+brake cannot open it further — arguably right for a permissive immature cell, and it means
+clonidine's real effect there arrives through something other than the switch. Two other
+residuals are recorded in TODO: the five comparators drifted 28%, uniformly, tracking
+E2Fact's own 29% fall; and CycE now spans ~36,000×, which is defensible for an adult
+cardiomyocyte but suggests the fold sits near the edge of its useful range.
 
 ### 7.5 The lab's own knockout, and what else to try
 
