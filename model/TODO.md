@@ -62,13 +62,40 @@ a stale one is easy to spot and drop.
 The switch is **fixed** — see the Done list for what changed and what it bought. Three
 things it left behind, in order:
 
-**The hiPSC entry fold is now too low: 1.02× against an observed 2.44×.** The failure
-flipped ends. At low maturation the restriction point is already open (Rb 0.14), so
-relieving a brake cannot open it further — which is arguably right for a permissive
-immature cell, and means clonidine's real 2.44× there must arrive through something
-other than the restriction point. The abscission/PKA arm raising the *productive*
-fraction, or the autophagy arm, are the candidates. The two mature contexts are now
-nearly exact (2.13 vs 2.12, 1.83 vs 1.52).
+**The hiPSC drug response is under-predicted ~2× across every readout, and this now
+looks like a formalism ceiling rather than a missing edge.** Entry 1.02× against 2.44×,
+abscission 1.33× against a measured midbody doubling of 2.04×, division 1.29×. The
+*direction* is right everywhere; the magnitude is about half.
+
+Two hypotheses were tested and rejected:
+
+- **Autophagy ⊣ p21** (clonidine's documented mechanism is autophagy induction, and there
+  is literature on autophagic turnover of CDK inhibitors). It helps hiPSC — 1.02× → 1.49×
+  — but p21 is *higher* at high maturation (0.68 at mNCM versus 0.34 at hiPSC), so
+  relieving it helps the wrong end: mNCM blows out to 6.70×. Mean fold error 26% → 121%.
+- **The same, plus gating the drug on `!Maturation`** (motivated: Nisch, clonidine's I1
+  receptor, falls 1.277 → 1.047 with maturation at 100% detection — measured here and
+  still unused by the model). Better, 55%, but still worse than doing nothing.
+
+The reason is structural, and worth stating as a limit rather than a to-do. At hiPSC
+everything the drug could relieve is *already* near its operating maximum — the switch is
+open (Rb 0.14) and the brakes are low (p21 0.34, p27 0.02, Ccng1 0.10) — so relieving
+anything yields little. Every brake that *does* have headroom has more of it at high
+maturation. So **no re-wiring within this formalism can give a larger response at low
+maturation than at high**: gain is capped at the reaction weight, and there is nothing
+left to release.
+
+Two things follow. First, the comparison may be against the wrong observable: 2.44× is a
+Ki-67 index, and the pre-flight already established that Ki-67 carries a dwell-time
+component which a prevalence-only `Ki67` node cannot express — a drug that converts
+arrested cells into cycling ones raises the Ki-67 index without raising the entry rate.
+Notably the model does best against the one *cumulative* measurement it is judged on
+(in-vivo EdU, 1.83× against 1.52×). Second, this is a concrete argument for Tier 2, which
+has real rates and dwell times and can represent the difference.
+
+**Current configuration is the best found** — folds 1.02 / 2.13 / 1.83, mean error 26%,
+triad 3/3. Do not "improve" the hiPSC number by relieving a brake without re-checking the
+mature contexts; that trade has been measured and it loses.
 
 **The comparators drifted 28%.** All five move 27–28% between P0 and P7, uniformly,
 tracking E2Fact's own 29% fall — i.e. it is the switch working, not five bad edges. The
