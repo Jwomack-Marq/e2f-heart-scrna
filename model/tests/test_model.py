@@ -309,3 +309,53 @@ def test_the_clonidine_entry_folds_are_close_at_the_mature_contexts():
     assert rows["mncm_invitro"]["entry_fold"] == pytest.approx(2.12, rel=0.15)
     assert rows["mouse_p1_invivo"]["entry_fold"] == pytest.approx(1.52, rel=0.30)
     assert rows["hipsc_cm"]["entry_fold"] < 1.3          # the remaining miss
+
+
+def test_the_mouse_in_vivo_cycling_level_is_reproduced_unfitted():
+    """A genuine held-out validation, and a lesson about comparing observables.
+
+    Baniol's Fig 1D gives FUCCI *states*, and the naive cycling fraction (1 - mKO2+)
+    is 32.5% at P0. The model cannot reach that at any weight, which looked like a
+    2x miss. But their own Suppl 1G shows only 22.7% of the G1/S double-positives are
+    Ki67+ at P0 -- the rest have prematurely exited, which is a distinction they make
+    explicitly. Correcting with their own co-staining:
+
+        mAG+ 12.36% (all Ki67+) + 22.7% of 19.1% + mitotic 1%  =  17.7%
+
+    against a model ceiling of 17.2%. Nothing was fitted to this.
+    """
+    net = spec.load_calibrated()
+    corrected_p0 = 0.1236 + 0.191 * 0.227 + 0.010
+    r = net.reactions[net.meta["rid"]["r063"]]
+    saved, r.w = r.w, 1.0
+    try:
+        ceiling = 1 - net.ss(inputs=model.contexts(net)["mouse_p0_invivo"])["Quiescent"]
+    finally:
+        r.w = saved
+    assert ceiling == pytest.approx(corrected_p0, rel=0.15)
+    # and the naive figure is out of reach, which is the point of the correction
+    assert ceiling < 0.325
+
+
+def test_the_maturation_slope_of_entry_is_too_steep():
+    """A pinned residual. Corrected for Ki-67 as above, Baniol's P0-to-P7 fall in
+    cycling cardiomyocytes is 17.7% -> 5.5%, a factor of 3.2. The model falls ~13x.
+
+    Same root cause as the CycE over-swing: SPhase multiplies four maturation-dependent
+    factors (CycE and three brakes), and after the G1/S fix CycE travels ~36,000x, which
+    compounds into far too steep a slope. Flattening CycE would address both.
+    """
+    net = spec.load_calibrated()
+    r = net.reactions[net.meta["rid"]["r063"]]
+    saved = r.w
+    tops = {}
+    try:
+        r.w = 1.0
+        for c in ("mouse_p0_invivo", "mouse_p7_invivo"):
+            tops[c] = 1 - net.ss(inputs=model.contexts(net)[c])["Quiescent"]
+    finally:
+        r.w = saved
+    slope = tops["mouse_p0_invivo"] / tops["mouse_p7_invivo"]
+    observed = (0.1236 + 0.191 * 0.227 + 0.010) / (0.0083 + 0.079 * 0.588)
+    assert observed == pytest.approx(3.2, abs=0.3)
+    assert slope > 2 * observed, "slope has been flattened -- update this test"

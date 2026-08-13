@@ -104,9 +104,12 @@ asserts *uniformity* rather than just magnitude. The real refinement: truly flat
 under a travelling E2F activity would need their reactions to saturate, so a 29% fall in
 input gives a small fall in output. Worth doing, and it would let the bound come back down.
 
-**CycE now spans ~36,000×**, reaching zero in the adult context. Arguably correct — adult
-cardiomyocytes have no cyclin E — but numerically extreme, and it suggests the fold is
-positioned near the edge of its useful range rather than centred in it.
+**CycE spans ~36,000× and the maturation slope of entry is ~4× too steep — one problem,
+not two.** `SPhase` multiplies four maturation-dependent factors (CycE and three brakes),
+so after the switch fix CycE's enormous travel compounds into far too steep a slope.
+Measured against Baniol (see item 6): their P0→P7 fall in genuinely cycling
+cardiomyocytes is 3.2×, the model's is ~13×. Flattening CycE's range would address both,
+and is the most concrete open item on the model itself.
 
 ### 2. Widen the curated gene panel
 Only **29 of 63** model node genes are in the 2,181-gene panel. E2f2–E2f6, Rb1,
@@ -155,14 +158,32 @@ needs numpy vectorisation of the RHS or a parallel sweep before it is worth star
 
 ## Calibration and validation
 
-### 6. Fit mouse, predict human
-Currently the reverse: the model is calibrated at hiPSC-CM and asked about mouse.
-Flipping it is a stronger test, because the mouse arm has the in-vivo FUCCI
-fractions and the P0/P7/P15 trajectory to hit. Hold out every hiPSC number and
-change only the maturation coordinate plus two literature constants. Pass criteria
-in advance: predicted fate fractions inside the binomial CI, and the *significance
-structure* of the durations reproduced (division ≈ binucleation, both < polyploid)
-— a harder and more meaningful criterion than matching three means.
+### 6. Fit mouse, predict human — attempted, and it found two things
+The flip could not be completed as planned, for an instructive reason: **the mouse target
+as naively defined is unreachable at any weight**, and that turned out to be a
+comparison error rather than a model error.
+
+Baniol's Fig 1D gives FUCCI *states*, so the naive cycling fraction (1 − mKO2⁺) is 32.5%
+at P0. But their own Suppl 1G shows only **22.7%** of the G1/S double-positives are Ki67⁺
+at P0 — the rest have prematurely exited, a distinction they draw explicitly and which
+this project recorded early and then failed to apply. Correcting with their own data:
+
+    mAG⁺ 12.36% (all Ki67⁺) + 22.7% of 19.1% + mitotic 1%  =  17.7%
+
+against a model ceiling of **17.2%** — a **1.03× match, with nothing fitted to it.** That
+is the strongest unfitted validation the model has, and it was hiding behind a
+mis-specified observable. Pinned by
+`test_the_mouse_in_vivo_cycling_level_is_reproduced_unfitted`.
+
+**What remains is the slope, not the level.** Corrected the same way, P7 is 5.5% observed
+against a 1.3% ceiling — 4.2× short — so the P0→P7 fall is 3.2× measured and ~13×
+modelled. That is the CycE over-swing in item 1, measured against data for the first
+time. Pinned by `test_the_maturation_slope_of_entry_is_too_steep`.
+
+Still worth doing properly once the slope is fixed: calibrate on the corrected mouse
+level and hold out all four hiPSC fate fractions. The pass criterion stays what it was —
+predicted fractions inside the binomial CI, and the *significance structure* of the
+durations reproduced rather than three means matched.
 
 ### 7. Sensitivity on the abscission switch — half done, and reassuring
 The switch position (`r080`: n=2.0, EC50=0.090) is a fitted quantity, not an
