@@ -148,9 +148,16 @@ leaving entry untouched, and the hiPSC division share is pinned at 52.7% by
 construction. The conclusions are invariant across that range because the calibrated
 weight absorbs the change — which substantially de-risks the headline claim.
 
-Left: the range **above** 0.090 is untested (the run timed out), and an earlier probe
-showed the target becomes unreachable somewhere below EC50 = 0.16, so the upper
-boundary is the remaining gap. Also worth profiling `n`, not just EC50.
+Re-checked after the G1/S switch was fixed, since that changed E2Fact by 38× and the
+abscission arm hangs off it. The arm barely moved at the fit context — E2Fact 0.405 →
+0.406, Ect2 0.1807 → 0.1810, AbsRaw 0.1396 → 0.1402, all 1.00× — and its hiPSC-to-P1
+separation actually *improved*, 42× → 64×. So the profile is not invalidated and the
+switch still sits where it was positioned.
+
+Left: the range **above** EC50 = 0.090 is untested (that run timed out), the target
+becomes unreachable somewhere below 0.16, and `n` has not been profiled at all. Worth
+finishing, but lower priority than it looked — the arm is more robust to the core change
+than expected.
 
 ### 8. Negative controls — in place, keep it that way
 Not an open task: `test_negative_controls_do_not_move_with_maturation` already asserts
@@ -217,11 +224,7 @@ Ranked by how cleanly each could be run with assays both papers already use.
 
 ## Housekeeping
 
-### 9. Nothing is committed
-`model/` is still untracked and `.gitignore` / `README.md` are modified in the working
-tree. 13 figures, 53 tests and the calibration cache are all sitting uncommitted.
-
-### 10. The pathway map is dense in the middle columns
+### 9. The pathway map is dense in the middle columns
 93 edges in one figure is legible on screen but marginal for a slide or print. If it
 is needed at that size, the natural split is two panels — stimulus → E2F, and
 machinery → outcome — rather than dropping edges.
