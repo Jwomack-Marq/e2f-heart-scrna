@@ -29,3 +29,7 @@ model/.venv/
 
 # generated report (rebuild: python3 tools/build_report_page.py)
 model/report.html
+
+# generated lab-meeting deck (rebuild: python3 tools/build_deck.py)
+model/deck.html
+model/deck.pdf
