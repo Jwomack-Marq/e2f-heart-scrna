@@ -93,6 +93,10 @@ const PARAM_PROVENANCE = Dict{Symbol,Tuple{Provenance,String}}(
     :Ki_Ect2_E2F8  => (STRUCTURAL, "Tier 1 r071: E2Fact & !Maturation & !E2F8"),
     :kd_Ect2       => (STRUCTURAL, "Ect2 turnover"),
     :kd_AurKB      => (STRUCTURAL, "AurKB turnover"),
+    :Ki_AurKB_CDK1 => (STRUCTURAL, "half-max MPF for CPC recruitment; switch-like, so " *
+                                   "braking mitotic entry does not silently suppress " *
+                                   "cytokinesis"),
+    :n_AurKB       => (STRUCTURAL, "CPC recruitment cooperativity"),
     :kd_AurKB_CDH1 => (STRUCTURAL, "CPC destroyed at mitotic exit"),
     :kd_Anln       => (STRUCTURAL, "anillin turnover"),
     :kd_Anln_CDH1  => (STRUCTURAL, "anillin cleared at mitotic exit"),

@@ -33,7 +33,7 @@ cannot go unnoticed.
 
 ## Status: Phase 2 complete; Phase 3 partial
 
-**712 tests pass** (52 Phase 0, 139 Phase 1, 250 Phase 2, 271 Phase 3). The source repo has no test suite, so these
+**734 tests pass** (52 Phase 0, 139 Phase 1, 250 Phase 2, 293 Phase 3/3b). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
@@ -189,7 +189,8 @@ src/
   contexts.jl       the six named contexts, read from Tier 1's manifest
   provenance.jl     parameter budget: provenance registry + linter
   ensemble.jl       the population layer: lognormal heterogeneity, fate fractions
-test/runtests.jl    712 tests
+  calibrate.jl      joint calibration: loss, coordinate descent
+test/runtests.jl    734 tests
 scripts/            (Phase 3+)
 ```
 
@@ -575,43 +576,126 @@ binomial in the same `p`, so it cancels exactly. One ensemble size therefore buy
 error ratio for every fate at once. At Murganti's 570 cells, `rel = 0.1` gives 57,000 runs
 and covers the 1.40 % polyploidization and the 90.35 % quiescent fraction alike.
 
-### KNOWN FAILURE: the E2f7/E2f8 KO prediction is vacuous at present
+### Bounding the DDR -> cytokinesis coupling
 
-Run at the calibrated σ = 0.016, n = 1408 per arm:
+Two distinct problems were behind the vacuous prediction, and only one had been identified.
+
+**1. AurKB was driven linearly by MPF — a modelling error.** The Ccng1 brake lowers MPF,
+and a linear drive propagated that straight down AurKB -> Centralspindlin -> RhoA ->
+Midbody, so braking mitotic *entry* silently suppressed *cytokinesis*. The biology says
+otherwise: the CPC is recruited at mitotic entry and stays active through mitosis largely
+independently of the precise MPF level. Replaced with a Hill term, which keeps the
+property that matters and drops the one that was spurious:
+
+| MPF regime | linear | Hill (Ki 0.15, n 3) |
+|---|---|---|
+| no mitosis (0.05) | 0.05 | **0.04** — still no midbody ✓ |
+| braked but mitotic (0.21) | 0.21 | **0.73** — midbody survives ✓ |
+| unbraked P1 (0.85) | 0.85 | 0.99 |
+
+**2. A scale problem, which the first fix revealed rather than solved.** With the DDR arm
+on, the midbody peaks at **0.0440 at P0 and 0.0351 at P7** — the 1.25x separation was
+never lost, both were simply below the 0.050 abscission threshold. Scaling `ks_Ect2_E2F`
+lifts both while preserving the ratio, and **[0.70, 0.85] places the threshold between
+them**. `CALIBRATED` uses 0.75.
+
+That number is fitted to an established fact rather than a held-out target — neonatal
+mouse cardiomyocytes divide around P0-P1 and have largely stopped by P7 — and
+`ks_Ect2_E2F` was already declared FITTED, so the budget is unchanged at 6.
+
+### The KO prediction, and a cross-tier disagreement
+
+Calibrated preset, sigma = 0.016, n = 1408 per arm:
 
 | context | genotype | Q | D | B | P |
 |---|---|---|---|---|---|
-| `mouse_p0_invivo` | WT | 0.000 | **0.000** | 1.000 | 0.000 |
-| `mouse_p0_invivo` | KO | 0.000 | **0.000** | 0.956 | 0.044 |
-| `mouse_p7_invivo` | WT | 0.000 | **0.000** | 1.000 | 0.000 |
-| `mouse_p7_invivo` | KO | 0.000 | **0.000** | 0.956 | 0.044 |
+| `mouse_p0_invivo` | WT | 0.000 | 0.692 | 0.308 | 0.000 |
+| `mouse_p0_invivo` | KO | 0.000 | 0.945 | 0.011 | 0.044 |
+| `mouse_p7_invivo` | WT | 0.000 | 0.204 | 0.796 | 0.000 |
+| `mouse_p7_invivo` | KO | 0.000 | 0.749 | 0.207 | 0.044 |
 
-ΔDivision = 0.0000 at **both** ages, against Tier 1's +0.107 at P0 versus +0.005 at P7.
-The model cannot express the KO's pro-division effect because **division does not occur
-anywhere in the mouse contexts** once the DDR arm is on.
+    dDivision  P0 = +0.253 +/- 0.014
+    dDivision  P7 = +0.545 +/- 0.016
 
-The cause is an interaction found in step 5 and not yet resolved: the Ccng1 brake lowers
-MPF, which lowers AurKB (`ks_AurKB_CDK1 * CCNB_CDK1`), which lowers centralspindlin, which
-lowers RhoA and the midbody. So the DDR arm suppresses the *cytokinesis* arm as a side
-effect, and at the current placeholder values it suppresses it everywhere. The knockdown
-does show a real effect — it converts 4.4 % of binucleations to polyploidizations — but
-that is not the observable Tier 1 predicts and it is identical at both ages, so it carries
-no information about the P0/P7 contrast.
+**Tier 2 predicts the effect is 2x LARGER at P7. Tier 1 predicts 22x larger at P0.** The
+two tiers disagree on the sign of the age-dependence, and the disagreement has a clean
+mechanistic reading: in Tier 2 the P0 wild-type already divides 69 % of the time, so there
+is little headroom, while P7 sits at 20 % and has room for a 55 pp conversion. It is a
+ceiling effect. Tier 1 has no ceiling because its fates are a product of gate activities
+rather than a partition of individual cells.
 
-**This is a consequence of the fitted parameters still being at placeholder values.** The
-budget is declared and the machinery is built, but the five model parameters have not yet
-been estimated against the target set. Until they are, the KO prediction is not a
-prediction.
+Which is right is not settled here, and the model is not yet in a position to settle it —
+see below. It is recorded as a genuine cross-tier conflict rather than reconciled by
+tuning.
 
-### What Phase 3 still needs
+### Two limitations that block the comparison with the lab's own data
 
-1. **Actually calibrate the five fitted parameters** against the disjoint target set
-   (durations + FUCCI fractions), holding out the fate fractions. Everything above is
-   machinery plus the σ calibration; the estimation itself is not done.
-2. Re-run the KO prediction afterwards — it only becomes meaningful once division occurs
-   at P0.
-3. Resolve or bound the DDR→cytokinesis interaction, which may need the AurKB drive to
-   come from something other than MPF level.
+- **There is no quiescent population.** Tier 2 gives Q = 0.000 at both P0 and P7, whereas
+  real P7 cardiomyocytes are overwhelmingly non-cycling. `ks_E2F6` — the exit enforcer,
+  and a declared FITTED parameter — is **off** in `CALIBRATED`. Until it is calibrated
+  against the corrected cycling fractions (P0 17.7 %, P7 5.5 %), the model cannot produce
+  the observable the knockout data actually measures, which is *cycling* fraction
+  (KO 31.6 % vs WT 25.6 % at P7) and not division fraction. dCycling is identically 0 here
+  for exactly that reason.
+- **The contrast is a threshold-placement result.** The calibration window is only 1.2x
+  wide because the P0/P7 midbody separation is only 1.25x. The knockdown delta remains a
+  prediction, but its magnitude is conditioned on where the wild-type sits relative to a
+  fitted threshold. Profiling the abscission threshold — Tier 1 did this for its own
+  `r080` switch and called it "the model's largest single sensitivity" — is now a
+  prerequisite for believing these numbers, not an optional extra.
+
+## The joint calibration, and what it found
+
+Sequential hand-placement does not converge here: twice an upstream change invalidated a
+downstream estimate (the CPC fix stale'd `maturation_gain`, which stale'd `ks_Ect2_E2F`).
+`src/calibrate.jl` replaces it with coordinate descent over one loss, fitted against a set
+**disjoint** from Tier 1's four fate fractions — the corrected in-vivo cycling fractions
+(P0 17.7 %, P7 5.5 %), the FUCCI-timed S/G2/M duration (15.1 h), and the regeneration
+window as a one-sided hinge.
+
+It reduced the loss from **318.4 to 10.3** — and the fit is still bad:
+
+| target | model | wanted |
+|---|---|---|
+| cycling P0 | 0.555 | 0.177 |
+| cycling P7 | 0.000 | 0.055 |
+| S/G2/M P0 | 45.0 h | 15.1 h |
+| division P0 | 0.010 | contrast lost |
+
+Three of five parameters pegged at their grid maxima. **Widening the grids will not fix
+it.** The loss is dominated by the cycling (5.56) and duration (3.93) terms, and they are
+in direct conflict: the only route to quiescence in this model is crushing the oscillator
+with E2F6 repression, which lengthens the cycle to 45 h and destroys both the duration
+target and the division contrast at the same time.
+
+### The structural gap this exposes
+
+**E2F6-mediated slowing is the wrong mechanism for quiescence.** Real G0 is cell-cycle
+*exit* — a distinct absorbing state. This model has only "oscillating" and "arrested by
+having its oscillator crushed", so asking it for 82 % non-cycling at P0 necessarily wrecks
+the cells still cycling. A genuine G0 needs an absorbing exit — a bistable Rb/E2F switch
+that latches off — which is new structure, not a parameter.
+
+Tier 1 gets quiescence for free precisely because it encodes it as a gate
+(`!SPhase => Quiescent`) rather than deriving it from an oscillator.
+
+This is the calibration's most valuable output, and sequential placement would never have
+surfaced it: each parameter looked defensible on its own.
+
+### The KO prediction at the recalibrated preset
+
+| context | genotype | Q | D | B | P |
+|---|---|---|---|---|---|
+| `mouse_p0_invivo` | WT | 0.000 | 0.853 | 0.147 | 0.000 |
+| `mouse_p0_invivo` | KO | 0.000 | 0.953 | 0.003 | 0.044 |
+| `mouse_p7_invivo` | WT | 0.000 | 0.216 | 0.784 | 0.000 |
+| `mouse_p7_invivo` | KO | 0.000 | 0.758 | 0.198 | 0.044 |
+
+    dDivision  P0 = +0.100 +/- 0.011      (Tier 1: +0.107)
+    dDivision  P7 = +0.542 +/- 0.016      (Tier 1: +0.005)
+
+P0 now lands almost exactly on Tier 1's value. **The entire cross-tier disagreement is at
+P7**, and it is the ceiling effect: P0's wild-type already divides 85 % of the time.
 
 ## Next: Phase 4
 

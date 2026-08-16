@@ -472,8 +472,8 @@ end
 
 @testset "extended vectors keep the inherited layout" begin
     @test length(tier2_state()) == 63 + length(TIER2_SPECIES)
-    # Tripwire: bumps by design as each step lands. Currently 41 Tier-2 params.
-    @test length(tier2_params()) == 218 + 41
+    # Tripwire: bumps by design as each step lands. Currently 43 Tier-2 params.
+    @test length(tier2_params()) == 218 + 43
     @test tier2_state_names()[1:63] == state_names()
     # New components MUST come last: diff_eqns.jl destructures positionally.
     @test tier2_state_names()[64:end] == collect(TIER2_SPECIES)
@@ -1226,6 +1226,101 @@ end
     @test r.failed / r.n < 0.05               # and failures stay rare
     # Fractions are over SCORED cells, so a failure cannot masquerade as a fate.
     @test sum(values(r.fractions)) ≈ 1.0
+end
+
+end # testset
+
+
+# ---------------------------------------------------------------------------
+# Phase 3b: bounding the DDR -> cytokinesis coupling, and the calibrated preset.
+# ---------------------------------------------------------------------------
+
+@testset "CmTier2 — Phase 3b" begin
+
+@testset "CPC recruitment is switch-like, not proportional to MPF" begin
+    # Driving AurKB linearly in MPF was a modelling error: the Ccng1 brake lowers MPF, and
+    # a linear drive propagated that down AurKB -> Centralspindlin -> RhoA -> Midbody, so
+    # braking mitotic ENTRY silently suppressed CYTOKINESIS and the KO prediction went
+    # vacuous. The Hill form keeps "no mitosis, no midbody" and drops the rest.
+    p = tier2_params()
+    hill(c) = c^p.n_AurKB / (p.Ki_AurKB_CDK1^p.n_AurKB + c^p.n_AurKB)
+    @test hill(0.05) < 0.10        # no mitosis -> no CPC, preserved
+    @test hill(0.21) > 0.60        # braked but mitotic -> CPC survives (was 0.21 linear)
+    @test hill(0.85) > 0.95        # unbraked -> saturated
+    @test hill(0.21) > 3 * 0.21    # strictly better than the linear drive it replaced
+    @test issorted([hill(c) for c in (0.05, 0.21, 0.52, 0.85)])
+    @test p.Ki_AurKB_CDK1 < 0.5    # well below the unbraked MPF peak
+
+    # The source must contain no linear MPF drive on AurKB any more.
+    src = read(joinpath(@__DIR__, "..", "src", "tier2_model.jl"), String)
+    code = filter(l -> !startswith(strip(l), "#"), split(src, '\n'))
+    aurkb = filter(l -> occursin("d.AurKB", l), code)
+    @test length(aurkb) == 1
+    @test occursin("ks_AurKB_CDK1 * cpc", aurkb[1])
+end
+
+@testset "the calibrated preset recovers the P0/P7 division contrast" begin
+    # The separation was never lost -- midbody 0.0440 at P0 vs 0.0351 at P7 with the DDR
+    # arm on, a 1.25x ratio -- but both sat below the 0.050 threshold, so the model gave
+    # binucleation at both ages and the knockdown prediction carried no information.
+    W3b = (1900.0, 2400.0)
+    function at(ctx; over = NamedTuple())
+        en = merge(merge(CALIBRATED, context_params(ctx)), over)
+        sol, log = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en, tspan = (0.0, 2600.0),
+                               record_events = true, cytokinesis = true)
+        cyc = classify_cycles(log; window = W3b, cytokinesis = true)
+        w = findall(x -> W3b[1] <= x <= W3b[2], sol.t)
+        (D = count(c -> c.fate === :Division, cyc),
+         B = count(c -> c.fate === :Binucleation, cyc),
+         mb = maximum(sol[species_index("Midbody"), :][w]))
+    end
+    p0, p7 = at("mouse_p0_invivo"), at("mouse_p7_invivo")
+    @test p0.D > 0 && p0.B == 0          # P0 divides
+    @test p7.D == 0 && p7.B > 0          # P7 does not
+    @test p0.mb > EventThresholds().abscission > p7.mb
+    @test 1.1 < p0.mb / p7.mb < 1.6      # the separation, ~1.33x
+
+    # CALIBRATED differs from the module presets in exactly one parameter.
+    base = merge(merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON), MATURATION_ON), DDR_ON)
+    diffs = [k for k in keys(CALIBRATED)
+             if !haskey(base, k) || getproperty(base, k) != getproperty(CALIBRATED, k)]
+    @test diffs == [:ks_Ect2_E2F]
+    @test 0.85 <= CALIBRATED.ks_Ect2_E2F <= 1.15    # inside the identified window
+end
+
+@testset "KNOWN GAP: no quiescent population, so cycling cannot be scored" begin
+    # Recorded because it is what blocks comparison with the lab's own measurement. The
+    # knockout data reports CYCLING fraction (P7: KO 31.6 % vs WT 25.6 %), not division
+    # fraction, and Tier 2 currently has no quiescent cells at either age -- ks_E2F6, the
+    # exit enforcer and a declared FITTED parameter, is off in CALIBRATED.
+    @test !haskey(CALIBRATED, :ks_E2F6)
+    r = run_ensemble(n = 96, sigma = 0.016,
+                     enable = merge(CALIBRATED, context_params("mouse_p7_invivo")))
+    @test r.fractions[:Quiescent] == 0.0     # the gap, asserted so it cannot vanish quietly
+    # ks_E2F6 is the knob that would close it, and it is already in the budget.
+    @test :ks_E2F6 in fitted_params()
+end
+
+@testset "the P0/P7 contrast is threshold placement, not robustness" begin
+    # The calibration window is only ~1.2x wide because the underlying separation is only
+    # 1.25x, so the contrast is sensitive to where the abscission threshold sits. Stated
+    # as a test rather than left for a reviewer to find.
+    W3b = (1900.0, 2400.0)
+    mb(ctx, k) = begin
+        en = merge(merge(CALIBRATED, context_params(ctx)), (ks_Ect2_E2F = k,))
+        sol = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en, tspan = (0.0, 2600.0))
+        w = findall(x -> W3b[1] <= x <= W3b[2], sol.t)
+        maximum(sol[species_index("Midbody"), :][w])
+    end
+    thr = EventThresholds().abscission
+    # Below the window both ages fail to divide; above it, both divide.
+    @test mb("mouse_p0_invivo", 0.60) < thr
+    @test mb("mouse_p7_invivo", 1.60) > thr
+    # Scaling Ect2 preserves the ratio rather than opening the gap, which is why the
+    # window is narrow and cannot be widened by this parameter alone.
+    r_low  = mb("mouse_p0_invivo", 0.60) / mb("mouse_p7_invivo", 0.60)
+    r_high = mb("mouse_p0_invivo", 1.60) / mb("mouse_p7_invivo", 1.60)
+    @test abs(r_low - r_high) < 0.15
 end
 
 end # testset

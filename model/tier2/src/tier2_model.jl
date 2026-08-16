@@ -65,7 +65,7 @@ const E2F_SPLIT_ON = (ks_E2F7_E2F = 0.20, ks_E2F8_E2F = 0.20)
 """
 Parameter preset switching on the maturation axis (step 4) — the **fate** knob.
 
-Only the Ect2 coupling. `maturation_gain = 3.0` puts the abscission arm's closure inside
+Only the Ect2 coupling. `maturation_gain = 5.0` puts the abscission arm's closure inside
 the observed maturation range rather than outside it; it is a provisional placeholder,
 not a fit, and it is the one free scale the axis costs (see `MATURATION_SLOPE_*`).
 
@@ -76,7 +76,7 @@ the cycling fractions — so folding them into one preset would tie two independ
 targets together. Measured with both on at once: everything binucleates and the period
 stretches to 100 h, because the knobs fight.
 """
-const MATURATION_ON = (maturation_gain = 3.0,)
+const MATURATION_ON = (maturation_gain = 5.0,)
 
 """
 Parameter preset for E2F6 as the cell-cycle **exit** enforcer (Tier 1's label for it).
@@ -101,6 +101,42 @@ a new term instead.
 const DDR_ON = (ks_ATM_ROS = 0.40, ks_Ccng1_p53 = 0.80,
                 kf_CCNB_Ccng1 = 200.0, ks_p21 = 0.05,
                 fix_p53_massbalance = 1.0)
+
+"""
+Every module on, with the fitted parameters at their estimated values.
+
+The only difference from `merge(E2F_SPLIT_ON, CYTOKINESIS_ON, MATURATION_ON, DDR_ON)` is
+`ks_Ect2_E2F`, raised 0.60 -> 1.00.
+
+## What that number was fitted to, and what it does not buy
+
+It is fitted to an established fact rather than to a held-out target: neonatal mouse
+cardiomyocytes divide around P0-P1 and have largely stopped by P7. With the DDR arm on and
+`maturation_gain = 5.0`, the midbody peaks at 0.0579 at P0 and 0.0435 at P7 — a 1.33x
+separation straddling the 0.050 abscission threshold. Before this was set, both sat below
+it, the model produced binucleation at both ages, and the E2f7/E2f8 knockdown prediction
+was vacuous. `ks_Ect2_E2F` in roughly [0.85, 1.15] places the threshold between them; 1.00
+is the middle.
+
+**The window is narrow — a ~1.3x range — because the P0/P7 midbody separation is only
+1.33x.** That is the same exposure recorded for the abscission threshold in step 3, and it
+means the P0/P7 contrast is a threshold-placement result, not a robust one. Two
+consequences worth stating rather than discovering later:
+
+  * the knockdown *delta* remains a prediction, but its magnitude is conditioned on where
+    the WT sits relative to the threshold, and that position is fitted;
+  * profiling the abscission threshold — Tier 1 did this for its own `r080` switch and
+    called it "the model's largest single sensitivity" — is now a prerequisite for
+    believing any number that comes out of this preset, not an optional extra.
+"""
+const CALIBRATED = (ks_E2F7_E2F = 0.20, ks_E2F8_E2F = 0.20,
+                    ks_Ect2_E2F = 1.00, ks_AurKB_CDK1 = 1.20,
+                    ks_Anln_E2F = 0.80, ks_CSPG = 1.00,
+                    kf_RhoA = 6.00, kf_Midbody = 4.00,
+                    maturation_gain = 5.0,
+                    ks_ATM_ROS = 0.40, ks_Ccng1_p53 = 0.80,
+                    kf_CCNB_Ccng1 = 200.0, ks_p21 = 0.05,
+                    fix_p53_massbalance = 1.0)
 
 """
     tier2_state(; kwargs...) -> ComponentVector
@@ -179,6 +215,11 @@ function tier2_params(; kwargs...)
         Ki_Ect2_E2F8  = 0.15,  # E2F8 represses Ect2 (Tier 1 r071: E2Fact & !Mat & !E2F8)
         kd_Ect2       = 0.25,
         kd_AurKB      = 0.20,
+        # CPC recruitment is switch-like in MPF, not proportional to it -- see the
+        # AurKB equation. Ki is well below the unbraked MPF peak (~0.85) so a cell that
+        # enters mitosis at all recruits a near-maximal CPC.
+        Ki_AurKB_CDK1 = 0.15,
+        n_AurKB       = 3.0,
         kd_AurKB_CDH1 = 3.00,  # CPC destroyed at mitotic exit
         kd_Anln       = 0.20,
         kd_Anln_CDH1  = 2.00,
@@ -403,7 +444,22 @@ function tier2DiffEq!(d, u, p, t)
               - p.kd_Ect2 * Ect2) * α
 
     # AurKB: chromosomal passenger complex. Mitotic, destroyed by APC/C-Cdh1 at exit.
-    d.AurKB = (p.ks_AurKB_CDK1 * cdk1
+    #
+    # Recruitment is SWITCH-LIKE in MPF, not proportional to it. Driving it linearly was
+    # a modelling error with a measurable consequence: the Ccng1 brake lowers MPF, so a
+    # linear AurKB drive propagated that reduction straight down
+    # AurKB -> Centralspindlin -> RhoA -> Midbody and the DDR arm silently suppressed
+    # CYTOKINESIS as a side effect of braking mitotic ENTRY. Division then became
+    # unreachable in every mouse context and the E2f7/E2f8 knockdown prediction went
+    # vacuous (dDivision = 0.0000 at both P0 and P7).
+    #
+    # The biology says otherwise: the CPC is recruited to centromeres at mitotic entry
+    # and stays active through mitosis largely independently of the precise MPF level. A
+    # Hill term keeps the property that matters -- no mitosis, no CPC, hence no midbody
+    # (factor 0.04 at MPF 0.05) -- while decoupling a cell that DOES enter mitosis with
+    # reduced MPF from losing its midbody (0.73 at MPF 0.21, against 0.21 linear).
+    cpc = cdk1^p.n_AurKB / (p.Ki_AurKB_CDK1^p.n_AurKB + cdk1^p.n_AurKB)
+    d.AurKB = (p.ks_AurKB_CDK1 * cpc
                - p.kd_AurKB * AurKB
                - p.kd_AurKB_CDH1 * AurKB * u.APCC_CDH1) * α
 

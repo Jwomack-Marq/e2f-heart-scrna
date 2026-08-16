@@ -47,7 +47,7 @@ export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary
 export FATES_PHASE1, FATES
 # tier 2 model
 export tier2_state, tier2_state_names, tier2_params, tier2DiffEq!, solve_tier2
-export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON, E2F_SPLIT_ON, MATURATION_ON, E2F6_EXIT_ON, DDR_ON
+export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON, E2F_SPLIT_ON, MATURATION_ON, E2F6_EXIT_ON, DDR_ON, CALIBRATED
 export maturation_factors, MATURATION_SLOPE_ECT2, MATURATION_SLOPE_E2F6
 # contexts (shared with Tier 1)
 export contexts, maturation, context_names, context_params, input_value, CMFATE_MANIFEST
@@ -58,6 +58,8 @@ export FITTED_OBSERVATION_PARAMS
 # ensemble
 export run_ensemble, calibrate_sigma, heterogeneous_params, required_n
 export MEASURED_DURATION_CV, MAXITERS_PER_CELL
+# calibration
+export calibration_loss, calibrate_joint, DEFAULT_GRIDS, TARGET_CYCLING, TARGET_SG2M_P0
 export FITTED_BUDGET, FITTED_CEILING
 
 # ---------------------------------------------------------------------------
@@ -258,5 +260,6 @@ include("tier2_model.jl")
 include("contexts.jl")
 include("provenance.jl")
 include("ensemble.jl")
+include("calibrate.jl")
 
 end # module
