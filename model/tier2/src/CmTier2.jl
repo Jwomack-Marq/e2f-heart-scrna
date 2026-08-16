@@ -41,10 +41,11 @@ export FUCCI_THRESHOLD, PUBLISHED_FUCCI_THRESHOLD
 # events
 export EventThresholds, EventLog, solve_with_events, landmark_callbacks, trim
 # fates
-export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary, FATES_PHASE1
+export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary
+export FATES_PHASE1, FATES
 # tier 2 model
 export tier2_state, tier2_state_names, tier2_params, tier2DiffEq!, solve_tier2
-export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS
+export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON
 
 # ---------------------------------------------------------------------------
 # The inherited core, verbatim.

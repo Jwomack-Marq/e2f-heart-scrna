@@ -31,10 +31,30 @@ while these are zero, so they can carry biologically motivated defaults without
 affecting the reduction.
 """
 const TIER2_ENABLE_PARAMS = (:w_CDT1_E2F, :w_Geminin_E2F, :kd_CDT1_CDK2,
-                             :ks_E2F7_E2F, :ks_E2F8_E2F, :ks_E2F6)
+                             :ks_E2F7_E2F, :ks_E2F8_E2F, :ks_E2F6,
+                             :ks_Ect2_E2F, :ks_AurKB_CDK1, :ks_Anln_E2F, :ks_CSPG,
+                             :kf_RhoA, :kf_Midbody)
 
-"""New species added by Tier 2, appended after the 63 inherited states."""
-const TIER2_SPECIES = ("E2F6", "E2F7", "E2F8")
+"""
+New species added by Tier 2, appended after the 63 inherited states.
+
+Order is load-bearing — the inherited RHS destructures positionally, so these must come
+last and must never be reordered once trajectories are pinned by test.
+"""
+const TIER2_SPECIES = ("E2F6", "E2F7", "E2F8",                       # step 2
+                       "Ect2", "RhoA", "Centralspindlin",            # step 3
+                       "AurKB", "Anillin", "Midbody")
+
+"""
+Parameter preset that switches the cytokinesis arm on.
+
+Provided as a named constant rather than left to each call site so that "the arm is on"
+means one thing everywhere. Requires the E2F split to be on as well — Ect2 is E2F-driven
+and E2F8-repressed, so with `ks_E2F8_E2F = 0` the repression arm of it is inert.
+"""
+const CYTOKINESIS_ON = (ks_Ect2_E2F = 0.60, ks_AurKB_CDK1 = 1.20,
+                        ks_Anln_E2F = 0.80, ks_CSPG = 1.00,
+                        kf_RhoA = 6.00, kf_Midbody = 4.00)
 
 """
     tier2_state(; kwargs...) -> ComponentVector
@@ -46,7 +66,9 @@ new components must come last.
 """
 function tier2_state(; kwargs...)
     base = NamedTuple(state())
-    added = (E2F6 = 0.0, E2F7 = 0.0, E2F8 = 0.0)
+    added = (E2F6 = 0.0, E2F7 = 0.0, E2F8 = 0.0,
+             Ect2 = 0.0, RhoA = 0.0, Centralspindlin = 0.0,
+             AurKB = 0.0, Anillin = 0.0, Midbody = 0.0)
     return ComponentVector{Float64}(merge(merge(base, added), kwargs))
 end
 
@@ -93,6 +115,28 @@ function tier2_params(; kwargs...)
         kd_E2F8_CCNA  = 2.00,    # CycA-CDK2 clears E2F8 -> G1/S restriction
         Ki_E2F78      = 0.10,    # repression constant for the E2F7/E2F8 pool
         Ki_E2F6       = 0.20,    # E2F6 represses more weakly
+
+        # --- step 3: the cytokinesis arm. Enable switches first. ---
+        ks_Ect2_E2F   = 0.0,   # Ect2 transcription, E2F-driven
+        ks_AurKB_CDK1 = 0.0,   # AurKB (CPC), mitotic
+        ks_Anln_E2F   = 0.0,   # anillin transcription
+        ks_CSPG       = 0.0,   # centralspindlin bundling
+        kf_RhoA       = 0.0,   # Ect2 GEF activity on RhoA
+        kf_Midbody    = 0.0,   # furrow -> midbody
+
+        # structural constants, inert while the switches above are zero
+        Ki_Ect2_E2F8  = 0.15,  # E2F8 represses Ect2 (Tier 1 r071: E2Fact & !Mat & !E2F8)
+        kd_Ect2       = 0.25,
+        kd_AurKB      = 0.20,
+        kd_AurKB_CDH1 = 3.00,  # CPC destroyed at mitotic exit
+        kd_Anln       = 0.20,
+        kd_Anln_CDH1  = 2.00,
+        kd_CSPG       = 0.80,
+        Ki_CSPG_CDK1  = 0.05,  # CDK1 phosphorylation blocks centralspindlin bundling
+        Ki_RhoA_CDK1  = 0.05,  # and blocks Ect2 GEF activity until anaphase
+        kr_RhoA       = 2.50,  # RhoGAP
+        RhoA_tot      = 1.00,  # conserved RhoA pool
+        kr_Midbody    = 0.60,
     )
     return ComponentVector{Float64}(merge(merge(base, added), kwargs))
 end
@@ -194,6 +238,71 @@ function tier2DiffEq!(d, u, p, t)
         d.CDT1 -= p.kd_CDT1_CDK2 * u.CDT1 * (u.CCNE_CDK2 + u.CCNA_CDK2) * α
     end
 
+    # ------------------------------------------------------------------
+    # 6. The cytokinesis arm — Tier 1's central claim, made mechanistic.
+    #
+    #     Ect2 -> RhoA -> Midbody          (RhoA OBLIGATORY)
+    #             Anillin ---^
+    #     AurKB -> Centralspindlin --^
+    #
+    # ## RhoA is obligatory by construction, not by parameter choice
+    #
+    # `d.Midbody` has exactly ONE production term and RhoA is a factor in it, so no
+    # setting of any parameter can make a midbody without RhoA. Tier 1 hit the opposite
+    # arrangement four separate times; the worst instance OR'd a second
+    # (Centralspindlin & AurKB) route onto the same node, which bypassed the Ect2/RhoA
+    # arm entirely and made it *structurally impossible* for Ect2 to be rate-limiting —
+    # the model could not express its own central claim. Removing it widened the arm's
+    # hiPSC-to-P1 span from 1.6x to 42x. Centralspindlin and AurKB therefore act
+    # UPSTREAM, through RhoA, never in parallel with it.
+    #
+    # ## Timing: why the arm fires after anaphase and not before
+    #
+    # Ect2's GEF activity and centralspindlin bundling are both blocked by CDK1
+    # phosphorylation, so the arm is held off until MPF is destroyed. That is what makes
+    # the midbody a late-mitotic structure here rather than something that accumulates
+    # through G2, and it is why `Ki_*_CDK1` are small.
+    #
+    # ## No back-coupling into the core oscillator, and that is a stated limitation
+    #
+    # The arm reads the cycle but does not drive it: a cell that fails abscission keeps
+    # the same molecular oscillation and simply ends up binucleate. That keeps the
+    # reduction property trivially exact, but it means ploidy does not feed back on the
+    # cycle. Real polyploid cardiomyocytes cycle differently, so this is a Phase 4
+    # question, not a permanent claim.
+    Ect2, RhoA, CSPG = u.Ect2, u.RhoA, u.Centralspindlin
+    AurKB, Anillin, Midbody = u.AurKB, u.Anillin, u.Midbody
+    cdk1 = u.CCNB_CDK1
+
+    # Ect2: E2F-driven, repressed by E2F8. Tier 1's r071 is `E2Fact & !Maturation &
+    # !E2F8 => Ect2`; the !Maturation arm arrives in step 4. This is where the E2F split
+    # earns its keep — the repressor it needs already exists.
+    d.Ect2 = (p.ks_Ect2_E2F * E2F * rep / (1 + E2F8 / p.Ki_Ect2_E2F8)
+              - p.kd_Ect2 * Ect2) * α
+
+    # AurKB: chromosomal passenger complex. Mitotic, destroyed by APC/C-Cdh1 at exit.
+    d.AurKB = (p.ks_AurKB_CDK1 * cdk1
+               - p.kd_AurKB * AurKB
+               - p.kd_AurKB_CDH1 * AurKB * u.APCC_CDH1) * α
+
+    # Centralspindlin: bundled by AurKB, blocked by CDK1 until anaphase.
+    d.Centralspindlin = (p.ks_CSPG * AurKB / (1 + cdk1 / p.Ki_CSPG_CDK1)
+                         - p.kd_CSPG * CSPG) * α
+
+    # Anillin: furrow scaffold, E2F-driven, cleared at mitotic exit.
+    d.Anillin = (p.ks_Anln_E2F * E2F * rep
+                 - p.kd_Anln * Anillin
+                 - p.kd_Anln_CDH1 * Anillin * u.APCC_CDH1) * α
+
+    # RhoA-GTP: activated by Ect2 at the central spindle once CDK1 has fallen.
+    # Written against a conserved pool so activation saturates.
+    d.RhoA = (p.kf_RhoA * Ect2 * CSPG / (1 + cdk1 / p.Ki_RhoA_CDK1)
+              * (p.RhoA_tot - RhoA)
+              - p.kr_RhoA * RhoA) * α
+
+    # Midbody. One production term; RhoA and anillin both required.
+    d.Midbody = (p.kf_Midbody * RhoA * Anillin - p.kr_Midbody * Midbody) * α
+
     return nothing
 end
 
@@ -213,6 +322,7 @@ function solve_tier2(; alpha::Real = PUBLISHED_ALPHA,
                        con_VOL::Real = 0.0, con_ABE::Real = 0.0,
                        record_events::Bool = false,
                        thresholds::EventThresholds = EventThresholds(),
+                       cytokinesis::Bool = false,
                        kwargs...)
     u0 = tier2_state()
     p = tier2_params(; enable...)
@@ -223,7 +333,8 @@ function solve_tier2(; alpha::Real = PUBLISHED_ALPHA,
     if record_events
         log = EventLog()
         sol = solve(prob, AutoTsit5(Rosenbrock23());
-                    callback = landmark_callbacks(log, thresholds), kwargs...)
+                    callback = landmark_callbacks(log, thresholds;
+                                                  cytokinesis = cytokinesis), kwargs...)
         return sol, log
     end
     return solve(prob, AutoTsit5(Rosenbrock23()); kwargs...)

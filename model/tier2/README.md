@@ -10,6 +10,7 @@ in [`Cell_Cycle_Model`](https://github.com/Jwomack7512-bio/Cell_Cycle_Model) (MI
 | Nodes | 55 nodes, 77 reactions | 63 species, 218 parameters |
 | Time | `tau` is a relaxation constant | real time |
 | Fates | product of three steady-state gate activities | emergent from one cell's trajectory |
+| Species | 55 nodes | 63 inherited + 9 Tier-2 = 72 |
 
 Tier 1 cannot express absolute phase durations, duration *distributions*, ploidy and cell
 counting, cumulative-EdU versus instantaneous Ki-67, or FUCCI trace shape. Those five are
@@ -24,14 +25,14 @@ highest-value thing item 3 asks to *add* — `CDT1`, `Geminin`, `Geminin_CDT1` a
 observables, which gg2009 lacks — along with `LMNA/LMNAp` for envelope breakdown, `PTTG1`
 for anaphase, and `p21`.
 
-Added in Phase 2: the E2F sub-family split (`E2F6`, `E2F7`, `E2F8`). Still to add: the
-Ect2/RhoA/Centralspindlin/AurKB/Anillin/Midbody cytokinesis arm, the maturation axis `M`,
-`Ccng1`, `p27`. The test suite asserts the absent ones are absent, so a half-landed
-module cannot go unnoticed.
+Added in Phase 2: the E2F sub-family split (`E2F6`, `E2F7`, `E2F8`) and the cytokinesis
+arm (`Ect2`, `RhoA`, `Centralspindlin`, `AurKB`, `Anillin`, `Midbody`). Still to add: the
+maturation axis `M`, `Ccng1`, `p27`. The test suite asserts the absent ones are absent,
+so a half-landed module cannot go unnoticed.
 
-## Status: Phase 2 steps 1–2 complete
+## Status: Phase 2 steps 1–3 complete
 
-**241 tests pass** (52 Phase 0, 139 Phase 1, 50 Phase 2). The source repo has no test suite, so these
+**332 tests pass** (52 Phase 0, 139 Phase 1, 68 Phase 2 steps 1–2, 73 step 3). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
@@ -183,8 +184,8 @@ src/
   observables.jl    FUCCI states and fractions, total pools, phase durations
   events.jl         EventThresholds, EventLog, root-found cell-cycle landmarks
   fates.jl          Cycle, classification, nuclei/ploidy/cell bookkeeping
-  tier2_model.jl    extended state/params/RHS: E2F split, licensing couplings
-test/runtests.jl    241 tests: the Phase 0, 1 and 2 gates
+  tier2_model.jl    extended state/params/RHS: E2F split, cytokinesis arm
+test/runtests.jl    332 tests: the Phase 0, 1 and 2 gates
 scripts/            (Phase 3+)
 ```
 
@@ -306,9 +307,75 @@ A tension to carry into Phase 3: strong enough repression to reach Baniol's corr
 magnitudes roughly doubles the cycle period. Repression strength is therefore a Phase 3
 calibration target, not something to pick by eye now — the enable parameters stay at zero.
 
-## Next: Phase 2 steps 3–5
+### Step 3: the cytokinesis arm
 
-Steps 1 and 2 are done (step 1 rejected, step 2 wired and inert by default). Remaining:
+Six new species, all absent from the inherited model:
+
+```
+                 Ect2 ──┐
+AurKB ── Centralspindlin┴─→ RhoA ──┐
+                                   ├─→ Midbody ──→ abscission
+                        Anillin ───┘
+```
+
+**RhoA is obligatory by construction, not by parameter choice.** `d.Midbody` has exactly
+one production term and RhoA is a factor in it, so no setting of any parameter can make a
+midbody without RhoA — asserted by a test that greps the source and counts the term.
+Tier 1 hit the opposite arrangement four separate times; the worst OR'd a second
+`(Centralspindlin & AurKB)` route onto the same node, which bypassed the Ect2/RhoA arm
+entirely and made it *structurally impossible* for Ect2 to be rate-limiting. Removing it
+widened the arm's hiPSC-to-P1 span from 1.6× to 42×. Here Centralspindlin and AurKB act
+**upstream, through RhoA**, never in parallel with it.
+
+Timing comes from CDK1: Ect2's GEF activity and centralspindlin bundling are both blocked
+by CDK1 phosphorylation, so the arm is held off until MPF is destroyed. That is what makes
+the midbody a late-mitotic structure rather than something accumulating through G2.
+
+Ect2 is E2F-driven and E2F8-repressed — Tier 1's `r071` is `E2Fact & !Maturation & !E2F8`,
+with the `!Maturation` arm arriving in step 4. This is where step 2 earns its keep: the
+repressor Ect2 needs already exists.
+
+#### Ect2 is rate-limiting, and only for division
+
+Tier 1's central claim, now mechanistic. Knocking Ect2 down converts **every** division to
+binucleation while leaving S-phase entry and mitotic entry completely untouched — a model
+where Ect2 knockdown also reduced entry would be describing general toxicity, not a
+cytokinesis-specific block:
+
+| condition | S-entries | mitoses | Division | Binucleation | midbody max |
+|---|---|---|---|---|---|
+| WT (arm on) | 7 | 7 | **6** | 0 | 0.0868 |
+| Ect2 × 0.5 | 7 | 7 | 0 | **6** | 0.0472 |
+| Ect2 × 0.1 | 7 | 7 | 0 | **6** | 0.0101 |
+| Ect2 × 0 | 7 | 7 | 0 | **6** | 0.0000 |
+| RhoA KD | 7 | 7 | 0 | **6** | 0.0000 |
+| Anillin KD | 7 | 7 | 0 | **6** | 0.0000 |
+| AurKB KD | 7 | 7 | 0 | **6** | 0.0000 |
+
+The midbody scales smoothly with Ect2 (0.0868 → 0.0472 → 0.0293 → 0.0101 → 0), so the
+*fate* is binary for one deterministic cell but the *mechanism* is graded. That is what
+will produce graded fate fractions once Phase 3 runs a heterogeneous population — a single
+trajectory can only ever return one fate.
+
+#### Caveats to carry forward
+
+- **The abscission threshold does a lot of work.** The midbody peaks at 0.0868 against a
+  0.05 cutoff — a 1.7× margin — so the division/binucleation call is sensitive to it. This
+  is the same exposure Tier 1 records for its `r080` switch (`n = 2.0, EC50 = 0.090`),
+  which `../MODEL.md` calls "the model's largest single sensitivity". It needs the same
+  treatment Tier 1 gave it: profile the threshold and show the conclusions are invariant
+  across a range. Phase 3.
+- **No back-coupling into the core oscillator.** The arm reads the cycle but does not drive
+  it, so a cell that fails abscission keeps the same molecular oscillation and simply ends
+  up binucleate. That keeps the reduction property trivially exact, but it means ploidy
+  does not feed back on the cycle — and real polyploid cardiomyocytes cycle differently.
+  A Phase 4 question, not a permanent claim.
+- Phase 1's `:MitoticCompletion` label is preserved when the arm is off. Reporting
+  `:Binucleation` merely because no midbody formed would be a guess dressed as a result.
+
+## Next: Phase 2 steps 4–5
+
+Steps 1–3 are done (step 1 rejected; steps 2–3 wired and inert by default). Remaining:
 
 3. **The cytokinesis arm** — Ect2 → RhoA → Centralspindlin/AurKB/Anillin → Midbody, with
    RhoA obligatory (Tier 1 learned that the hard way four times: an OR'd bypass made it

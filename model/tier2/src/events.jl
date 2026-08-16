@@ -34,6 +34,7 @@ Base.@kwdef struct EventThresholds
     mitotic_exit::Float64 = 0.099   # CCNB_CDK1, 0.15 x baseline peak 0.6622
     restriction::Float64  = 0.073   # ppRB,      0.50 x baseline peak 0.1466
     geminin_on::Float64   = FUCCI_THRESHOLD  # total geminin, the published FUCCI cutoff
+    abscission::Float64   = 0.050  # Midbody; only used when the cytokinesis arm is on
 end
 
 """
@@ -52,11 +53,13 @@ struct EventLog
     anaphase::Vector{Float64}
     mitotic_exit::Vector{Float64}
     geminin_on::Vector{Float64}
+    abscission::Vector{Float64}
 end
-EventLog() = EventLog(Float64[], Float64[], Float64[], Float64[], Float64[], Float64[])
+EventLog() = EventLog(Float64[], Float64[], Float64[], Float64[], Float64[], Float64[],
+                      Float64[])
 
-Base.isempty(l::EventLog) = all(isempty, (l.restriction, l.s_entry, l.neb,
-                                          l.anaphase, l.mitotic_exit, l.geminin_on))
+Base.isempty(l::EventLog) = all(isempty, (l.restriction, l.s_entry, l.neb, l.anaphase,
+                                          l.mitotic_exit, l.geminin_on, l.abscission))
 
 function Base.show(io::IO, l::EventLog)
     print(io, "EventLog(restriction=", length(l.restriction),
@@ -64,7 +67,8 @@ function Base.show(io::IO, l::EventLog)
               ", neb=", length(l.neb),
               ", anaphase=", length(l.anaphase),
               ", mitotic_exit=", length(l.mitotic_exit),
-              ", geminin_on=", length(l.geminin_on), ")")
+              ", geminin_on=", length(l.geminin_on),
+              ", abscission=", length(l.abscission), ")")
 end
 
 """
@@ -79,8 +83,14 @@ twice per cycle from the two crossing directions.
 The affects record only — they never touch `u` or `p`. Bookkeeping is derived from the
 log afterwards (see `fates.jl`), which keeps the ODE trajectory identical to the
 callback-free solve. That is asserted by test.
+
+The `cytokinesis` flag adds the abscission landmark. It is off by default and must stay
+that way: `Midbody` is a Tier-2 species at an index past the end of the inherited
+63-component state, so arming that callback against a `solve_baseline` problem would
+index out of bounds.
 """
-function landmark_callbacks(log::EventLog, thr::EventThresholds = EventThresholds())
+function landmark_callbacks(log::EventLog, thr::EventThresholds = EventThresholds();
+                            cytokinesis::Bool = false)
     up(idx, level, sink) = ContinuousCallback(
         (u, t, integ) -> u[idx] - level,
         integ -> push!(sink, integ.t),   # up-crossing
@@ -99,7 +109,7 @@ function landmark_callbacks(log::EventLog, thr::EventThresholds = EventThreshold
         integ -> push!(log.geminin_on, integ.t),
         nothing)
 
-    return CallbackSet(
+    core = (
         up(species_index("ppRB"),      thr.restriction,  log.restriction),
         up(species_index("CCNE_CDK2"), thr.s_entry,      log.s_entry),
         up(species_index("LMNAp"),     thr.neb,          log.neb),
@@ -107,6 +117,9 @@ function landmark_callbacks(log::EventLog, thr::EventThresholds = EventThreshold
         down(species_index("CCNB_CDK1"), thr.mitotic_exit, log.mitotic_exit),
         geminin_cb,
     )
+    cytokinesis || return CallbackSet(core...)
+    return CallbackSet(core...,
+        up(species_index("Midbody"), thr.abscission, log.abscission))
 end
 
 """
@@ -122,6 +135,7 @@ function solve_with_events(; alpha::Real = PUBLISHED_ALPHA,
                              tspan::Tuple{<:Real,<:Real} = (0.0, 2500.0),
                              thresholds::EventThresholds = EventThresholds(),
                              con_VOL::Real = 0.0, con_ABE::Real = 0.0,
+                             cytokinesis::Bool = false,
                              kwargs...)
     log = EventLog()
     u0 = state()
@@ -131,7 +145,8 @@ function solve_with_events(; alpha::Real = PUBLISHED_ALPHA,
     p.con_ABE = con_ABE
     prob = ODEProblem(modelDiffEq!, u0, (Float64(tspan[1]), Float64(tspan[2])), p)
     sol = solve(prob, AutoTsit5(Rosenbrock23());
-                callback = landmark_callbacks(log, thresholds), kwargs...)
+                callback = landmark_callbacks(log, thresholds;
+                                              cytokinesis = cytokinesis), kwargs...)
     return sol, log
 end
 
@@ -144,5 +159,6 @@ rather than the start-up transient.
 function trim(log::EventLog, window::Tuple{<:Real,<:Real})
     keep(v) = filter(t -> window[1] <= t <= window[2], v)
     return EventLog(keep(log.restriction), keep(log.s_entry), keep(log.neb),
-                    keep(log.anaphase), keep(log.mitotic_exit), keep(log.geminin_on))
+                    keep(log.anaphase), keep(log.mitotic_exit), keep(log.geminin_on),
+                    keep(log.abscission))
 end

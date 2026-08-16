@@ -29,6 +29,12 @@
 const FATES_PHASE1 = (:Quiescent, :Polyploidization, :MitoticCompletion)
 
 """
+Tier 1's four fates, decidable once the cytokinesis arm is modelled.
+`:MitoticCompletion` splits on whether a midbody formed and resolved.
+"""
+const FATES = (:Quiescent, :Division, :Binucleation, :Polyploidization)
+
+"""
     Cycle
 
 One traversal, from S-phase entry to its outcome.
@@ -52,6 +58,7 @@ struct Cycle
     neb::Union{Float64,Nothing}
     anaphase::Union{Float64,Nothing}
     exit::Union{Float64,Nothing}
+    abscission::Union{Float64,Nothing}   # midbody formed and resolved
     sg2m_cyclin::Union{Float64,Nothing}  # CycE crossing -> mitotic exit
     sg2m_fucci::Union{Float64,Nothing}   # geminin appearing -> mitotic exit
     mitosis::Union{Float64,Nothing}      # NEB -> mitotic exit
@@ -83,7 +90,8 @@ dropped: it is right-censored, and counting it would bias durations downward exa
 way Tier 1's `hipsc_cm` reservoir check describes (the reported 24.5 h there is a
 right-censored lower bound, not a mean).
 """
-function classify_cycles(log::EventLog; window::Union{Nothing,Tuple{<:Real,<:Real}} = nothing)
+function classify_cycles(log::EventLog; window::Union{Nothing,Tuple{<:Real,<:Real}} = nothing,
+                                        cytokinesis::Bool = false)
     l = window === nothing ? log : trim(log, window)
     commits = sort(l.restriction)
     length(commits) < 2 && return Cycle[]
@@ -103,11 +111,24 @@ function classify_cycles(log::EventLog; window::Union{Nothing,Tuple{<:Real,<:Rea
         # in Tier 1's partition, so it is not forced into one.
         sen === nothing && continue
 
-        fate = neb === nothing ? :Polyploidization : :MitoticCompletion
+        # Abscission is searched a little past the cycle boundary: the midbody resolves
+        # shortly AFTER mitotic exit, and exit is very close to the next commitment.
+        abs_t = cytokinesis ? first_in(sort(l.abscission), t0, t1 + 2.0) : nothing
+
+        fate = if neb === nothing
+            :Polyploidization
+        elseif !cytokinesis
+            # The arm is not modelled, so division and binucleation are indistinguishable.
+            # Reporting either would be a guess; Phase 1's honest label is kept.
+            :MitoticCompletion
+        else
+            abs_t === nothing ? :Binucleation : :Division
+        end
+
         sg2m_c = ex === nothing ? nothing : ex - sen
         sg2m_f = (gem === nothing || ex === nothing) ? nothing : ex - gem
         mit    = (neb === nothing || ex === nothing) ? nothing : ex - neb
-        push!(cycles, Cycle(fate, sen, gem, neb, ana, ex, sg2m_c, sg2m_f, mit))
+        push!(cycles, Cycle(fate, sen, gem, neb, ana, ex, abs_t, sg2m_c, sg2m_f, mit))
     end
     return cycles
 end
@@ -166,14 +187,19 @@ function bookkeep(cycles::AbstractVector{Cycle}; assume_abscission::Bool = true)
     cells, nuclei, dna = b.cells, b.nuclei, b.dna_content
     for c in cycles
         dna *= 2                                    # S phase
-        if c.fate === :MitoticCompletion
-            if assume_abscission
-                cells *= 2
-                dna /= 2                            # each daughter gets 2C
-            else
-                nuclei += 1                         # binucleate, DNA split between nuclei
-                dna /= 2
-            end
+        # With the cytokinesis arm on, the outcome is decided by the model and
+        # `assume_abscission` is not consulted. It only covers `:MitoticCompletion`,
+        # which exists precisely when the arm is absent and the call has to guess.
+        divides = c.fate === :Division ||
+                  (c.fate === :MitoticCompletion && assume_abscission)
+        binucleates = c.fate === :Binucleation ||
+                      (c.fate === :MitoticCompletion && !assume_abscission)
+        if divides
+            cells *= 2
+            dna /= 2                                # each daughter gets 2C
+        elseif binucleates
+            nuclei += 1                             # DNA split between two nuclei
+            dna /= 2
         end
         # :Polyploidization keeps the doubled DNA in one nucleus
     end
@@ -193,21 +219,23 @@ cannot reach.
 """
 function fate_summary(log::EventLog;
                       window::Union{Nothing,Tuple{<:Real,<:Real}} = nothing,
-                      assume_abscission::Bool = true)
+                      assume_abscission::Bool = true,
+                      cytokinesis::Bool = false)
+    labels = cytokinesis ? (:Division, :Binucleation, :Polyploidization) : FATES_PHASE1
     if quiescent(log; window = window)
         return Dict(:quiescent => true, :n_cycles => 0,
-                    :counts => Dict(f => 0 for f in FATES_PHASE1),
+                    :counts => Dict(f => 0 for f in labels),
                     :book => Bookkeeping())
     end
-    cycles = classify_cycles(log; window = window)
-    counts = Dict(f => count(c -> c.fate === f, cycles) for f in FATES_PHASE1)
+    cycles = classify_cycles(log; window = window, cytokinesis = cytokinesis)
+    counts = Dict(f => count(c -> c.fate === f, cycles) for f in labels)
     dur(sel) = (v = [x for x in sel if x !== nothing]; isempty(v) ? nothing : sum(v)/length(v))
     return Dict(
         :quiescent => false,
         :n_cycles  => length(cycles),
         :counts    => counts,
         :fractions => Dict(f => (isempty(cycles) ? 0.0 : counts[f]/length(cycles))
-                           for f in FATES_PHASE1),
+                           for f in labels),
         :mean_sg2m_cyclin => dur(c.sg2m_cyclin for c in cycles),
         :mean_sg2m_fucci  => dur(c.sg2m_fucci  for c in cycles),
         :mean_mitosis     => dur(c.mitosis     for c in cycles),
