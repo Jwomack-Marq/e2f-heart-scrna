@@ -339,37 +339,60 @@ end
     @test s[:mean_mitosis] < 0.2 * peak_period(solve_baseline(alpha = PUBLISHED_ALPHA))
 end
 
-@testset "KNOWN FAILURE: the inherited FUCCI layer has no G1/S state" begin
-    # These assert the defect STILL EXISTS, following Tier 1's
-    # `test_the_maturation_slope_of_entry_is_too_steep`. They fail the day Phase 2 fixes
-    # it, which is the point -- the fix must be deliberate and recorded, not silent.
+@testset "RETRACTED: the FUCCI 'defect' was the 0.05 plotting default" begin
+    # This testset previously asserted a KNOWN FAILURE -- that the inherited FUCCI layer
+    # had no G1/S double-positive state. Phase 2 showed that was an artefact of the
+    # cutoff, not a property of the model, so the finding is retracted and the tests are
+    # inverted to pin the correct behaviour.
     #
-    # Cdt1 and geminin are present (that is why this model beats gg2009 as a Tier-2
-    # base), but their phase relationship is wrong for a FUCCI readout:
-    #
-    #   * total geminin is above the published 0.05 cutoff for 12.6 % of the cycle;
-    #     the mAG reporter marks S/G2/M, which is ~40 %.
-    #   * Cdt1 and geminin NEVER overlap, so the G1/S double-positive state has
-    #     frequency exactly zero. Murganti Fig 1C reports 1.6 % and Baniol Fig 1D
-    #     reports 19.1 % at P0 -- and the double-positive is the population Baniol's
-    #     Suppl 1G correction operates on, which is what gave Tier 1 its 1.03x
-    #     unfitted validation.
-    #
-    # Root cause is almost certainly the defect pinned in Phase 0: ks_CDT1_E2F and
-    # ks_Geminin_E2F are constants rather than E2F-driven, so licensing is decoupled
-    # from the cycle. Phase 2 connects them alongside the E2F sub-family split.
+    # The cutoff is a reporter/microscope property, not a model property. Calibrating it
+    # by requiring the FUCCI-derived and cyclin-derived phase fractions to agree -- two
+    # measurements sharing no equations -- gives 0.02 with a sharp optimum, and there the
+    # licensing layer is excellent.
     sol = solve_baseline(alpha = PUBLISHED_ALPHA)
-    f = fucci_fractions(sol; window = W)
+    pt = phase_times(sol)
+    g1 = pt.g1 / pt.cell_cycle
+    sg2m = (pt.s + pt.g2 + pt.m) / pt.cell_cycle
 
-    @test f[:G1S] == 0.0
-    @test f[:SG2M] < 0.20            # should be ~0.40 for a real mAG window
-    @test f[:negative] > 0.30        # far too many double-negatives
+    f = fucci_fractions(sol; window = W)          # calibrated cutoff
+    @test f[:G0G1] + f[:G1S] ≈ g1   atol = 0.02   # Cdt1-positive == G1
+    @test f[:SG2M]           ≈ sg2m atol = 0.02   # geminin-positive == S+G2+M
+    @test f[:G1S] > 0.05                          # a real double-positive exists
+    @test f[:negative] < 0.01                     # and essentially no double-negatives
     @test sum(values(f)) ≈ 1.0
 
-    # The FUCCI-timed S/G2/M is consequently far too short against Fig 2E's 16.38 h.
+    # At the old plotting default the same model looks broken. Pinned so nobody
+    # "restores" it and re-derives the retracted conclusion.
+    fp = fucci_fractions(sol; window = W, threshold = PUBLISHED_FUCCI_THRESHOLD)
+    @test fp[:G1S] == 0.0
+    @test fp[:negative] > 0.30
+
+    # The optimum is sharp, i.e. the cutoff is genuinely identified rather than a range.
+    err(thr) = (x = fucci_fractions(sol; window = W, threshold = thr);
+                abs(x[:G0G1] + x[:G1S] - g1) + abs(x[:SG2M] - sg2m) + x[:negative])
+    @test err(FUCCI_THRESHOLD) < 0.01
+    @test err(0.025) > 5 * err(FUCCI_THRESHOLD)
+    @test err(0.015) > 5 * err(FUCCI_THRESHOLD)
+end
+
+@testset "FUCCI-timed duration at the calibrated cutoff" begin
+    # With the cutoff calibrated, the FUCCI-timed S/G2/M is 12.80 h -- against Murganti
+    # Fig 2E's 16.38 h and Baniol's 15.1 +/- 4.0 SD for P0 mouse, i.e. inside one SD of
+    # the mouse measurement with nothing fitted to either. At the old 0.05 default the
+    # same quantity read 2.06 h.
+    #
+    # It should sit between the phase_times S+G2+M (10.73 h, cyclin peaks) and the
+    # CycE-crossing measure (18.95 h): geminin appears before CycA peaks but after CycE
+    # crosses, so the three bracket each other in a fixed order.
     _, log = solve_with_events(alpha = PUBLISHED_ALPHA)
     s = fate_summary(log; window = W)
-    @test s[:mean_sg2m_fucci] < 5.0
+    sol = solve_baseline(alpha = PUBLISHED_ALPHA)
+    pt = phase_times(sol)
+
+    @test 10.0 < s[:mean_sg2m_fucci] < 20.0
+    @test s[:mean_sg2m_fucci] > pt.s + pt.g2 + pt.m
+    @test s[:mean_sg2m_fucci] < s[:mean_sg2m_cyclin]
+    @test abs(s[:mean_sg2m_fucci] - 15.1) < 4.0      # within Baniol's SD
 end
 
 @testset "fucci_state truth table" begin
@@ -395,3 +418,198 @@ end
 
 end # testset
 
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: the cardiomyocyte modules.
+#
+# Step 1 (coupling Cdt1/geminin synthesis to E2F) was TESTED AND REJECTED -- see below.
+# Step 2 (the E2F sub-family split) is wired and inert by default.
+# ---------------------------------------------------------------------------
+
+@testset "CmTier2 — Phase 2" begin
+
+@testset "THE GATE: disabled Tier 2 is bit-exactly the published model" begin
+    # The strongest form of the reduction property. tier2DiffEq! CALLS the inherited RHS
+    # rather than copying it, and every Tier-2 term carries a factor that is zero at
+    # default parameters -- so the reduction is structural, not a tolerance.
+    #
+    # Checked on random states rather than on a trajectory, because a trajectory only
+    # visits the limit cycle and would miss a correction that is nonzero elsewhere.
+    rng_state = 0
+    worst = 0.0
+    for trial in 1:100
+        u63, u66 = state(), tier2_state()
+        for (k, s) in enumerate(state_names())
+            rng_state = (1103515245 * rng_state + 12345) % 2147483648
+            v = 0.8 * rng_state / 2147483648
+            u63[Symbol(s)] = v
+            u66[Symbol(s)] = v
+        end
+        d63, d66 = similar(u63), similar(u66)
+        modelDiffEq!(d63, u63, params(), 0.0)
+        tier2DiffEq!(d66, u66, tier2_params(), 0.0)
+        for i in 1:63
+            worst = max(worst, abs(d66[i] - d63[i]))
+        end
+    end
+    @test worst == 0.0          # bit-exact, not approximately
+
+    # And the same at the trajectory level, where solver step selection differs slightly
+    # because the error norm now spans 66 components rather than 63.
+    plain = solve_baseline(alpha = PUBLISHED_ALPHA, reltol = 1e-10, abstol = 1e-10)
+    t2    = solve_tier2(alpha = PUBLISHED_ALPHA, reltol = 1e-10, abstol = 1e-10)
+    for s in ("CCNB_CDK1", "CCNE_CDK2", "E2F", "CDT1", "Geminin")
+        i = species_index(s)
+        @test t2(2000.0)[i] ≈ plain(2000.0)[i] rtol = 1e-5
+    end
+    @test peak_period(t2) ≈ peak_period(plain) atol = 1e-3
+    for s in TIER2_SPECIES
+        @test abs(t2(2000.0)[species_index(s)]) < 1e-30
+    end
+end
+
+@testset "extended vectors keep the inherited layout" begin
+    @test length(tier2_state()) == 63 + length(TIER2_SPECIES)
+    @test length(tier2_params()) == 218 + 13
+    @test tier2_state_names()[1:63] == state_names()
+    # New components MUST come last: diff_eqns.jl destructures positionally.
+    @test tier2_state_names()[64:end] == collect(TIER2_SPECIES)
+    @test collect(keys(tier2_params()))[1:218] == collect(keys(params()))
+    for s in TIER2_SPECIES
+        @test species_index(s) > 63
+    end
+    # Every enable parameter defaults to zero -- that IS the reduction property.
+    for k in TIER2_ENABLE_PARAMS
+        @test getproperty(tier2_params(), k) == 0.0
+    end
+end
+
+@testset "e2f_repression is well behaved" begin
+    @test e2f_repression(0, 0, 0, 0.1, 0.2) == 1.0        # unrepressed
+    @test e2f_repression(0, 1, 0, 0.1, 0.2) < 1.0
+    @test e2f_repression(0, 0, 1, 0.1, 0.2) < 1.0
+    @test e2f_repression(1, 0, 0, 0.1, 0.2) < 1.0
+    # E2F7 and E2F8 act as one pool: only their sum matters.
+    @test e2f_repression(0, 0.3, 0.1, 0.1, 0.2) == e2f_repression(0, 0.1, 0.3, 0.1, 0.2)
+    # E2F6 represses more weakly at equal concentration (larger Ki).
+    @test e2f_repression(0.5, 0, 0, 0.1, 0.2) > e2f_repression(0, 0.5, 0, 0.1, 0.2)
+    # Bounded in (0, 1] and monotone.
+    @test 0 < e2f_repression(10, 10, 10, 0.1, 0.2) <= 1
+    @test e2f_repression(0, 2, 0, 0.1, 0.2) < e2f_repression(0, 1, 0, 0.1, 0.2)
+end
+
+@testset "the E2F split reproduces Baniol's signs" begin
+    # Baniol measured E2f1~E2f7 = +0.49, E2f1~E2f8 = +0.46, E2f8~Ccna2 = -0.56.
+    #
+    # Scored as SIGNS, not magnitudes, and deliberately so: those are Spearman
+    # correlations across single cells at Smart-seq2 depth, where dropout attenuates
+    # |r| substantially. A deterministic trajectory has no measurement error, so it will
+    # always give larger |r|. Comparing magnitudes without an attenuation correction
+    # would be scoring the noise model, not the biology.
+    en = (ks_E2F7_E2F = 0.20, ks_E2F8_E2F = 0.20, Ki_E2F78 = 5.0)
+    sol = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en, saveat = 0.25)
+    t = sol.t
+    w = findall(x -> 1900 <= x <= 2180, t)
+    g(s) = sol[species_index(s), :][w]
+    function pearson(a, b)
+        am, bm = sum(a)/length(a), sum(b)/length(b)
+        den = sqrt(sum((a .- am).^2) * sum((b .- bm).^2))
+        den < 1e-14 ? NaN : sum((a .- am) .* (b .- bm)) / den
+    end
+
+    @test pearson(g("E2F"), g("E2F7")) > 0      # E2F1 induces E2F7
+    @test pearson(g("E2F"), g("E2F8")) > 0      # and E2F8
+    @test pearson(g("E2F8"), g("CCNA")) < 0     # E2F8 is G1/S-restricted
+    @test maximum(g("E2F7")) > 0                # the repressors are actually expressed
+    @test maximum(g("E2F8")) > 0
+    # E2F8 turns over faster than E2F7 (CycA clearance), so it accumulates less.
+    @test maximum(g("E2F8")) < maximum(g("E2F7"))
+end
+
+@testset "in-silico E2f7/E2f8 knockdown shortens the cycle" begin
+    # The direction the lab's own data shows: cycling cardiomyocytes at P7 are 31.6 % in
+    # the KO against 25.6 % WT, i.e. losing the repressors means MORE cycling. Here that
+    # appears as a shorter period. Nothing was fitted to the KO data.
+    base = (ks_E2F7_E2F = 0.20, ks_E2F8_E2F = 0.20, Ki_E2F78 = 5.0)
+    per(over) = peak_period(solve_tier2(alpha = PUBLISHED_ALPHA,
+                                        enable = merge(base, over),
+                                        tspan = (0.0, 3000.0));
+                            window = (2400.0, 2900.0))
+    wt     = per(NamedTuple())
+    kd7    = per((ks_E2F7_E2F = 0.0,))
+    kd8    = per((ks_E2F8_E2F = 0.0,))
+    double = per((ks_E2F7_E2F = 0.0, ks_E2F8_E2F = 0.0))
+
+    @test all(isfinite, (wt, kd7, kd8, double))
+    @test kd7 < wt && kd8 < wt                 # each knockdown speeds the cycle
+    @test double < kd7 && double < kd8         # the double goes furthest
+    # Removing both repressors must land exactly on the published model.
+    @test double ≈ peak_period(solve_baseline(alpha = PUBLISHED_ALPHA)) atol = 0.05
+
+    # Real epistasis: the double is not the sum of the singles. Tier 1 found the same
+    # qualitative result on Ect2, which matters because the lab's data IS a double KO.
+    @test abs((wt - double) - ((wt - kd7) + (wt - kd8))) > 0.5
+end
+
+@testset "REJECTED: coupling Cdt1/geminin synthesis to E2F" begin
+    # ks_CDT1_E2F and ks_Geminin_E2F are constants despite their names -- a real naming
+    # defect, pinned in Phase 0. Connecting them to E2F was the planned step 1. It was
+    # implemented, measured, and REJECTED: it makes the FUCCI structure worse, not
+    # better. Recorded here rather than deleted, following the project's practice of
+    # committing negative results.
+    #
+    # Scored by how well the FUCCI-derived phase fractions match the cyclin-derived
+    # ones, each variant at ITS OWN best cutoff so the comparison is fair:
+    #
+    #   published (off)      err 0.0006
+    #   gem 1.0              err 0.4663
+    #   cdt1 1.0             err 0.0973
+    #   gem + cdt1 1.0       err 0.1524
+    #   gem + cdt1 0.5       err 0.0402
+    #
+    # Mechanism of the failure: geminin's peak moves from +2.0 h (mitosis, correct for
+    # mAG) to +16.5 h (late G1) and its amplitude falls from 0.133 to 0.043, because E2F
+    # is a sharp late-G1 spike while geminin needs to accumulate across S/G2/M.
+    #
+    # kd_CDT1_CDK2 was also tried, to clear Cdt1 at S onset -- CDK2 phosphorylation of
+    # Cdt1 licensing SCF-Skp2 is real biology, and Cdt1's only route here is SCF, which
+    # peaks at mitosis rather than at G1/S. It is too blunt: CCNE_CDK2 + CCNA_CDK2 never
+    # falls below ~0.07, so it acts as near-constant degradation and erases Cdt1
+    # entirely (all four FUCCI fractions collapse to double-negative by kd = 5). Doing
+    # it properly needs an S-phase marker the inherited model does not have -- there is
+    # no DNA replication variable. Left wired, defaulted off, for Phase 3.
+    W2 = (1800.0, 2200.0)
+    function fit_err(en)
+        sol = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en)
+        pt = phase_times(sol)
+        pt === nothing && return Inf
+        g1 = pt.g1 / pt.cell_cycle
+        sg = (pt.s + pt.g2 + pt.m) / pt.cell_cycle
+        best = Inf
+        for thr in 0.004:0.002:0.05
+            f = fucci_fractions(sol; window = W2, threshold = thr)
+            best = min(best, abs(f[:G0G1] + f[:G1S] - g1) + abs(f[:SG2M] - sg) + f[:negative])
+        end
+        return best
+    end
+    off = fit_err(NamedTuple())
+    @test off < 0.01                                        # published is near-perfect
+    @test fit_err((w_Geminin_E2F = 1.0,)) > 10 * off        # and every variant is worse
+    @test fit_err((w_CDT1_E2F = 1.0,)) > off
+    @test fit_err((w_Geminin_E2F = 0.5, w_CDT1_E2F = 0.5)) > off
+
+    # The blunt-clearance failure, pinned. The published model has essentially no
+    # double-negative population at the calibrated cutoff; adding CDK2-driven Cdt1
+    # clearance creates a large one, because the clearance is on whenever CDK2 is, which
+    # is most of the cycle.
+    base_neg = fucci_fractions(solve_tier2(alpha = PUBLISHED_ALPHA); window = W2)[:negative]
+    f = fucci_fractions(solve_tier2(alpha = PUBLISHED_ALPHA,
+                                    enable = (w_Geminin_E2F = 1.0, w_CDT1_E2F = 1.0,
+                                              kd_CDT1_CDK2 = 5.0)); window = W2)
+    @test base_neg < 0.01
+    @test f[:negative] > 0.4
+    @test f[:negative] > 50 * max(base_neg, 1e-4)
+end
+
+end # testset

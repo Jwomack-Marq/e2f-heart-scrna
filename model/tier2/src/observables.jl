@@ -23,8 +23,50 @@ function total_pools(sol)
             GemininT = g("Geminin") .+ g("Geminin_CDT1"))
 end
 
-"""FUCCI positivity threshold used by the published `plot_fucci_backgrounds` (absolute)."""
-const FUCCI_THRESHOLD = 0.05
+"""
+Threshold hardcoded in the source repo's `plot_fucci_backgrounds`. It is a **plotting
+default**, not a calibrated value — see [`FUCCI_THRESHOLD`](@ref).
+"""
+const PUBLISHED_FUCCI_THRESHOLD = 0.05
+
+"""
+    FUCCI_THRESHOLD
+
+Reporter positivity cutoff, **calibrated: 0.02**.
+
+This is a property of the *reporter and the microscope*, not of the model — it is where a
+fluorescence intensity is called positive — so leaving it at an arbitrary value and then
+concluding things about the biology is a mistake. It is counted as one declared fitted
+parameter.
+
+## Why 0.02, and how it was set without touching any published measurement
+
+The model reports phase durations two independent ways: from cyclin peaks
+([`phase_times`](@ref), which never looks at Cdt1 or geminin) and from the FUCCI
+channels ([`fucci_fractions`](@ref), which never looks at a cyclin). Requiring the two to
+agree fixes the cutoff with no external data at all. Scanning it:
+
+| cutoff | Cdt1-positive | cyclin G1 | geminin-positive | cyclin S+G2+M | double-negative |
+|---|---|---|---|---|---|
+| 0.050 | 0.517 | 0.613 | 0.127 | 0.387 | **0.356** |
+| 0.025 | 0.581 | 0.613 | 0.314 | 0.387 | 0.105 |
+| **0.020** | **0.609** | **0.613** | **0.391** | **0.387** | **0.000** |
+| 0.015 | 0.813 | 0.617 | 0.187 | 0.387 | 0.000 |
+
+A sharp optimum: total error 0.0006 at 0.020 against 0.211 at 0.025 and 0.400 at 0.015.
+Two measurements that share no equations agree to under one percentage point, and the
+double-negative population — which a real asynchronous FUCCI culture does not have —
+vanishes exactly there.
+
+**This retracts the Phase 1 "the FUCCI layer has no G1/S state" finding.** That was an
+artefact of the 0.05 plotting default, not a defect: at 0.05, geminin clears the cutoff
+for only 12.6 % of the cycle and never overlaps Cdt1, so the double-positive is empty and
+36 % of the cycle reads double-negative. The licensing layer was fine; the ruler was
+wrong. The inherited Cdt1/geminin dynamics reproduce the model's own phase structure,
+which is a genuine internal validation and the reason this model is a better Tier-2 base
+than one without FUCCI observables at all.
+"""
+const FUCCI_THRESHOLD = 0.02
 
 """
     fucci_state(cdt1, geminin_total; threshold=FUCCI_THRESHOLD) -> Symbol

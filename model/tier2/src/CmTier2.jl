@@ -36,11 +36,15 @@ export state, state_names, params, modelDiffEq!
 export solve_baseline, solve_drug, doubling_time, peak_period, species_index
 export PUBLISHED_ALPHA, PUBLISHED_DOUBLING_TIME, PARAMFILE_ALPHA
 # observables
-export total_pools, fucci_state, fucci_fractions, phase_times, FUCCI_THRESHOLD
+export total_pools, fucci_state, fucci_fractions, phase_times
+export FUCCI_THRESHOLD, PUBLISHED_FUCCI_THRESHOLD
 # events
 export EventThresholds, EventLog, solve_with_events, landmark_callbacks, trim
 # fates
 export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary, FATES_PHASE1
+# tier 2 model
+export tier2_state, tier2_state_names, tier2_params, tier2DiffEq!, solve_tier2
+export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS
 
 # ---------------------------------------------------------------------------
 # The inherited core, verbatim.
@@ -91,11 +95,17 @@ const PARAMFILE_ALPHA = 2.3
 
 Index of a species in the state vector. Throws rather than returning `nothing`, so a
 typo fails loudly instead of silently indexing the wrong row.
+
+Also resolves the Tier-2 species appended after the inherited 63, so observables, events
+and fate code work unchanged against both `solve_baseline` and `solve_tier2` solutions —
+the leading 63 indices are identical by construction.
 """
 function species_index(name::AbstractString)
     idx = findfirst(==(name), state_names())
-    idx === nothing && error("unknown species $(repr(name)); see state_names()")
-    return idx
+    idx === nothing || return idx
+    extra = findfirst(==(name), TIER2_SPECIES)
+    extra === nothing && error("unknown species $(repr(name)); see tier2_state_names()")
+    return length(state_names()) + extra
 end
 
 """
@@ -225,5 +235,11 @@ end
 include("observables.jl")
 include("events.jl")
 include("fates.jl")
+
+# ---------------------------------------------------------------------------
+# Phase 2: the cardiomyocyte modules. Additive corrections over the inherited RHS,
+# each identically zero at default parameters — see tier2_model.jl.
+# ---------------------------------------------------------------------------
+include("tier2_model.jl")
 
 end # module

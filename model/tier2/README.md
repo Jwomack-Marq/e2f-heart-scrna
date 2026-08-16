@@ -9,7 +9,7 @@ in [`Cell_Cycle_Model`](https://github.com/Jwomack7512-bio/Cell_Cycle_Model) (MI
 | Formalism | normalized-Hill logic (Netflux) | mass-action + Michaelis–Menten ODE |
 | Nodes | 55 nodes, 77 reactions | 63 species, 218 parameters |
 | Time | `tau` is a relaxation constant | real time |
-| Fates | product of three steady-state gate activities | *(Phase 1)* emergent from one cell's trajectory |
+| Fates | product of three steady-state gate activities | emergent from one cell's trajectory |
 
 Tier 1 cannot express absolute phase durations, duration *distributions*, ploidy and cell
 counting, cumulative-EdU versus instantaneous Ki-67, or FUCCI trace shape. Those five are
@@ -24,21 +24,23 @@ highest-value thing item 3 asks to *add* — `CDT1`, `Geminin`, `Geminin_CDT1` a
 observables, which gg2009 lacks — along with `LMNA/LMNAp` for envelope breakdown, `PTTG1`
 for anaphase, and `p21`.
 
-Still to add (Phase 2): the E2F sub-family split, the Ect2/RhoA/Centralspindlin/AurKB/
-Anillin/Midbody cytokinesis arm, the maturation axis `M`, `Ccng1`, `p27`, and
-nuclei-and-ploidy bookkeeping. The test suite asserts all of these are currently absent,
-so a half-landed module cannot go unnoticed.
+Added in Phase 2: the E2F sub-family split (`E2F6`, `E2F7`, `E2F8`). Still to add: the
+Ect2/RhoA/Centralspindlin/AurKB/Anillin/Midbody cytokinesis arm, the maturation axis `M`,
+`Ccng1`, `p27`. The test suite asserts the absent ones are absent, so a half-landed
+module cannot go unnoticed.
 
-## Status: Phase 1 complete
+## Status: Phase 2 steps 1–2 complete
 
-**182 tests pass** (52 Phase 0, 130 Phase 1). The source repo has no test suite, so these
+**241 tests pass** (52 Phase 0, 139 Phase 1, 50 Phase 2). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
 (`state.jl`, `parameters.jl`, `diff_eqns.jl`). Do not edit it — extensions belong in
 their own files so the diff against the published model stays legible to a reviewer.
 
-Phase 1 adds **no biology and no parameters**; it only measures the inherited model.
+Phase 1 added **no biology and no parameters**; it only measures the inherited model.
+Phase 2 adds modules that are **inert by default** — the extended model reduces
+bit-exactly to the published one until an enable parameter is set.
 
 ```bash
 cd model/tier2
@@ -135,36 +137,18 @@ At the published α = 1.447, over a 400 h settled window:
 | cycle period | 28.11 h | 28.1 h (committed CSV) ✓ |
 | G1 / S / G2 / M | 17.33 / 8.64 / 1.93 / 0.22 h | — |
 | S/G2/M, cyclin-defined | 18.95 h | — |
-| **S/G2/M, FUCCI-defined** | **2.06 h** | **16.38 / 17.29 / 24.50 h** (Murganti Fig 2E) ✗ |
+| S/G2/M, FUCCI-defined | 12.80 h | 16.38 / 17.29 / 24.50 h (Murganti Fig 2E); Baniol 15.1 ± 4.0 ✓ |
 | mitosis (NEB → exit) | 1.74 h | ~4.2 h for CM (Tier 1 preflight) |
 | cells after 14 cycles | 2¹⁴ = 16384 | — |
 
 Two S/G2/M durations are carried deliberately. Murganti Fig 2E times a FUCCI trace —
 mAG (geminin) appearing, to division — so scoring a cyclin-defined duration against it
-would be a category error, and not a small one: the two differ by ~17 h here.
+would be a category error, and not a small one: the two differ by ~6 h here.
 
-### The Phase 1 gate found a real limitation
-
-The cyclin-defined duration (18.95 h) is squarely in the published range for a model
-with nothing fitted to it. The **FUCCI-defined one is not**, and the reason is specific:
-
-- Total geminin exceeds the published 0.05 cutoff for only **12.6 %** of the cycle; the
-  mAG reporter marks S/G2/M, which should be ~40 %.
-- Cdt1 and geminin **never overlap**, so the G1/S double-positive state has frequency
-  exactly **zero**. Murganti Fig 1C reports 1.6 % and Baniol Fig 1D reports 19.1 % at P0
-  — and the double-positive is precisely the population Baniol's Suppl 1G correction
-  operates on, which is what gave Tier 1 its 1.03× unfitted validation.
-- 36 % of the cycle reads double-negative, far more than a real FUCCI trace.
-
-So the inherited model **has** the FUCCI observables but does not reproduce FUCCI phase
-structure. The likely root cause is the Phase 0 defect: `ks_CDT1_E2F` and
-`ks_Geminin_E2F` are constants, so licensing is decoupled from the cycle and geminin
-peaks at mitosis instead of accumulating through S and G2.
-
-This is recorded as **deliberately-failing tests** (`KNOWN FAILURE: the inherited FUCCI
-layer has no G1/S state`), following Tier 1's
-`test_the_maturation_slope_of_entry_is_too_steep`. They fail the day Phase 2 fixes this,
-which is the point — the fix has to be deliberate and recorded, not silent.
+> **Note.** Phase 1 originally read the FUCCI duration as 2.06 h and recorded that as a
+> known failure. Phase 2 showed the failure was in the ruler, not the model — the cutoff
+> was a plotting default. The table above uses the calibrated cutoff. See
+> [the retraction](#retracted-the-fucci-defect-was-a-plotting-default).
 
 ### Fate classification, and what Phase 1 deliberately will not do
 
@@ -199,19 +183,133 @@ src/
   observables.jl    FUCCI states and fractions, total pools, phase durations
   events.jl         EventThresholds, EventLog, root-found cell-cycle landmarks
   fates.jl          Cycle, classification, nuclei/ploidy/cell bookkeeping
-test/runtests.jl    182 tests: the Phase 0 and Phase 1 gates
+  tier2_model.jl    extended state/params/RHS: E2F split, licensing couplings
+test/runtests.jl    241 tests: the Phase 0, 1 and 2 gates
 scripts/            (Phase 3+)
 ```
 
-## Next: Phase 2 — the cardiomyocyte modules
+## Phase 2: steps 1–2
 
-In rough dependency order:
+### How the extension preserves the published model
 
-1. **Connect Cdt1/geminin to E2F**, fixing the FUCCI phase structure Phase 1 measured as
-   broken. Highest value: it makes both papers' primary readout simulatable, and it is
-   the prerequisite for scoring the ten `fucci_fraction` targets.
-2. **The E2F sub-family split** — E2Fact / E2F6 / E2F7 / E2F8. Six consumer lines to
-   rewire, asserted by test so none is missed.
+`tier2DiffEq!` **calls** the inherited `modelDiffEq!` and never copies it. `diff_eqns.jl`
+destructures `u` and `p` positionally, so an extended `ComponentVector` with its new
+components appended *at the end* is destructured to exactly the same 63 states and 218
+parameters. Tier 2 is then additive corrections, each carrying a factor that is zero at
+default parameters:
+
+```julia
+d.CCNE += ks_CCNE_E2F * E2F * (rep - 1)        # zero when rep == 1
+d.CDT1 += ks_CDT1_E2F * w   * (E2F/E2F_ref - 1) # zero when w == 0
+```
+
+So the reduction is **structural, not a tolerance**. Verified bit-exact —
+`max |d_tier2 − d_published| = 0.000e+00` over 100 random states, checked on random
+states rather than a trajectory because a trajectory only visits the limit cycle and
+would miss a correction that is nonzero elsewhere. Copying the 442-line RHS and editing
+it would have recreated exactly the `diff_eqn_plk1p_test.jl` hazard flagged in Phase 0.
+
+Six enable parameters gate everything, all zero by default:
+`w_CDT1_E2F`, `w_Geminin_E2F`, `kd_CDT1_CDK2`, `ks_E2F7_E2F`, `ks_E2F8_E2F`, `ks_E2F6`.
+
+### RETRACTED: the FUCCI "defect" was a plotting default
+
+Phase 1 reported that the inherited FUCCI layer had no G1/S state. **That is withdrawn.**
+It was an artefact of the 0.05 cutoff, which is the source repo's `plot_fucci_backgrounds`
+*plotting* default — not a calibrated value.
+
+The cutoff is a property of the reporter and the microscope, not of the model. It can be
+calibrated with no external data at all, because the model measures phase durations two
+independent ways: from cyclin peaks (`phase_times`, which never looks at Cdt1 or geminin)
+and from the FUCCI channels (`fucci_fractions`, which never looks at a cyclin). Requiring
+them to agree gives a sharp optimum:
+
+| cutoff | Cdt1⁺ | cyclin G1 | geminin⁺ | cyclin S+G2+M | double-neg | error |
+|---|---|---|---|---|---|---|
+| 0.050 | 0.517 | 0.613 | 0.127 | 0.387 | 0.356 | 0.712 |
+| 0.025 | 0.581 | 0.613 | 0.314 | 0.387 | 0.105 | 0.211 |
+| **0.020** | **0.609** | **0.613** | **0.391** | **0.387** | **0.000** | **0.0006** |
+| 0.015 | 0.813 | 0.617 | 0.187 | 0.387 | 0.000 | 0.400 |
+
+Two measurements sharing no equations agree to under one percentage point, and the
+double-negative population — which a real asynchronous FUCCI culture does not have —
+vanishes exactly there. That is a genuine internal validation of the inherited licensing
+layer, and it is the reason this model is a better Tier-2 base than one without FUCCI
+observables at all.
+
+`FUCCI_THRESHOLD` is now 0.02 and counts as **one declared fitted parameter**;
+`PUBLISHED_FUCCI_THRESHOLD = 0.05` is kept and pinned so nobody restores it and
+re-derives the retracted conclusion.
+
+### REJECTED: step 1, coupling Cdt1/geminin synthesis to E2F
+
+`ks_CDT1_E2F` and `ks_Geminin_E2F` are constants despite their names — a real naming
+defect. Connecting them to E2F was the planned step 1. It was implemented, measured and
+**rejected**: it makes FUCCI structure worse. Each variant scored at *its own* best
+cutoff, so the comparison is fair:
+
+| variant | error |
+|---|---|
+| **published (off)** | **0.0006** |
+| gem 1.0 | 0.4663 |
+| cdt1 1.0 | 0.0973 |
+| gem + cdt1 1.0 | 0.1524 |
+| gem + cdt1 0.5 | 0.0402 |
+
+Mechanism of the failure: geminin's peak moves from +2.0 h (mitosis, correct for mAG) to
++16.5 h (late G1) and its amplitude falls 0.133 → 0.043, because E2F is a sharp late-G1
+spike while geminin needs to accumulate across S/G2/M. The constants happen to produce
+the right dynamics; the defect is in the naming, not the behaviour.
+
+`kd_CDT1_CDK2` was also tried — clearing Cdt1 at S onset via CDK2, which is real biology
+(CDK2 phosphorylation licenses SCF-Skp2; Cdt1's only route here is SCF, which peaks at
+mitosis rather than G1/S). Too blunt: `CCNE_CDK2 + CCNA_CDK2` never falls below ~0.07, so
+it acts as near-constant degradation and erases Cdt1. Doing it properly needs an S-phase
+marker the inherited model does not have — there is no DNA replication variable. Left
+wired and defaulted off.
+
+Both negative results are kept as tests rather than deleted, following this project's
+practice of committing rejected fixes.
+
+### Step 2: the E2F sub-family split
+
+`E2F6`, `E2F7`, `E2F8` added as states; the inherited `E2F` is the activator pool.
+E2F7/E2F8 are induced by E2F and repress it back — the canonical delayed negative
+feedback — through a single saturating denominator rather than a product, since they
+compete for the same promoters. E2F8 additionally carries CycA-driven clearance, which
+is what makes it G1/S-restricted rather than merely short-lived (Baniol: `E2f8~Ccna2`
+= −0.56). E2F6 sits on its own branch, maturation-driven from step 4.
+
+Baniol's correlations are scored as **signs, not magnitudes**, deliberately. Those are
+Spearman correlations across single cells at Smart-seq2 depth, where dropout attenuates
+|r| substantially; a deterministic trajectory has no measurement error and will always
+give larger |r|. Comparing magnitudes without an attenuation correction would be scoring
+the noise model rather than the biology. All three signs are reproduced.
+
+**The result worth having.** Repression strength lengthens the period monotonically, so
+in-silico knockdown *shortens* it — the direction the lab's own data shows (cycling
+cardiomyocytes at P7: KO 31.6 % vs WT 25.6 %). Nothing was fitted to the KO data:
+
+| genotype | period | vs WT |
+|---|---|---|
+| WT (both repressors) | 39.33 h | 1.00× |
+| E2f7 KD | 29.42 h | 0.75× |
+| E2f8 KD | 36.96 h | 0.94× |
+| **E2f7/E2f8 double KD** | **28.11 h** | **0.71×** |
+
+The double lands exactly on the published period, as it must. And the epistasis is real:
+singles give −9.91 h and −2.37 h (sum −12.28) against a double of −11.22 h, i.e.
+sub-additive. Tier 1 also found genuine epistasis on Ect2, which matters because the
+lab's data *is* a double knockout.
+
+A tension to carry into Phase 3: strong enough repression to reach Baniol's correlation
+magnitudes roughly doubles the cycle period. Repression strength is therefore a Phase 3
+calibration target, not something to pick by eye now — the enable parameters stay at zero.
+
+## Next: Phase 2 steps 3–5
+
+Steps 1 and 2 are done (step 1 rejected, step 2 wired and inert by default). Remaining:
+
 3. **The cytokinesis arm** — Ect2 → RhoA → Centralspindlin/AurKB/Anillin → Midbody, with
    RhoA obligatory (Tier 1 learned that the hard way four times: an OR'd bypass made it
    structurally impossible for Ect2 to be rate-limiting, which is the model's central
