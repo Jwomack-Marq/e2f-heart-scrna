@@ -157,3 +157,241 @@ end
 end
 
 end # testset
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: observables, discrete landmarks, fate classification.
+#
+# Adds no biology and no parameters — it only measures the inherited model. The gate is
+# whether the measured durations are commensurate with the five `duration` rows in
+# ../cmcycle/data/cmcycle_targets.csv, which Tier 1 structurally cannot produce.
+# ---------------------------------------------------------------------------
+
+"""Settled-limit-cycle window: ~14 cycles at the published 28.11 h period."""
+const W = (1800.0, 2200.0)
+
+@testset "CmTier2 — Phase 1" begin
+
+@testset "events fire once per cycle, in biological order" begin
+    sol, log = solve_with_events(alpha = PUBLISHED_ALPHA)
+    l = trim(log, W)
+
+    # One of each landmark per cycle. The window spans ~14 cycles at 28.11 h.
+    n = length(l.restriction)
+    @test n >= 10
+    for v in (l.s_entry, l.neb, l.anaphase, l.mitotic_exit, l.geminin_on)
+        @test abs(length(v) - n) <= 1        # allow one boundary-clipped event
+    end
+
+    # Within a cycle: commit -> S entry -> NEB -> anaphase -> exit.
+    cycles = classify_cycles(log; window = W)
+    @test length(cycles) >= 10
+    for c in cycles
+        @test c.neb !== nothing && c.anaphase !== nothing && c.exit !== nothing
+        @test c.s_entry < c.neb < c.exit
+        @test c.anaphase <= c.exit           # securin destroyed before MPF is gone
+        @test c.mitosis > 0
+    end
+
+    # Deterministic limit cycle: every traversal identical.
+    @test all(c -> c.fate === :MitoticCompletion, cycles)
+    sg2m = [c.sg2m_cyclin for c in cycles]
+    @test maximum(sg2m) - minimum(sg2m) < 1e-3
+end
+
+@testset "recording events does not perturb the trajectory" begin
+    # The affects push onto a log and never touch u or p, so the solution must be the
+    # same ODE solution. If this fails, every number measured here is suspect.
+    #
+    # It cannot be asserted at default tolerances: a ContinuousCallback forces the
+    # solver to stop at each event root, which changes step selection, so the two solves
+    # differ by ~2e-3 relative -- the solver's own reltol, not a perturbation. The
+    # discriminating test is that the difference CONVERGES TO ZERO with tolerance, which
+    # a genuine perturbation would not. Measured: 2e-3 (default) -> 5.9e-5 (1e-6) ->
+    # 3.3e-9 (1e-10).
+    diffs = Float64[]
+    for tol in (1e-6, 1e-10)
+        plain = solve_baseline(alpha = PUBLISHED_ALPHA, reltol = tol, abstol = tol)
+        withcb, _ = solve_with_events(alpha = PUBLISHED_ALPHA, reltol = tol, abstol = tol)
+        worst = 0.0
+        for s in ("CCNB_CDK1", "CCNE_CDK2", "CDT1", "Geminin", "LMNAp")
+            i = species_index(s)
+            for t in (2000.0, 2137.5)
+                a, b = withcb(t)[i], plain(t)[i]
+                worst = max(worst, abs(a - b) / max(abs(b), 1e-12))
+            end
+        end
+        push!(diffs, worst)
+        @test peak_period(withcb) ≈ peak_period(plain) atol = 1e-3
+    end
+    @test diffs[1] < 1e-3          # already tight at reltol 1e-6
+    @test diffs[2] < 1e-7          # and vanishes at 1e-10
+    @test diffs[2] < diffs[1]      # converging, i.e. discretisation not perturbation
+end
+
+@testset "fate classification is total and exclusive" begin
+    _, log = solve_with_events(alpha = PUBLISHED_ALPHA)
+    cycles = classify_cycles(log; window = W)
+    for c in cycles
+        @test c.fate in FATES_PHASE1
+    end
+    s = fate_summary(log; window = W)
+    @test sum(values(s[:counts])) == s[:n_cycles]
+    @test sum(values(s[:fractions])) ≈ 1.0
+end
+
+@testset "quiescence is detected, and is dose-monotone" begin
+    # CDK4/6 inhibition blocks Rb phosphorylation, so the restriction point is never
+    # passed. This is the negative control for the classifier: a fate model that cannot
+    # produce a quiescent cell cannot produce Tier 1's largest fate (90.35 %).
+    w = (800.0, 1200.0)
+    counts = Int[]
+    for abe in (0.0, 0.1, 1.0, 10.0)
+        _, log = solve_with_events(alpha = PUBLISHED_ALPHA, tspan = (0.0, 1200.0),
+                                   con_ABE = abe)
+        push!(counts, length(classify_cycles(log; window = w)))
+        if abe >= 1.0
+            @test quiescent(log; window = w)
+        else
+            @test !quiescent(log; window = w)
+        end
+    end
+    @test issorted(counts, rev = true)   # more drug, never more cycles
+    @test counts[end] == 0
+
+    # A quiescent trajectory yields no cycles and the untouched initial bookkeeping.
+    _, log = solve_with_events(alpha = PUBLISHED_ALPHA, tspan = (0.0, 1200.0),
+                               con_ABE = 10.0)
+    s = fate_summary(log; window = w)
+    @test s[:quiescent]
+    @test s[:n_cycles] == 0
+    @test s[:book].cells == 1.0
+end
+
+@testset "bookkeeping counts cells, nuclei and ploidy" begin
+    _, log = solve_with_events(alpha = PUBLISHED_ALPHA)
+    cycles = classify_cycles(log; window = W)
+
+    # n rounds of division from one cell.
+    b = bookkeep(cycles; assume_abscission = true)
+    @test b.cells ≈ 2.0^length(cycles)
+    @test b.nuclei == 1.0
+    @test b.dna_content == 2.0            # each daughter is diploid again
+
+    # Same cycles with abscission failing: one cell, one nucleus added per round.
+    bb = bookkeep(cycles; assume_abscission = false)
+    @test bb.cells == 1.0
+    @test bb.nuclei ≈ 1.0 + length(cycles)
+
+    # Polyploidization keeps doubling DNA in a single nucleus.
+    poly = [Cycle(:Polyploidization, 0.0, nothing, nothing, nothing, nothing,
+                  nothing, nothing, nothing) for _ in 1:3]
+    bp = bookkeep(poly)
+    @test bp.cells == 1.0
+    @test bp.nuclei == 1.0
+    @test bp.dna_content ≈ 16.0           # 2C -> 4C -> 8C -> 16C
+end
+
+@testset "phase durations resolve and are self-consistent" begin
+    sol = solve_baseline(alpha = PUBLISHED_ALPHA)
+    pt = phase_times(sol)
+    @test pt !== nothing
+    @test pt.g1 + pt.s + pt.g2 + pt.m ≈ pt.cell_cycle rtol = 1e-6
+    @test all(>(0), (pt.g1, pt.s, pt.g2, pt.m))
+    @test 0 < pt.g1_percent < 100
+
+    # phase_times reads boundaries off peak INDICES, so its cycle length is quantised to
+    # the save grid, and CCNE peaks in a slowly-varying stretch where the adaptive solver
+    # takes long steps. On the default grid it disagrees with peak_period by 0.097 h
+    # (0.34 %). That is quantisation, not disagreement about the period: refining the
+    # grid drives it to zero -- 0.097 h (auto) -> 0.033 h (saveat 0.05) -> 0.0067 h
+    # (saveat 0.01). Asserted as convergence so the two measurements cannot silently
+    # drift apart for a real reason.
+    gaps = [abs(phase_times(s).cell_cycle - peak_period(s)) for s in
+            (sol,
+             solve_baseline(alpha = PUBLISHED_ALPHA, saveat = 0.05),
+             solve_baseline(alpha = PUBLISHED_ALPHA, saveat = 0.01))]
+    @test gaps[1] < 0.15
+    @test gaps[3] < 0.02
+    @test gaps[3] < gaps[1]
+
+    # Absolute peak criteria cannot serve all four species: free CCNE peaks at ~0.13, so
+    # the height = 0.2 used for CCNB_CDK1 (peak 0.66) finds no CCNE peak at all and the
+    # G1/S boundary is never located. Pinned so the relative default is not "simplified"
+    # back to an absolute one.
+    @test maximum(sol[species_index("CCNE"), :]) < 0.2
+    @test maximum(sol[species_index("CCNB_CDK1"), :]) > 0.5
+end
+
+@testset "durations are commensurate with the published measurements" begin
+    _, log = solve_with_events(alpha = PUBLISHED_ALPHA)
+    s = fate_summary(log; window = W)
+
+    # Murganti Fig 2E S/G2/M: 16.38 (division), 17.29 (binucleation), 24.50 h
+    # (polyploidization). Baniol P0 mouse 15.1 +/- 4.0 SD. Nothing here is fitted -- the
+    # inherited model is a generic proliferating line -- so the test is order of
+    # magnitude and range, not agreement.
+    @test 10.0 < s[:mean_sg2m_cyclin] < 30.0
+
+    # Mitosis. Tier 1's preflight derives ~4.2 h for cardiomyocytes; a generic cycling
+    # line is faster. Bounded well away from both zero and the whole cycle.
+    @test 0.5 < s[:mean_mitosis] < 6.0
+    @test s[:mean_mitosis] < 0.2 * peak_period(solve_baseline(alpha = PUBLISHED_ALPHA))
+end
+
+@testset "KNOWN FAILURE: the inherited FUCCI layer has no G1/S state" begin
+    # These assert the defect STILL EXISTS, following Tier 1's
+    # `test_the_maturation_slope_of_entry_is_too_steep`. They fail the day Phase 2 fixes
+    # it, which is the point -- the fix must be deliberate and recorded, not silent.
+    #
+    # Cdt1 and geminin are present (that is why this model beats gg2009 as a Tier-2
+    # base), but their phase relationship is wrong for a FUCCI readout:
+    #
+    #   * total geminin is above the published 0.05 cutoff for 12.6 % of the cycle;
+    #     the mAG reporter marks S/G2/M, which is ~40 %.
+    #   * Cdt1 and geminin NEVER overlap, so the G1/S double-positive state has
+    #     frequency exactly zero. Murganti Fig 1C reports 1.6 % and Baniol Fig 1D
+    #     reports 19.1 % at P0 -- and the double-positive is the population Baniol's
+    #     Suppl 1G correction operates on, which is what gave Tier 1 its 1.03x
+    #     unfitted validation.
+    #
+    # Root cause is almost certainly the defect pinned in Phase 0: ks_CDT1_E2F and
+    # ks_Geminin_E2F are constants rather than E2F-driven, so licensing is decoupled
+    # from the cycle. Phase 2 connects them alongside the E2F sub-family split.
+    sol = solve_baseline(alpha = PUBLISHED_ALPHA)
+    f = fucci_fractions(sol; window = W)
+
+    @test f[:G1S] == 0.0
+    @test f[:SG2M] < 0.20            # should be ~0.40 for a real mAG window
+    @test f[:negative] > 0.30        # far too many double-negatives
+    @test sum(values(f)) ≈ 1.0
+
+    # The FUCCI-timed S/G2/M is consequently far too short against Fig 2E's 16.38 h.
+    _, log = solve_with_events(alpha = PUBLISHED_ALPHA)
+    s = fate_summary(log; window = W)
+    @test s[:mean_sg2m_fucci] < 5.0
+end
+
+@testset "fucci_state truth table" begin
+    @test fucci_state(0.9, 0.9) === :G1S
+    @test fucci_state(0.9, 0.0) === :G0G1
+    @test fucci_state(0.0, 0.9) === :SG2M
+    @test fucci_state(0.0, 0.0) === :negative
+    @test fucci_state(FUCCI_THRESHOLD, FUCCI_THRESHOLD) === :negative  # strict >
+end
+
+@testset "total_pools restores GemininT" begin
+    # post_process_cc in the source repo has the GemininT block commented out while
+    # plot_fucci_backgrounds reads solution_df.GemininT, so that path would raise.
+    sol = solve_baseline(alpha = PUBLISHED_ALPHA)
+    p = total_pools(sol)
+    @test all(p.GemininT .≈ sol[species_index("Geminin"), :] .+
+                            sol[species_index("Geminin_CDT1"), :])
+    @test maximum(p.GemininT) > maximum(sol[species_index("Geminin"), :])
+    for k in (:WEE1T, :PLK1T, :APCCT)
+        @test all(isfinite, getfield(p, k))
+    end
+end
+
+end # testset
+

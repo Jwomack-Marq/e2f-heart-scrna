@@ -35,6 +35,12 @@ using FindPeaks1D
 export state, state_names, params, modelDiffEq!
 export solve_baseline, solve_drug, doubling_time, peak_period, species_index
 export PUBLISHED_ALPHA, PUBLISHED_DOUBLING_TIME, PARAMFILE_ALPHA
+# observables
+export total_pools, fucci_state, fucci_fractions, phase_times, FUCCI_THRESHOLD
+# events
+export EventThresholds, EventLog, solve_with_events, landmark_callbacks, trim
+# fates
+export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary, FATES_PHASE1
 
 # ---------------------------------------------------------------------------
 # The inherited core, verbatim.
@@ -211,5 +217,13 @@ function peak_period(sol, species::AbstractString = "CCNB_CDK1";
     length(peaks) < 2 && return NaN
     return mean(diff(t_sub[peaks]))
 end
+
+# ---------------------------------------------------------------------------
+# Phase 1: observables, discrete landmarks, fate classification.
+# These add no biology and no parameters — they only measure the inherited model.
+# ---------------------------------------------------------------------------
+include("observables.jl")
+include("events.jl")
+include("fates.jl")
 
 end # module
