@@ -26,13 +26,13 @@ observables, which gg2009 lacks — along with `LMNA/LMNAp` for envelope breakdo
 for anaphase, and `p21`.
 
 Added in Phase 2: the E2F sub-family split (`E2F6`, `E2F7`, `E2F8`) and the cytokinesis
-arm (`Ect2`, `RhoA`, `Centralspindlin`, `AurKB`, `Anillin`, `Midbody`). Still to add: the
-maturation axis `M`, `Ccng1`, `p27`. The test suite asserts the absent ones are absent,
-so a half-landed module cannot go unnoticed.
+arm (`Ect2`, `RhoA`, `Centralspindlin`, `AurKB`, `Anillin`, `Midbody`), and the maturation
+axis `M`. Still to add: `Ccng1` and `p27`. The test suite asserts the absent ones are
+absent, so a half-landed module cannot go unnoticed.
 
-## Status: Phase 2 steps 1–3 complete
+## Status: Phase 2 steps 1–4 complete
 
-**332 tests pass** (52 Phase 0, 139 Phase 1, 68 Phase 2 steps 1–2, 73 step 3). The source repo has no test suite, so these
+**392 tests pass** (52 Phase 0, 139 Phase 1, 68 steps 1–2, 73 step 3, 60 step 4). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
@@ -184,8 +184,9 @@ src/
   observables.jl    FUCCI states and fractions, total pools, phase durations
   events.jl         EventThresholds, EventLog, root-found cell-cycle landmarks
   fates.jl          Cycle, classification, nuclei/ploidy/cell bookkeeping
-  tier2_model.jl    extended state/params/RHS: E2F split, cytokinesis arm
-test/runtests.jl    332 tests: the Phase 0, 1 and 2 gates
+  tier2_model.jl    extended state/params/RHS: E2F split, cytokinesis arm, maturation
+  contexts.jl       the six named contexts, read from Tier 1's manifest
+test/runtests.jl    392 tests: the Phase 0, 1 and 2 gates
 scripts/            (Phase 3+)
 ```
 
@@ -373,9 +374,77 @@ trajectory can only ever return one fate.
 - Phase 1's `:MitoticCompletion` label is preserved when the arm is off. Reporting
   `:Binucleation` merely because no midbody formed would be a guess dressed as a result.
 
-## Next: Phase 2 steps 4–5
+### Step 4: the maturation axis
 
-Steps 1–3 are done (step 1 rejected; steps 2–3 wired and inert by default). Remaining:
+`M` is a parameter, not a state — a developmental coordinate that is effectively constant
+over one cell cycle. The six named contexts are **read from Tier 1's manifest**
+(`../cmcycle/data/cmfate_model.toml`) rather than duplicated, so the two tiers cannot
+drift on what "P7 mouse" means.
+
+#### The couplings cost one parameter, not two
+
+Baniol measured `Ect2 ~ M` at **−0.563** and `E2f6 ~ M` at **+0.396** within cycling
+ventricular cardiomyocytes (n = 89, P0 and P7 pooled so stage cannot be doing the work).
+But `M` is `mean z(FAO) − mean z(glycolysis)`, z-scored *within* one 285-cell dataset, and
+`../MODEL.md` is explicit that it "has no absolute cross-system scale".
+
+A correlation between two z-scored quantities is a regression slope in z-units. So what
+the measurement actually fixes is the **sign** of each coupling and their **ratio**,
+−0.563 / +0.396 = **−1.422**, which is scale-free and therefore transfers even though
+neither slope does. It does *not* fix absolute strength.
+
+The honest parameterisation is therefore one shared `maturation_gain` with the ratio
+welded in, not two independent slopes — one fitted parameter for the whole axis instead of
+two. That is the difference between using the measurement and merely citing it. Ect2 is
+suppressed through a saturating denominator so it cannot go negative at `adult`'s M = 0.95.
+
+#### Maturation closes the abscission arm
+
+Tier 1's mechanism, reproduced. Ect2 and the midbody fall monotonically with M and the
+fate switches inside the observed range:
+
+| context | M | Division | Binucleation | Ect2 | midbody | period |
+|---|---|---|---|---|---|---|
+| `hipsc_cm` | 0.12 | **6** | 0 | 0.434 | 0.0742 | 39.33 |
+| `mouse_p0_invivo` | 0.30 | **6** | 0 | 0.396 | 0.0609 | 39.33 |
+| `mouse_p1_invivo` | 0.50 | **6** | 0 | 0.362 | 0.0508 | 39.32 |
+| `mouse_p7_invivo` | 0.55 | 0 | **6** | 0.354 | 0.0487 | 39.34 |
+| `adult` | 0.95 | 0 | **6** | 0.302 | 0.0369 | 39.33 |
+
+The period does not move with M (spread 0.05 %, and the two contexts sharing M = 0.50 give
+bit-identical periods) — the arm reads the cycle without driving it, as designed.
+
+**`mncm_invitro` and `mouse_p1_invivo` are currently indistinguishable**: both sit at
+M = 0.50 and differ only in `InVitro`, `ROSenv` and the adrenergic inputs, which belong to
+the signalling layer in step 5. Tier 1 separates them (Polyploidization vs Binucleation)
+through the ROS→DDR arm, so Tier 2 cannot reproduce the full clonidine triad until step 5
+lands. Stated rather than glossed.
+
+#### Two knobs, deliberately not one preset
+
+`MATURATION_ON` carries only the Ect2 coupling — the **fate** knob. `E2F6_EXIT_ON` carries
+E2F6, which Tier 1 calls the "cell-cycle exit enforcer" and which acts on the **period**:
+at M = 0.55 the cycle runs 39.3 h at `ks_E2F6 = 0`, 48.1 h at 0.01, 57.7 h at 0.02, 85.6 h
+at 0.05. They calibrate against different data — fate fractions versus cycling fractions —
+so folding them together would tie two independent Phase 3 targets to one number. Measured
+with both on at once at their first-guess values: everything binucleates and the period
+stretches to 100 h, because the knobs fight.
+
+#### A real bug the step surfaced
+
+Turning E2F6 on drove the solver to `MaxIters` at t = 1518 after 2×10⁶ steps. Cause: total
+geminin spends 12–19 % of each cycle within ±10 % of the FUCCI cutoff, and a
+`ContinuousCallback` on a level a signal lingers near re-triggers and restarts the step
+every time — **995,356 logged crossings** in one run. A refractory guard cleaned the log
+but not the solver cost; the fix is a Schmitt-trigger deadband on every detector, which
+removes the chatter at source. Recorded times are unchanged (the trigger still fires at
+the true level; only re-arming uses the deadband) and the callbacks now cost almost
+nothing — 7,602 steps against 7,045 with no events at all. Pinned by regression test,
+because this would have been far more painful to find inside a 10⁵-run Phase 3 ensemble.
+
+## Next: Phase 2 step 5
+
+Steps 1–4 are done (step 1 rejected; steps 2–4 wired and inert by default). Remaining:
 
 3. **The cytokinesis arm** — Ect2 → RhoA → Centralspindlin/AurKB/Anillin → Midbody, with
    RhoA obligatory (Tier 1 learned that the hard way four times: an OR'd bypass made it

@@ -471,7 +471,8 @@ end
 
 @testset "extended vectors keep the inherited layout" begin
     @test length(tier2_state()) == 63 + length(TIER2_SPECIES)
-    @test length(tier2_params()) == 218 + 31
+    # Tripwire: bumps by design as each step lands. Currently 33 Tier-2 params.
+    @test length(tier2_params()) == 218 + 33
     @test tier2_state_names()[1:63] == state_names()
     # New components MUST come last: diff_eqns.jl destructures positionally.
     @test tier2_state_names()[64:end] == collect(TIER2_SPECIES)
@@ -769,6 +770,160 @@ end
     bm = bookkeep(mixed)
     @test bm.cells == 4.0
     @test bm.nuclei == 2.0
+end
+
+end # testset
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 step 4: the maturation axis.
+# ---------------------------------------------------------------------------
+
+@testset "CmTier2 — Phase 2 step 4 (maturation)" begin
+
+@testset "contexts come from Tier 1, not a copy" begin
+    # If a context drifts between tiers that is a bug, not a configuration -- cross-tier
+    # comparison is only meaningful if both tiers mean the same cell.
+    @test isfile(CMFATE_MANIFEST)
+    @test occursin("cmcycle", CMFATE_MANIFEST)
+    c = contexts()
+    @test length(c) == 6
+    for name in ("hipsc_cm", "mncm_invitro", "mouse_p0_invivo", "mouse_p1_invivo",
+                 "mouse_p7_invivo", "adult")
+        @test haskey(c, name)
+    end
+    @test maturation("hipsc_cm") == 0.12
+    @test maturation("mouse_p0_invivo") == 0.30
+    @test maturation("mouse_p7_invivo") == 0.55
+    @test maturation("adult") == 0.95
+    @test context_names()[1] == "hipsc_cm"      # sorted by M
+    @test context_names()[end] == "adult"
+    @test_throws ErrorException maturation("not_a_context")
+end
+
+@testset "the couplings are measured, and cost one parameter not two" begin
+    # M is z-scored within one 285-cell dataset and has no absolute cross-system scale,
+    # so a correlation between two z-scored quantities fixes SIGNS and their RATIO but
+    # not the absolute slopes. Hence one shared gain with the ratio welded in.
+    @test MATURATION_SLOPE_ECT2 == -0.563     # Baniol, cycling vCM, n = 89
+    @test MATURATION_SLOPE_E2F6 == 0.396
+    @test MATURATION_SLOPE_ECT2 < 0 && MATURATION_SLOPE_E2F6 > 0
+    @test MATURATION_SLOPE_ECT2 / MATURATION_SLOPE_E2F6 ≈ -1.4217 atol = 1e-4
+
+    # Inert at M = 0 for any gain -- this is what keeps the axis off by default.
+    for g in (0.0, 1.0, 3.0, 10.0)
+        @test all(maturation_factors(0.0, g) .== (1.0, 1.0))
+    end
+    # Ect2 suppressed, E2F6 raised, monotonically in M.
+    e_prev, f_prev = 1.0, 1.0
+    for M in (0.12, 0.3, 0.5, 0.95)
+        e, f = maturation_factors(M, 3.0)
+        @test e < e_prev && f > f_prev
+        @test e > 0                            # saturating form cannot go negative
+        e_prev, f_prev = e, f
+    end
+    # A linear suppression would have gone negative here; the saturating form does not.
+    @test maturation_factors(0.95, 10.0)[1] > 0
+end
+
+@testset "maturation closes the abscission arm" begin
+    # Tier 1's mechanism: maturation closes E2Fact -> Ect2 -> RhoA -> Midbody. Fate
+    # should switch from division to binucleation as M rises, with nothing else changing.
+    W4 = (1900.0, 2180.0)
+    function at(M)
+        en = merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON), merge(MATURATION_ON, (M = M,)))
+        sol, log = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en,
+                               record_events = true, cytokinesis = true)
+        cyc = classify_cycles(log; window = W4, cytokinesis = true)
+        w = findall(x -> W4[1] <= x <= W4[2], sol.t)
+        (div = count(c -> c.fate === :Division, cyc),
+         bi  = count(c -> c.fate === :Binucleation, cyc),
+         ect2 = maximum(sol[species_index("Ect2"), :][w]),
+         mb = maximum(sol[species_index("Midbody"), :][w]),
+         per = peak_period(sol))
+    end
+    rs = [at(maturation(c)) for c in context_names()]
+
+    @test issorted([r.ect2 for r in rs], rev = true)   # Ect2 falls with maturation
+    @test issorted([r.mb   for r in rs], rev = true)   # and the midbody follows
+    @test rs[1].div > 0 && rs[1].bi == 0               # least mature divides
+    @test rs[end].div == 0 && rs[end].bi > 0           # adult binucleates
+    # The switch happens inside the observed range, not outside it.
+    @test any(r -> r.div > 0, rs) && any(r -> r.bi > 0, rs)
+
+    # The arm reads the cycle but does not drive it, so the period must not move with M.
+    # Measured spread across the six contexts is 39.3215-39.3422 h, i.e. 0.05 % -- and
+    # the two contexts that share M = 0.50 give bit-identical periods, which is what
+    # says the residual is step-selection noise rather than a maturation effect.
+    pers = [r.per for r in rs]
+    @test maximum(pers) - minimum(pers) < 0.1
+    @test rs[3].per == rs[4].per        # mouse_p1_invivo and mncm_invitro, both M = 0.50
+end
+
+@testset "E2F6 is the exit enforcer, and acts on the period" begin
+    # A separate knob from the Ect2 coupling, on a separate observable. Tier 1 labels
+    # E2f6 "cell-cycle exit enforcer"; here rising E2F6 lengthens the cycle toward exit.
+    function per(ks6)
+        en = merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON),
+                   merge(MATURATION_ON, (M = 0.55, ks_E2F6 = ks6)))
+        peak_period(solve_tier2(alpha = PUBLISHED_ALPHA, enable = en))
+    end
+    ps = [per(k) for k in (0.0, 0.005, 0.01, 0.02, 0.05)]
+    @test all(isfinite, ps)
+    @test issorted(ps)                    # more E2F6, longer cycle
+    @test ps[end] > 2 * ps[1]             # and the effect is large
+    @test E2F6_EXIT_ON.ks_E2F6 > 0
+    @test !haskey(MATURATION_ON, :ks_E2F6)   # the two presets stay separate
+end
+
+@testset "M = 0 keeps the reduction bit-exact" begin
+    st = 0; worst = 0.0
+    for _ in 1:50
+        u63, u66 = state(), tier2_state()
+        for s in state_names()
+            st = (1103515245 * st + 12345) % 2147483648
+            v = 0.8 * st / 2147483648
+            u63[Symbol(s)] = v; u66[Symbol(s)] = v
+        end
+        d63, d66 = similar(u63), similar(u66)
+        modelDiffEq!(d63, u63, params(), 0.0)
+        # Non-zero gain, but M = 0, so the axis must still contribute nothing.
+        tier2DiffEq!(d66, u66, tier2_params(maturation_gain = 3.0), 0.0)
+        for i in 1:63
+            worst = max(worst, abs(d66[i] - d63[i]))
+        end
+    end
+    @test worst == 0.0
+end
+
+@testset "REGRESSION: landmark detectors must not chatter" begin
+    # A ContinuousCallback on a level a slowly-varying signal lingers near will re-trigger
+    # every step. Total geminin spends 12-19 % of the cycle within +/-10 % of the FUCCI
+    # cutoff, and with E2F6 repression on that logged 995,356 crossings and drove the
+    # solver to MaxIters at t = 1518 (2e6 steps). Fixed with a Schmitt-trigger deadband
+    # plus a refractory guard. This pins both.
+    thr = EventThresholds()
+    @test thr.hysteresis > 0
+    @test thr.refractory > 0
+
+    en = merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON),
+               merge(MATURATION_ON, (M = 0.55, ks_E2F6 = 0.05)))
+    sol, log = solve_tier2(alpha = PUBLISHED_ALPHA, enable = en,
+                           record_events = true, cytokinesis = true)
+    @test string(sol.retcode) == "Success"
+    @test sol.t[end] == 2500.0
+    @test length(sol.t) < 100_000                 # was 1,995,044
+
+    # One of each landmark per cycle, not thousands.
+    n = length(log.restriction)
+    @test 0 < n < 200
+    for v in (log.s_entry, log.neb, log.anaphase, log.mitotic_exit, log.geminin_on)
+        @test abs(length(v) - n) <= 2
+    end
+    # Recorded times still respect the refractory gap.
+    for v in (log.restriction, log.geminin_on, log.mitotic_exit)
+        length(v) > 1 && @test minimum(diff(sort(v))) > thr.refractory
+    end
 end
 
 end # testset

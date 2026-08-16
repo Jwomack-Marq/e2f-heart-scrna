@@ -31,6 +31,7 @@ using ComponentArrays
 using DifferentialEquations
 using Statistics
 using FindPeaks1D
+using TOML
 
 export state, state_names, params, modelDiffEq!
 export solve_baseline, solve_drug, doubling_time, peak_period, species_index
@@ -45,7 +46,10 @@ export Cycle, Bookkeeping, classify_cycles, quiescent, bookkeep, fate_summary
 export FATES_PHASE1, FATES
 # tier 2 model
 export tier2_state, tier2_state_names, tier2_params, tier2DiffEq!, solve_tier2
-export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON
+export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON, E2F_SPLIT_ON, MATURATION_ON, E2F6_EXIT_ON
+export maturation_factors, MATURATION_SLOPE_ECT2, MATURATION_SLOPE_E2F6
+# contexts (shared with Tier 1)
+export contexts, maturation, context_names, CMFATE_MANIFEST
 
 # ---------------------------------------------------------------------------
 # The inherited core, verbatim.
@@ -242,5 +246,6 @@ include("fates.jl")
 # each identically zero at default parameters — see tier2_model.jl.
 # ---------------------------------------------------------------------------
 include("tier2_model.jl")
+include("contexts.jl")
 
 end # module

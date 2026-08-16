@@ -35,6 +35,28 @@ Base.@kwdef struct EventThresholds
     restriction::Float64  = 0.073   # ppRB,      0.50 x baseline peak 0.1466
     geminin_on::Float64   = FUCCI_THRESHOLD  # total geminin, the published FUCCI cutoff
     abscission::Float64   = 0.050  # Midbody; only used when the cytokinesis arm is on
+
+    # Minimum gap between two recordings of the SAME landmark, in hours.
+    #
+    # Not cosmetic. A ContinuousCallback on a level that a slowly-varying signal happens
+    # to sit near will chatter: with E2F6 repression on, total geminin hovers at the
+    # FUCCI cutoff and logged 995,356 crossings in one run, driving the solver into
+    # maxiters at t = 1518. Every landmark here is once-per-cycle and the shortest cycle
+    # observed is ~28 h, so 1 h is far below any real inter-event gap and far above the
+    # chatter.
+    refractory::Float64   = 1.0
+
+    # Schmitt-trigger deadband, as a fraction of each level.
+    #
+    # The refractory guard above cleans the LOG but not the solver: a ContinuousCallback
+    # still root-finds and restarts the step at every crossing it detects, so a signal
+    # lingering near its level costs real work even when the extra events are discarded.
+    # Total geminin spends 12-19 % of each cycle within +/-10 % of the FUCCI cutoff, and
+    # that was enough to drive 2e6 steps and a MaxIters abort at t = 1518.
+    #
+    # With hysteresis the detector must see the signal move away by this fraction before
+    # it will fire again, which removes the chatter at source rather than after the fact.
+    hysteresis::Float64   = 0.25
 end
 
 """
@@ -91,23 +113,37 @@ index out of bounds.
 """
 function landmark_callbacks(log::EventLog, thr::EventThresholds = EventThresholds();
                             cytokinesis::Bool = false)
-    up(idx, level, sink) = ContinuousCallback(
-        (u, t, integ) -> u[idx] - level,
-        integ -> push!(sink, integ.t),   # up-crossing
-        nothing)
-    down(idx, level, sink) = ContinuousCallback(
-        (u, t, integ) -> u[idx] - level,
-        nothing,
-        integ -> push!(sink, integ.t))   # down-crossing
+    # Refractory-guarded recording: drop a repeat of the same landmark that lands within
+    # `thr.refractory` hours of the previous one. See EventThresholds.refractory.
+    rec!(sink, t) = (isempty(sink) || t - last(sink) > thr.refractory) && push!(sink, t)
+
+    # Schmitt-triggered detectors. `armed` flips the level the condition watches, so once
+    # a landmark fires the signal must retreat past the deadband before it can fire
+    # again. Safe here because the affects only record -- they never touch u or p -- so
+    # switching the condition mid-solve introduces no state discontinuity.
+    function up(idx, level, sink; f = (u, i) -> u[i])
+        lo = level * (1 - thr.hysteresis)
+        armed = Ref(true)
+        ContinuousCallback(
+            (u, t, integ) -> f(u, idx) - (armed[] ? level : lo),
+            integ -> (armed[] && (rec!(sink, integ.t); armed[] = false); nothing),
+            integ -> (armed[] = true; nothing))
+    end
+    function down(idx, level, sink)
+        hi = level * (1 + thr.hysteresis)
+        armed = Ref(true)
+        ContinuousCallback(
+            (u, t, integ) -> u[idx] - (armed[] ? level : hi),
+            integ -> (armed[] = true; nothing),
+            integ -> (armed[] && (rec!(sink, integ.t); armed[] = false); nothing))
+    end
 
     # Total geminin is a sum of two states, so it needs its own condition rather than a
     # single index. This is the green FUCCI channel appearing — the landmark Murganti
     # Fig 2E actually times from.
     ig, igc = species_index("Geminin"), species_index("Geminin_CDT1")
-    geminin_cb = ContinuousCallback(
-        (u, t, integ) -> u[ig] + u[igc] - thr.geminin_on,
-        integ -> push!(log.geminin_on, integ.t),
-        nothing)
+    geminin_cb = up(ig, thr.geminin_on, log.geminin_on;
+                    f = (u, i) -> u[i] + u[igc])
 
     core = (
         up(species_index("ppRB"),      thr.restriction,  log.restriction),

@@ -56,6 +56,36 @@ const CYTOKINESIS_ON = (ks_Ect2_E2F = 0.60, ks_AurKB_CDK1 = 1.20,
                         ks_Anln_E2F = 0.80, ks_CSPG = 1.00,
                         kf_RhoA = 6.00, kf_Midbody = 4.00)
 
+"""Parameter preset switching on the E2F sub-family split (step 2)."""
+const E2F_SPLIT_ON = (ks_E2F7_E2F = 0.20, ks_E2F8_E2F = 0.20)
+
+"""
+Parameter preset switching on the maturation axis (step 4) — the **fate** knob.
+
+Only the Ect2 coupling. `maturation_gain = 3.0` puts the abscission arm's closure inside
+the observed maturation range rather than outside it; it is a provisional placeholder,
+not a fit, and it is the one free scale the axis costs (see `MATURATION_SLOPE_*`).
+
+Deliberately separate from [`E2F6_EXIT_ON`](@ref). The two maturation couplings act on
+different observables and calibrate against different data — Ect2 sets the
+division/binucleation split against the fate fractions, E2F6 sets cell-cycle exit against
+the cycling fractions — so folding them into one preset would tie two independent Phase 3
+targets together. Measured with both on at once: everything binucleates and the period
+stretches to 100 h, because the knobs fight.
+"""
+const MATURATION_ON = (maturation_gain = 3.0,)
+
+"""
+Parameter preset for E2F6 as the cell-cycle **exit** enforcer (Tier 1's label for it).
+
+Its effect is on the period, and it is strong and graded: at M = 0.55 the cycle runs
+39.3 h at `ks_E2F6 = 0`, 48.1 h at 0.01, 57.7 h at 0.02 and 85.6 h at 0.05. That is
+maturation-driven cell-cycle exit, the phenomenon the whole project is about, so where it
+sits is a Phase 3 calibration against the corrected cycling fractions (P0 17.7 %,
+P7 5.5 %) rather than something to choose here. 0.01 is a mild, provisional default.
+"""
+const E2F6_EXIT_ON = (ks_E2F6 = 0.01,)
+
 """
     tier2_state(; kwargs...) -> ComponentVector
 
@@ -113,8 +143,12 @@ function tier2_params(; kwargs...)
         kd_E2F8       = 0.90,
         kd_E2F6       = 0.10,
         kd_E2F8_CCNA  = 2.00,    # CycA-CDK2 clears E2F8 -> G1/S restriction
-        Ki_E2F78      = 0.10,    # repression constant for the E2F7/E2F8 pool
-        Ki_E2F6       = 0.20,    # E2F6 represses more weakly
+        # Repression constants. Raised from an initial 0.10/0.20 after measurement: at
+        # those values an E2F6 level of only 0.06 arrests the oscillator outright, which
+        # leaves no range to calibrate cell-cycle exit over. Inert while the repressors
+        # are absent, so this does not touch the reduction property.
+        Ki_E2F78      = 5.00,    # repression constant for the E2F7/E2F8 pool
+        Ki_E2F6       = 10.00,   # E2F6 represses more weakly (Tier 1's split)
 
         # --- step 3: the cytokinesis arm. Enable switches first. ---
         ks_Ect2_E2F   = 0.0,   # Ect2 transcription, E2F-driven
@@ -137,8 +171,60 @@ function tier2_params(; kwargs...)
         kr_RhoA       = 2.50,  # RhoGAP
         RhoA_tot      = 1.00,  # conserved RhoA pool
         kr_Midbody    = 0.60,
+
+        # --- step 4: the maturation axis. See MATURATION_SLOPE_* for the constraint. ---
+        M               = 0.0,   # maturation coordinate in [0,1]; 0 => no maturation term
+        maturation_gain = 1.0,   # the single free scale for BOTH couplings
     )
     return ComponentVector{Float64}(merge(merge(base, added), kwargs))
+end
+
+# ---------------------------------------------------------------------------
+# The maturation axis, and why it costs ONE parameter rather than two.
+#
+# Baniol measured two couplings within cycling ventricular cardiomyocytes (n = 89, P0 and
+# P7 pooled so developmental stage cannot be doing the work):
+#
+#     Ect2 ~ M   r = -0.563          E2f6 ~ M   r = +0.396
+#
+# `../MODEL.md` calls these "the model's two load-bearing couplings", and making them
+# measured functions "removes its largest degree of freedom".
+#
+# But M is defined as mean z(FAO) - mean z(glycolysis), z-scored WITHIN one 285-cell
+# dataset, so — as MODEL.md states in its limitations — it "has no absolute cross-system
+# scale". A correlation between two z-scored quantities is a regression slope in z-units,
+# so what the measurement actually fixes is:
+#
+#   * the SIGN of each coupling, and
+#   * their RATIO, -0.563 / +0.396 = -1.422, which is scale-free and therefore transfers
+#     across systems even though neither slope does.
+#
+# It does NOT fix the absolute strength. So the honest parameterisation is one shared
+# `maturation_gain` with the ratio welded in, not two independent slopes. That is one
+# fitted parameter for the whole axis instead of two, and it is the difference between
+# using the measurement and merely citing it.
+# ---------------------------------------------------------------------------
+
+"""Baniol Ect2~M within cycling vCM (n = 89). Frozen: measured, not fitted."""
+const MATURATION_SLOPE_ECT2 = -0.563
+
+"""Baniol E2f6~M within cycling vCM (n = 89). Frozen: measured, not fitted."""
+const MATURATION_SLOPE_E2F6 = 0.396
+
+"""
+    maturation_factors(M, gain) -> (ect2, e2f6)
+
+Multipliers on Ect2 and E2F6 synthesis at maturation `M`.
+
+Both are 1.0 at `M = 0`, which is what makes the axis inert by default. Ect2 is
+suppressed through a saturating denominator rather than a linear term, so it cannot go
+negative at high `M` — `adult` sits at M = 0.95 and a linear form with any gain above
+~1.9 would drive synthesis below zero.
+"""
+@inline function maturation_factors(M, gain)
+    ect2 = 1.0 / (1.0 - gain * MATURATION_SLOPE_ECT2 * M)   # slope is negative -> suppression
+    e2f6 = 1.0 + gain * MATURATION_SLOPE_E2F6 * M
+    return ect2, e2f6
 end
 
 """
@@ -182,7 +268,11 @@ function tier2DiffEq!(d, u, p, t)
     d.E2F7 = (p.ks_E2F7_E2F * E2F - p.kd_E2F7 * E2F7) * α
     d.E2F8 = (p.ks_E2F8_E2F * E2F - p.kd_E2F8 * E2F8
               - p.kd_E2F8_CCNA * E2F8 * u.CCNA_CDK2) * α
-    d.E2F6 = (p.ks_E2F6 - p.kd_E2F6 * E2F6) * α
+    # E2F6 sits on its own maturation-driven branch, not the activator programme:
+    # Baniol find E2f1~E2f6 is only +0.18 n.s., while E2f6~M is +0.396 and E2F6 is the
+    # only family member expressed in noncycling cells.
+    f_ect2, f_e2f6 = maturation_factors(p.M, p.maturation_gain)
+    d.E2F6 = (p.ks_E2F6 * f_e2f6 - p.kd_E2F6 * E2F6) * α
 
     # 3. Repression of E2F-driven transcription. `rep - 1` is zero when unrepressed, so
     #    each of these vanishes at default parameters.
@@ -277,7 +367,9 @@ function tier2DiffEq!(d, u, p, t)
     # Ect2: E2F-driven, repressed by E2F8. Tier 1's r071 is `E2Fact & !Maturation &
     # !E2F8 => Ect2`; the !Maturation arm arrives in step 4. This is where the E2F split
     # earns its keep — the repressor it needs already exists.
-    d.Ect2 = (p.ks_Ect2_E2F * E2F * rep / (1 + E2F8 / p.Ki_Ect2_E2F8)
+    # Tier 1's r071 is `E2Fact & !Maturation & !E2F8 => Ect2`. All three arms are now
+    # present: the activator pool, the E2F8 repressor from step 2, and maturation.
+    d.Ect2 = (p.ks_Ect2_E2F * E2F * rep * f_ect2 / (1 + E2F8 / p.Ki_Ect2_E2F8)
               - p.kd_Ect2 * Ect2) * α
 
     # AurKB: chromosomal passenger complex. Mitotic, destroyed by APC/C-Cdh1 at exit.
