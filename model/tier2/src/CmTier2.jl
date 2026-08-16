@@ -32,6 +32,7 @@ using DifferentialEquations
 using Statistics
 using FindPeaks1D
 using TOML
+using Random
 
 export state, state_names, params, modelDiffEq!
 export solve_baseline, solve_drug, doubling_time, peak_period, species_index
@@ -50,6 +51,14 @@ export e2f_repression, TIER2_SPECIES, TIER2_ENABLE_PARAMS, CYTOKINESIS_ON, E2F_S
 export maturation_factors, MATURATION_SLOPE_ECT2, MATURATION_SLOPE_E2F6
 # contexts (shared with Tier 1)
 export contexts, maturation, context_names, context_params, input_value, CMFATE_MANIFEST
+# parameter budget
+export Provenance, FROZEN, INPUT, MEASURED, STRUCTURAL, SWITCH, FITTED
+export PARAM_PROVENANCE, fitted_params, lint_budget, budget_report, total_fitted
+export FITTED_OBSERVATION_PARAMS
+# ensemble
+export run_ensemble, calibrate_sigma, heterogeneous_params, required_n
+export MEASURED_DURATION_CV, MAXITERS_PER_CELL
+export FITTED_BUDGET, FITTED_CEILING
 
 # ---------------------------------------------------------------------------
 # The inherited core, verbatim.
@@ -247,5 +256,7 @@ include("fates.jl")
 # ---------------------------------------------------------------------------
 include("tier2_model.jl")
 include("contexts.jl")
+include("provenance.jl")
+include("ensemble.jl")
 
 end # module

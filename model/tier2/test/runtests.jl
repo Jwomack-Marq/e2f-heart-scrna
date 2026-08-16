@@ -1,6 +1,7 @@
 using Test
 using CmTier2
 using Statistics
+using Random
 
 # ---------------------------------------------------------------------------
 # Phase 0 gate: the ported model reproduces the published one.
@@ -1099,6 +1100,132 @@ end
                   ks_Ccng1_p53 = 0.40, kf_CCNB_Ccng1 = 400.0))
     @test a.P == b.P && a.B == b.B && a.D == b.D
     @test a.n_neb == b.n_neb
+end
+
+end # testset
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: the parameter budget and the population layer.
+# ---------------------------------------------------------------------------
+
+@testset "CmTier2 — Phase 3" begin
+
+@testset "the parameter budget is mechanized, not just documented" begin
+    # Tier 1 enforces its budget with a linter that fails the build. A budget that is
+    # only written down in a README is a budget that drifts.
+    @test isempty(lint_budget())
+
+    # Completeness: every Tier-2 parameter has a declared provenance, and nothing is
+    # declared that does not exist. This is what stops the budget drifting silently when
+    # a later step adds a parameter.
+    declared = Set(keys(PARAM_PROVENANCE))
+    actual = Set(setdiff(collect(keys(tier2_params())), collect(keys(params()))))
+    @test declared == actual
+
+    # The count the paper has to defend.
+    @test total_fitted() == 6
+    @test total_fitted() <= FITTED_BUDGET
+    @test FITTED_BUDGET < FITTED_CEILING      # headroom is the argument
+    @test FITTED_CEILING == 13                # MODEL.md 3.5
+
+    # The linter must actually fail when the budget is exceeded, or it proves nothing.
+    @test !isempty(lint_budget(budget = 2))
+    # Untying the E2F repressors costs a parameter, and the linter must see that.
+    @test length(lint_budget(budget = total_fitted(), tied = false)) > 0
+
+    # The FUCCI cutoff is fitted but is not a tier2_params entry, so it can only be
+    # caught by being declared separately. Assert it is.
+    @test :FUCCI_THRESHOLD in FITTED_OBSERVATION_PARAMS
+
+    # Every fitted parameter carries a justification, not just a label.
+    for k in fitted_params()
+        @test length(PARAM_PROVENANCE[k][2]) > 20
+    end
+    @test occursin("STRUCTURAL", budget_report())    # the grey zone is stated
+end
+
+@testset "heterogeneity perturbs abundances, not chemistry" begin
+    p0 = tier2_params()
+    p = heterogeneous_params(p0, 0.2, Random.Xoshiro(1))
+    nchanged = count(k -> p[k] != p0[k], keys(p0))
+    @test nchanged > 10
+    # Only synthesis rates move. A rate constant is a property of the molecule; an
+    # abundance is a property of the cell.
+    for k in keys(p0)
+        startswith(String(k), "ks_") || @test p[k] == p0[k]
+    end
+    # Lognormal: strictly positive, median 1, so no draw can make synthesis negative.
+    draws = [heterogeneous_params(p0, 0.5, Random.Xoshiro(i))[:ks_CCNE_E2F] for i in 1:400]
+    @test all(>(0), draws)
+    @test 0.7 < Statistics.median(draws) / p0[:ks_CCNE_E2F] < 1.4
+    # sigma = 0 is exactly the unperturbed model.
+    @test heterogeneous_params(p0, 0.0, Random.Xoshiro(1)) == p0
+end
+
+@testset "ensemble sizing is derived from the experiment's own error" begin
+    # There is no value in driving Monte-Carlo error far below the uncertainty in the
+    # measurement being compared against. Murganti's rarest fate is 1.40 % of 570 cells.
+    @test required_n(0.0140) == 57_000       # TODO.md item 4's "1e4-1e5"
+    @test required_n(0.0140, rel = 1.0) == 570   # matching the experiment exactly
+
+    # It does NOT depend on p: both errors are binomial in the same p, so it cancels and
+    # n = n_obs/rel^2. One ensemble size buys the same error ratio for every fate at
+    # once, rather than having to be sized against the rarest.
+    @test required_n(0.05) == required_n(0.0140) == required_n(0.9035)
+    @test required_n(0.0140, rel = 0.2) == required_n(0.0140) / 4
+end
+
+@testset "the ensemble runs, and its noise scale is measured not chosen" begin
+    full = merge(merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON), MATURATION_ON), DDR_ON)
+    en = merge(full, context_params("mouse_p1_invivo"))
+
+    # Deterministic limit: sigma = 0 gives one fate and zero spread.
+    r0 = run_ensemble(n = 24, sigma = 0.0, enable = en)
+    @test r0.failed == 0
+    @test r0.duration_cv ≈ 0.0 atol = 1e-9
+    @test maximum(values(r0.fractions)) == 1.0        # every cell agrees
+    @test sum(values(r0.fractions)) ≈ 1.0
+
+    # Heterogeneity produces GRADED fractions -- the capability Tier 1 structurally
+    # cannot have, since its fates are a product of steady-state gate activities.
+    r1 = run_ensemble(n = 96, sigma = 0.10, enable = en)
+    @test sum(values(r1.fractions)) ≈ 1.0
+    @test count(v -> v > 0, values(r1.fractions)) >= 2
+    @test r1.duration_cv > r0.duration_cv
+
+    # The width is pinned by Baniol's measured duration CV, NOT by the fate fractions --
+    # those are the hold-out, and fitting the noise to them would make the headline
+    # prediction circular. Measured: CV rises 0.000 -> 0.155 -> 0.316 over
+    # sigma 0.00 -> 0.01 -> 0.02, so the target 0.265 lands near 0.016.
+    @test MEASURED_DURATION_CV ≈ 4.0 / 15.1
+    @test 0.25 < MEASURED_DURATION_CV < 0.28
+    cvs = [run_ensemble(n = 96, sigma = s, enable = en).duration_cv
+           for s in (0.0, 0.01, 0.02)]
+    @test issorted(cvs)
+    @test cvs[3] > MEASURED_DURATION_CV > cvs[2]   # the target is bracketed
+
+    # Reproducible: same seed, same answer, independent of thread scheduling.
+    a = run_ensemble(n = 48, sigma = 0.05, enable = en, seed = 7)
+    b = run_ensemble(n = 48, sigma = 0.05, enable = en, seed = 7)
+    @test a.fractions == b.fractions
+    @test run_ensemble(n = 48, sigma = 0.05, enable = en, seed = 8).counts != a.counts
+end
+
+@testset "pathological draws fail fast and are reported, not hidden" begin
+    # Heterogeneity draws occasional parameter sets that are very stiff, and
+    # Threads.@threads makes wall-clock the SLOWEST cell -- at a 2e6 step cap one bad
+    # draw stalled a 64-cell run past 13 minutes. The cap is sized from measurement: a
+    # healthy cell needs ~7,600 steps.
+    @test MAXITERS_PER_CELL == 100_000
+    @test MAXITERS_PER_CELL > 10 * 7_600
+    full = merge(merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON), MATURATION_ON), DDR_ON)
+    r = run_ensemble(n = 96, sigma = 0.10,
+                     enable = merge(full, context_params("mouse_p1_invivo")))
+    @test r.scored + r.failed == r.n          # nothing silently dropped
+    @test r.failed / r.n < 0.05               # and failures stay rare
+    # Fractions are over SCORED cells, so a failure cannot masquerade as a fate.
+    @test sum(values(r.fractions)) ≈ 1.0
 end
 
 end # testset

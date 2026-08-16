@@ -31,9 +31,9 @@ axis `M`, and the oxidative-stress/DDR arm (`Ccng1`). `p27` is deliberately defe
 see step 5. The test suite asserts the absent ones are absent, so a half-landed module
 cannot go unnoticed.
 
-## Status: Phase 2 complete
+## Status: Phase 2 complete; Phase 3 partial
 
-**441 tests pass** (52 Phase 0, 139 Phase 1, 75 steps 1–2, 72 step 3, 60 step 4, 43 step 5). The source repo has no test suite, so these
+**712 tests pass** (52 Phase 0, 139 Phase 1, 250 Phase 2, 271 Phase 3). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
@@ -187,7 +187,9 @@ src/
   fates.jl          Cycle, classification, nuclei/ploidy/cell bookkeeping
   tier2_model.jl    extended state/params/RHS: E2F split, cytokinesis arm, maturation
   contexts.jl       the six named contexts, read from Tier 1's manifest
-test/runtests.jl    441 tests: the Phase 0, 1 and 2 gates
+  provenance.jl     parameter budget: provenance registry + linter
+  ensemble.jl       the population layer: lognormal heterogeneity, fate fractions
+test/runtests.jl    712 tests
 scripts/            (Phase 3+)
 ```
 
@@ -520,7 +522,98 @@ arm live. `fix_p53_massbalance` defaults **off** so the reduction property stays
 produced adult cycling faster than P0 (39.3 h against 52.2 h), which is backwards. Puente
 2014, the source of this arm, is precisely about postnatal ROS rising. Fixed and pinned.
 
-## Next: Phase 3 — calibration and the population layer
+## Phase 3 (partial): budget, ensemble, and a vacuous KO prediction
+
+### The parameter budget, mechanized
+
+Tier 1 enforces its budget with a linter that fails the build; a budget that lives only in
+a README drifts. `src/provenance.jl` declares every one of the 41 Tier-2 parameters with a
+provenance, and `lint_budget()` fails if any parameter is undeclared, any declaration is
+stale, or the fitted count exceeds budget.
+
+| provenance | n | |
+|---|---|---|
+| `INPUT` | 3 | context variables from Tier 1's manifest |
+| `MEASURED` | 1 | fixed by a number in the papers |
+| `STRUCTURAL` | 30 | biologically motivated, **not tuned against any target** |
+| `SWITCH` | 1 | on/off gate |
+| `FITTED` | 6 | counts against budget |
+
+**Total fitted: 6** — 5 model parameters (`ks_E2F8_E2F` is tied to `ks_E2F7_E2F`; Baniol
+measure them at +0.46 and +0.49, so resolving them separately spends a parameter the data
+cannot support) plus `FUCCI_THRESHOLD`. Budget 8, ceiling 13, Tier 1 spends 4.
+
+`STRUCTURAL` at 30 is the honest grey zone and the paper must say so: not fitted, but not
+measured either.
+
+### The population layer works
+
+`../TODO.md` item 4, which is *blocked* in Tier 1 on performance. Here: 352 cells in 47 s
+on 88 threads, reproducible by seed, with pathological draws capped and reported rather
+than hidden (`MAXITERS_PER_CELL = 100_000`, sized against a healthy cell's ~7,600 steps —
+at a 2×10⁶ cap one bad draw stalled a 64-cell run past 13 minutes).
+
+Heterogeneity is lognormal on **synthesis rates only**: a rate constant is a property of
+the molecule, an abundance is a property of the cell. And it produces genuinely graded fate
+fractions, which is the capability Tier 1 structurally cannot have.
+
+**The noise width is measured, not chosen.** σ is set by matching Baniol's duration CV
+(4.0/15.1 = 0.265), never by the fate fractions — those are the hold-out, and fitting the
+noise to them would make the headline prediction circular:
+
+| σ | duration CV |
+|---|---|
+| 0.000 | 0.000 |
+| 0.014 | 0.231 |
+| **0.016** | **0.256** ← target 0.265 |
+| 0.018 | 0.285 |
+
+Ensemble sizing is derived rather than guessed — and the derivation turned up something
+useful. Requiring the Monte-Carlo error to be `rel` times the experiment's own binomial
+error gives `n = n_obs/rel²`, **independent of the fate's frequency**: both errors are
+binomial in the same `p`, so it cancels exactly. One ensemble size therefore buys the same
+error ratio for every fate at once. At Murganti's 570 cells, `rel = 0.1` gives 57,000 runs
+and covers the 1.40 % polyploidization and the 90.35 % quiescent fraction alike.
+
+### KNOWN FAILURE: the E2f7/E2f8 KO prediction is vacuous at present
+
+Run at the calibrated σ = 0.016, n = 1408 per arm:
+
+| context | genotype | Q | D | B | P |
+|---|---|---|---|---|---|
+| `mouse_p0_invivo` | WT | 0.000 | **0.000** | 1.000 | 0.000 |
+| `mouse_p0_invivo` | KO | 0.000 | **0.000** | 0.956 | 0.044 |
+| `mouse_p7_invivo` | WT | 0.000 | **0.000** | 1.000 | 0.000 |
+| `mouse_p7_invivo` | KO | 0.000 | **0.000** | 0.956 | 0.044 |
+
+ΔDivision = 0.0000 at **both** ages, against Tier 1's +0.107 at P0 versus +0.005 at P7.
+The model cannot express the KO's pro-division effect because **division does not occur
+anywhere in the mouse contexts** once the DDR arm is on.
+
+The cause is an interaction found in step 5 and not yet resolved: the Ccng1 brake lowers
+MPF, which lowers AurKB (`ks_AurKB_CDK1 * CCNB_CDK1`), which lowers centralspindlin, which
+lowers RhoA and the midbody. So the DDR arm suppresses the *cytokinesis* arm as a side
+effect, and at the current placeholder values it suppresses it everywhere. The knockdown
+does show a real effect — it converts 4.4 % of binucleations to polyploidizations — but
+that is not the observable Tier 1 predicts and it is identical at both ages, so it carries
+no information about the P0/P7 contrast.
+
+**This is a consequence of the fitted parameters still being at placeholder values.** The
+budget is declared and the machinery is built, but the five model parameters have not yet
+been estimated against the target set. Until they are, the KO prediction is not a
+prediction.
+
+### What Phase 3 still needs
+
+1. **Actually calibrate the five fitted parameters** against the disjoint target set
+   (durations + FUCCI fractions), holding out the fate fractions. Everything above is
+   machinery plus the σ calibration; the estimation itself is not done.
+2. Re-run the KO prediction afterwards — it only becomes meaningful once division occurs
+   at P0.
+3. Resolve or bound the DDR→cytokinesis interaction, which may need the AurKB drive to
+   come from something other than MPF level.
+
+## Next: Phase 4
 
 Phase 2 is complete. Remaining from its original list, deferred with reasons:
 
