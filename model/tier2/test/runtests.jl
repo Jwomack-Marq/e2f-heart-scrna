@@ -471,11 +471,12 @@ end
 
 @testset "extended vectors keep the inherited layout" begin
     @test length(tier2_state()) == 63 + length(TIER2_SPECIES)
-    # Tripwire: bumps by design as each step lands. Currently 33 Tier-2 params.
-    @test length(tier2_params()) == 218 + 33
+    # Tripwire: bumps by design as each step lands. Currently 41 Tier-2 params.
+    @test length(tier2_params()) == 218 + 41
     @test tier2_state_names()[1:63] == state_names()
     # New components MUST come last: diff_eqns.jl destructures positionally.
     @test tier2_state_names()[64:end] == collect(TIER2_SPECIES)
+    @test length(TIER2_SPECIES) == 10      # tripwire: bumps by design as steps land
     @test collect(keys(tier2_params()))[1:218] == collect(keys(params()))
     for s in TIER2_SPECIES
         @test species_index(s) > 63
@@ -629,8 +630,8 @@ const W3 = (1900.0, 2180.0)
 @testset "CmTier2 — Phase 2 step 3 (cytokinesis)" begin
 
 @testset "the arm is inert until switched on" begin
-    # Nine new species now, and the reduction property must survive all of them.
-    @test length(TIER2_SPECIES) == 9
+    # The reduction property must survive every new species. The total count is a
+    # tripwire in the layout testset; here we only care that the arm's six are present.
     for s in ("Ect2", "RhoA", "Centralspindlin", "AurKB", "Anillin", "Midbody")
         @test s in TIER2_SPECIES
         @test species_index(s) > 63
@@ -924,6 +925,180 @@ end
     for v in (log.restriction, log.geminin_on, log.mitotic_exit)
         length(v) > 1 && @test minimum(diff(sort(v))) > thr.refractory
     end
+end
+
+end # testset
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 step 5: oxidative stress -> DDR -> Ccng1 -> the mitotic-entry brake.
+# ---------------------------------------------------------------------------
+
+const FULL = merge(merge(merge(E2F_SPLIT_ON, CYTOKINESIS_ON), MATURATION_ON), DDR_ON)
+const W5 = (1900.0, 2400.0)
+
+fates_at(over; base = FULL, tspan = (0.0, 2600.0)) = begin
+    sol, log = solve_tier2(alpha = PUBLISHED_ALPHA, enable = merge(base, over),
+                           tspan = tspan, record_events = true, cytokinesis = true)
+    cyc = classify_cycles(log; window = W5, cytokinesis = true)
+    (sol = sol, log = log,
+     D = count(c -> c.fate === :Division, cyc),
+     B = count(c -> c.fate === :Binucleation, cyc),
+     P = count(c -> c.fate === :Polyploidization, cyc),
+     n_neb = length(trim(log, W5).neb), n_s = length(trim(log, W5).s_entry))
+end
+
+@testset "CmTier2 — Phase 2 step 5 (DDR)" begin
+
+@testset "context inputs honour Tier 1's default_on semantics" begin
+    # REGRESSION. An input on the manifest's default_on list that a context does not name
+    # sits at 1.0, not 0. Reading unlisted-as-zero gave the adult heart no oxidative
+    # stress and produced adult cycling FASTER than P0 (39.3 h vs 52.2 h) -- backwards,
+    # and exactly the kind of silent mis-mapping that would poison Phase 3.
+    @test context_params("adult").ROSenv == 1.0      # not named by `adult`; default_on
+    @test context_params("adult").InVitro == 0.0     # named explicitly
+    @test context_params("mouse_p1_invivo").ROSenv == 0.20
+    @test context_params("hipsc_cm").InVitro == 1.0
+    @test context_params("mncm_invitro").M == 0.50
+    # InVitro is NOT on default_on, so an unlisted InVitro is 0 rather than 1.
+    manifest = contexts()
+    @test !haskey(manifest["adult"]["inputs"], "ROSenv")
+end
+
+@testset "the arm is inert until switched on, and reduction survives" begin
+    @test "Ccng1" in TIER2_SPECIES
+    @test species_index("Ccng1") > 63
+    sol = solve_tier2(alpha = PUBLISHED_ALPHA)
+    @test abs(sol(2000.0)[species_index("Ccng1")]) < 1e-30
+
+    # Bit-exact reduction with the DDR block present and ROS inputs set: the arm is
+    # still gated off by ks_ATM_ROS = 0, and fix_p53_massbalance defaults off so the
+    # claim holds for ANY state rather than only the reachable ones where Chk2p = 0.
+    st = 0; worst = 0.0
+    for _ in 1:50
+        u63, u66 = state(), tier2_state()
+        for s in state_names()
+            st = (1103515245 * st + 12345) % 2147483648
+            v = 0.8 * st / 2147483648
+            u63[Symbol(s)] = v; u66[Symbol(s)] = v
+        end
+        # Chk2p must be zero for the reduction to hold; the inherited model guarantees
+        # that dynamically, so pin it here rather than randomising it.
+        d63, d66 = similar(u63), similar(u66)
+        modelDiffEq!(d63, u63, params(), 0.0)
+        tier2DiffEq!(d66, u66, tier2_params(ROSenv = 0.5, InVitro = 1.0), 0.0)
+        for i in 1:63
+            worst = max(worst, abs(d66[i] - d63[i]))
+        end
+    end
+    @test worst == 0.0
+end
+
+@testset "the p53 mass-balance defect is fixed" begin
+    # d.p53p gained p53p at a rate independent of available p53. With the arm live that
+    # is no longer harmless. The fix restores the *p53 factor that d.p53's loss term has.
+    src = read(joinpath(@__DIR__, "..", "src", "inherited", "diff_eqns.jl"), String)
+    @test occursin("d.p53p = ((kf_p53p*Chk2p)-kr_p53p*PPase*p53p) * α", src)  # still broken upstream
+
+    u = tier2_state(); u.Chk2p = 0.5; u.p53 = 0.3; u.PPase = 1.0; u.p53p = 0.1
+    d_fixed  = similar(u); d_broken = similar(u)
+    tier2DiffEq!(d_fixed,  u, tier2_params(fix_p53_massbalance = 1.0), 0.0)
+    tier2DiffEq!(d_broken, u, tier2_params(fix_p53_massbalance = 0.0), 0.0)
+    @test d_fixed.p53p != d_broken.p53p
+
+    # Fixed: the p53 -> p53p flux in d.p53p matches the loss term in d.p53 exactly, so
+    # the pair is conserved under phosphorylation. Broken: it does not.
+    p = tier2_params()
+    flux = p.kf_p53p * u.Chk2p * u.p53 * p.α
+    @test d_fixed.p53p ≈ (p.kf_p53p * u.Chk2p * u.p53 - p.kr_p53p * u.PPase * u.p53p) * p.α
+    @test !isapprox(d_broken.p53p, d_fixed.p53p; rtol = 1e-6)
+end
+
+@testset "ROS drives the DDR cascade" begin
+    peak(sol, s) = (w = findall(x -> W5[1] <= x <= W5[2], sol.t);
+                    maximum(sol[species_index(s), :][w]))
+    off = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0, ks_ATM_ROS = 0.0))
+    on  = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0))
+    for s in ("ATMp", "Chk2p", "p53p", "p21", "Ccng1")
+        @test peak(off.sol, s) < 1e-10        # cascade silent without the ROS input
+        @test peak(on.sol, s) > 0             # and live with it
+    end
+    # Monotone in the input, all the way down the cascade.
+    lo = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 0.0))
+    hi = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0))
+    for s in ("ATMp", "p53p", "Ccng1")
+        @test peak(hi.sol, s) > peak(lo.sol, s)
+    end
+end
+
+@testset "culture closes the mitotic-entry brake — the held-out contrast" begin
+    # Tier 1's 2x2: maturation closes the abscission arm, culture closes the
+    # mitotic-entry brake. Step 4 gave the first half; this is the second.
+    #
+    # mouse_p1_invivo and mncm_invitro sit at the SAME M = 0.50 and differ only in
+    # culture, so this contrast isolates the ROS arm. Both are held out -- Tier 1 fitted
+    # neither, and Tier 2 has nothing fitted to either.
+    p1   = fates_at(context_params("mouse_p1_invivo"))
+    mncm = fates_at(context_params("mncm_invitro"))
+
+    @test p1.B > 0 && p1.P == 0            # in vivo: binucleation
+    @test mncm.P > 0 && mncm.B == 0        # in culture: polyploidization
+    # The mechanism must be a blocked mitotic entry with S phase intact -- not simply
+    # fewer cycles. Polyploidization IS S-without-mitosis.
+    @test mncm.n_neb == 0
+    @test mncm.n_s > 0
+    @test p1.n_neb > 0
+end
+
+@testset "the brake acts through MPF, gradedly" begin
+    lm(kb) = (r = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0, kf_CCNB_Ccng1 = kb));
+              w = findall(x -> W5[1] <= x <= W5[2], r.sol.t);
+              (mpf = maximum(r.sol[species_index("CCNB_CDK1"), :][w]),
+               lmnap = maximum(r.sol[species_index("LMNAp"), :][w]), neb = r.n_neb))
+    rs = [lm(k) for k in (0.0, 10.0, 30.0, 80.0, 200.0)]
+    @test issorted([r.mpf for r in rs], rev = true)     # MPF falls with brake strength
+    @test issorted([r.lmnap for r in rs], rev = true)   # and NEB follows it down
+    @test rs[1].neb > 0 && rs[end].neb == 0
+    # NEB stops exactly when LMNAp can no longer reach its threshold.
+    @test rs[end].lmnap < EventThresholds().neb
+    @test rs[1].lmnap > EventThresholds().neb
+end
+
+@testset "KNOWN MISS: hiPSC-CM is predicted polyploid, observed dividing" begin
+    # Tier 1 observes Division at hipsc_cm; Tier 2 predicts Polyploidization. Recorded,
+    # not tuned away.
+    #
+    # Diagnosis: hipsc_cm and mncm_invitro carry the SAME oxidative input (ROSenv 0.25,
+    # InVitro 1.0), so the DDR brake hits them equally and only M distinguishes them --
+    # and M acts on the abscission arm, not on mitotic entry. Tier 1 gets hipsc right
+    # because hipsc IS its calibration context: its MitoticEntry gate is fitted to 0.7698
+    # there, and MODEL.md says plainly that "the fate layer is fitted exactly and predicts
+    # nothing" at that context. Tier 2 has nothing fitted to hipsc, so the miss is a
+    # genuine prediction failure and says the model lacks whatever keeps the DDR response
+    # weak in immature cardiomyocytes.
+    #
+    # NOT fixed by gating the DDR arm on !Maturation. That is one free parameter fitted to
+    # one outcome, and Tier 1 tested the directly analogous move -- gating the clonidine
+    # response on !Maturation -- and REJECTED it: mean fold error went 26 % -> 55 %, worse
+    # than doing nothing.
+    h = fates_at(context_params("hipsc_cm"))
+    @test h.P > 0                    # the miss, asserted so it cannot vanish silently
+    @test h.D == 0
+    # The two in-vitro contexts really do receive identical oxidative input.
+    @test context_params("hipsc_cm").ROSenv == context_params("mncm_invitro").ROSenv
+    @test context_params("hipsc_cm").InVitro == context_params("mncm_invitro").InVitro
+end
+
+@testset "the Ccng1 brake has a parameter degeneracy worth declaring" begin
+    # Only the product ks_Ccng1_p53 * kf_CCNB_Ccng1 / kd_Ccng1 sets the brake strength:
+    # Ccng1 is at quasi-steady state, so halving its synthesis and doubling its effect
+    # is the same model. Phase 3 must fit ONE effective parameter here, not three.
+    a = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0,
+                  ks_Ccng1_p53 = 0.80, kf_CCNB_Ccng1 = 200.0))
+    b = fates_at((M = 0.50, ROSenv = 0.20, InVitro = 1.0,
+                  ks_Ccng1_p53 = 0.40, kf_CCNB_Ccng1 = 400.0))
+    @test a.P == b.P && a.B == b.B && a.D == b.D
+    @test a.n_neb == b.n_neb
 end
 
 end # testset

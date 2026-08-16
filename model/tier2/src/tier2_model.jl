@@ -33,7 +33,9 @@ affecting the reduction.
 const TIER2_ENABLE_PARAMS = (:w_CDT1_E2F, :w_Geminin_E2F, :kd_CDT1_CDK2,
                              :ks_E2F7_E2F, :ks_E2F8_E2F, :ks_E2F6,
                              :ks_Ect2_E2F, :ks_AurKB_CDK1, :ks_Anln_E2F, :ks_CSPG,
-                             :kf_RhoA, :kf_Midbody)
+                             :kf_RhoA, :kf_Midbody,
+                             :ks_ATM_ROS, :ks_Ccng1_p53, :kf_CCNB_Ccng1,
+                             :fix_p53_massbalance)
 
 """
 New species added by Tier 2, appended after the 63 inherited states.
@@ -43,7 +45,8 @@ last and must never be reordered once trajectories are pinned by test.
 """
 const TIER2_SPECIES = ("E2F6", "E2F7", "E2F8",                       # step 2
                        "Ect2", "RhoA", "Centralspindlin",            # step 3
-                       "AurKB", "Anillin", "Midbody")
+                       "AurKB", "Anillin", "Midbody",
+                       "Ccng1")                                      # step 5
 
 """
 Parameter preset that switches the cytokinesis arm on.
@@ -87,6 +90,19 @@ P7 5.5 %) rather than something to choose here. 0.01 is a mild, provisional defa
 const E2F6_EXIT_ON = (ks_E2F6 = 0.01,)
 
 """
+Parameter preset switching on the oxidative-stress / DDR arm (step 5).
+
+`ks_p21` is an INHERITED parameter and is raised here from its shipped `1e-4`. That is
+not a refit: at `1e-4` p21 is identically zero in every published figure, so the value is
+an off-switch rather than an estimate — the source paper's Figure 6 activates the arm the
+same way, by hand. The same applies to `kf_ATMp = 0`, which is why ROS drives ATM through
+a new term instead.
+"""
+const DDR_ON = (ks_ATM_ROS = 0.40, ks_Ccng1_p53 = 0.80,
+                kf_CCNB_Ccng1 = 200.0, ks_p21 = 0.05,
+                fix_p53_massbalance = 1.0)
+
+"""
     tier2_state(; kwargs...) -> ComponentVector
 
 The 63 inherited states in their original order, plus the E2F sub-family repressors.
@@ -98,7 +114,8 @@ function tier2_state(; kwargs...)
     base = NamedTuple(state())
     added = (E2F6 = 0.0, E2F7 = 0.0, E2F8 = 0.0,
              Ect2 = 0.0, RhoA = 0.0, Centralspindlin = 0.0,
-             AurKB = 0.0, Anillin = 0.0, Midbody = 0.0)
+             AurKB = 0.0, Anillin = 0.0, Midbody = 0.0,
+             Ccng1 = 0.0)
     return ComponentVector{Float64}(merge(merge(base, added), kwargs))
 end
 
@@ -175,6 +192,19 @@ function tier2_params(; kwargs...)
         # --- step 4: the maturation axis. See MATURATION_SLOPE_* for the constraint. ---
         M               = 0.0,   # maturation coordinate in [0,1]; 0 => no maturation term
         maturation_gain = 1.0,   # the single free scale for BOTH couplings
+
+        # --- step 5: oxidative stress -> DDR -> Ccng1 -> mitotic-entry brake ---
+        ROSenv          = 0.0,   # environmental oxidative stress (input)
+        InVitro         = 0.0,   # culture flag (input); Tier 1 raises ROS in culture
+        w_InVitro_ROS   = 1.0,   # how much culture adds to ROS
+        ks_ATM_ROS      = 0.0,   # enable switch: ROS -> ATM activation
+        ks_Ccng1_p53    = 0.0,   # enable switch: p53p -> Ccng1
+        kf_CCNB_Ccng1   = 0.0,   # enable switch: Ccng1 -> inhibitory phosphorylation of MPF
+        kd_Ccng1        = 0.30,
+        # Defaults OFF so the reduction property stays UNCONDITIONAL -- bit-exact for
+        # any state, not merely for the dynamically reachable ones where Chk2p = 0.
+        # Travels with DDR_ON, which is exactly when the defect can bite.
+        fix_p53_massbalance = 0.0,
     )
     return ComponentVector{Float64}(merge(merge(base, added), kwargs))
 end
@@ -394,6 +424,53 @@ function tier2DiffEq!(d, u, p, t)
 
     # Midbody. One production term; RhoA and anillin both required.
     d.Midbody = (p.kf_Midbody * RhoA * Anillin - p.kr_Midbody * Midbody) * α
+
+    # ------------------------------------------------------------------
+    # 7. Oxidative stress -> DDR -> Ccng1 -> the mitotic-entry brake.
+    #
+    # Tier 1's other half of the 2x2: "maturation closes the abscission arm, and culture
+    # closes the mitotic-entry brake (ROS -> DDR -> Ccng1/Pkmyt1 -> MitoticEntry,
+    # collapsing mitotic entry from 0.531 in vivo to 0.251 in vitro). Which of the two
+    # shuts first is the whole 2x2." Step 4 built the maturation half; this is the rest.
+    #
+    # ## Turning the arm on is not a refit of a published parameter
+    #
+    # The inherited model SHIPS this arm dormant: `kf_ATMp = 0`, with the damage input
+    # commented out in `d.ATM` as `#-kf_ATMp*(KDDS+sig)`, and `ks_p21 = 1e-4`, which
+    # leaves p21 identically zero in every published figure. Those are off-switches, not
+    # fitted values -- Figure 6 of the source paper activates the arm by hand the same
+    # way. Raising them is enabling shipped-but-unused machinery, not re-estimating
+    # something the manuscript reports.
+    #
+    # ROS enters as an input rather than a state: it is an environmental property of the
+    # culture, constant on the timescale of a cycle, exactly like M.
+    ros = p.ROSenv + p.w_InVitro_ROS * p.InVitro
+    if p.ks_ATM_ROS != 0.0 && ros != 0.0
+        atm_act = p.ks_ATM_ROS * ros * u.ATM * α
+        d.ATM  -= atm_act          # mass-conserving: ATM -> ATMp
+        d.ATMp += atm_act
+    end
+
+    # p53 <-> p53p mass balance. `d.p53p` in the inherited model reads
+    #     (kf_p53p*Chk2p) - kr_p53p*PPase*p53p
+    # while `d.p53`'s matching loss term is `-(kf_p53p*Chk2p)*p53`. The `*p53` factor is
+    # missing on the gain side, so phosphorylation adds p53p at a rate independent of how
+    # much p53 there is, and total p53 is not conserved. Harmless in the published
+    # figures because Chk2p is identically zero there -- which is also why applying the
+    # fix unconditionally does not disturb the reduction property, asserted by test.
+    if p.fix_p53_massbalance != 0.0
+        d.p53p += p.fix_p53_massbalance * p.kf_p53p * u.Chk2p * (u.p53 - 1.0) * α
+    end
+
+    # Ccng1: p53-induced, and the brake on mitotic entry. Implemented as an extra
+    # inhibitory phosphorylation of MPF -- written as a transfer between CCNB_CDK1 and
+    # CCNB_CDK1p so it cannot create or destroy MPF, only inactivate it.
+    d.Ccng1 = (p.ks_Ccng1_p53 * u.p53p - p.kd_Ccng1 * u.Ccng1) * α
+    if p.kf_CCNB_Ccng1 != 0.0
+        brake = p.kf_CCNB_Ccng1 * u.Ccng1 * cdk1 * α
+        d.CCNB_CDK1  -= brake
+        d.CCNB_CDK1p += brake
+    end
 
     return nothing
 end

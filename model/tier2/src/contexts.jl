@@ -56,3 +56,45 @@ end
 Context names sorted by maturation, which is the axis Tier 2 varies.
 """
 context_names() = sort(collect(keys(contexts())); by = maturation)
+
+"""
+    context_params(name) -> NamedTuple
+
+Tier-2 parameter overrides for a named context: the inputs Tier 2 currently consumes,
+read from Tier 1's manifest.
+
+`Maturation`, `ROSenv` and `InVitro` only. `MechLoad`, `BetaAR`, `Nrg1` and `IGF1` belong
+to a signalling layer Tier 2 does not have, so they are deliberately not silently mapped
+onto something else.
+"""
+function context_params(name::AbstractString)
+    ctx = contexts()
+    haskey(ctx, name) ||
+        error("unknown context $(repr(name)); known: $(sort(collect(keys(ctx))))")
+    inp = ctx[name]["inputs"]
+    return (M       = input_value(inp, "Maturation"),
+            ROSenv  = input_value(inp, "ROSenv"),
+            InVitro = input_value(inp, "InVitro"))
+end
+
+"""
+    input_value(inputs, name) -> Float64
+
+Value of one input for a context, honouring Tier 1's `default_on` semantics.
+
+**An unlisted input is not zero.** The manifest declares
+`default_on = ["Maturation", "BetaAR", "MechLoad", "ROSenv", "Nrg1", "IGF1"]`, and an
+input on that list which a context does not name sits at 1.0. Only inputs *not* on the
+list default to 0.
+
+This is not a nicety. `adult` names no `ROSenv`, so reading unlisted-as-zero gave the
+adult heart no oxidative stress at all and produced a plainly wrong ordering — adult
+cycling *faster* than P0 (39.3 h against 52.2 h), because P0's ROSenv = 0.20 engaged the
+DDR brake and adult's implied 1.0 did not. Puente 2014, the source of this model's
+oxidative-stress arm, is precisely about postnatal ROS rising.
+"""
+function input_value(inputs::AbstractDict, name::AbstractString)
+    haskey(inputs, name) && return Float64(inputs[name])
+    manifest = TOML.parsefile(CMFATE_MANIFEST)
+    return name in get(manifest, "default_on", String[]) ? 1.0 : 0.0
+end

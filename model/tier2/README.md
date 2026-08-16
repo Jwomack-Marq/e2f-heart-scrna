@@ -27,12 +27,13 @@ for anaphase, and `p21`.
 
 Added in Phase 2: the E2F sub-family split (`E2F6`, `E2F7`, `E2F8`) and the cytokinesis
 arm (`Ect2`, `RhoA`, `Centralspindlin`, `AurKB`, `Anillin`, `Midbody`), and the maturation
-axis `M`. Still to add: `Ccng1` and `p27`. The test suite asserts the absent ones are
-absent, so a half-landed module cannot go unnoticed.
+axis `M`, and the oxidative-stress/DDR arm (`Ccng1`). `p27` is deliberately deferred —
+see step 5. The test suite asserts the absent ones are absent, so a half-landed module
+cannot go unnoticed.
 
-## Status: Phase 2 steps 1–4 complete
+## Status: Phase 2 complete
 
-**392 tests pass** (52 Phase 0, 139 Phase 1, 68 steps 1–2, 73 step 3, 60 step 4). The source repo has no test suite, so these
+**441 tests pass** (52 Phase 0, 139 Phase 1, 75 steps 1–2, 72 step 3, 60 step 4, 43 step 5). The source repo has no test suite, so these
 are the first the inherited model has had.
 
 `src/inherited/` is a **byte-identical** copy of the published `model_files/`
@@ -186,7 +187,7 @@ src/
   fates.jl          Cycle, classification, nuclei/ploidy/cell bookkeeping
   tier2_model.jl    extended state/params/RHS: E2F split, cytokinesis arm, maturation
   contexts.jl       the six named contexts, read from Tier 1's manifest
-test/runtests.jl    392 tests: the Phase 0, 1 and 2 gates
+test/runtests.jl    441 tests: the Phase 0, 1 and 2 gates
 scripts/            (Phase 3+)
 ```
 
@@ -442,9 +443,86 @@ the true level; only re-arming uses the deadband) and the callbacks now cost alm
 nothing — 7,602 steps against 7,045 with no events at all. Pinned by regression test,
 because this would have been far more painful to find inside a 10⁵-run Phase 3 ensemble.
 
-## Next: Phase 2 step 5
+### Step 5: oxidative stress → DDR → Ccng1 → the mitotic-entry brake
 
-Steps 1–4 are done (step 1 rejected; steps 2–4 wired and inert by default). Remaining:
+The other half of Tier 1's 2×2. Step 4 built maturation closing the abscission arm; this
+is culture closing the mitotic-entry brake.
+
+**Turning the arm on is not a refit.** The inherited model *ships* it dormant:
+`kf_ATMp = 0`, with the damage input commented out in `d.ATM`, and `ks_p21 = 1e-4`, which
+leaves p21 identically zero in every published figure. Those are off-switches, not
+estimates — the source paper's own Figure 6 activates the arm by hand the same way.
+
+ROS enters as an input, not a state: it is a property of the environment, constant on the
+timescale of a cycle, exactly like `M`.
+
+#### The held-out contrast works
+
+`mouse_p1_invivo` and `mncm_invitro` sit at the **same M = 0.50** and differ only in
+culture, so the pair isolates the ROS arm. Tier 1 fitted neither and Tier 2 has nothing
+fitted to either:
+
+| context | M | ROSenv | InVitro | predicted | Tier 1 observed |
+|---|---|---|---|---|---|
+| `hipsc_cm` | 0.12 | 0.25 | 1.0 | Polyploidization | Division ❌ |
+| `mouse_p1_invivo` | 0.50 | 0.20 | 0.0 | **Binucleation** | Binucleation ✓ |
+| `mncm_invitro` | 0.50 | 0.25 | 1.0 | **Polyploidization** | Polyploidization ✓ |
+| `adult` | 0.95 | 1.00 | 0.0 | Polyploidization | — |
+
+And the *mechanism* is right, not just the label: in culture, NEB never fires while
+S-phase entry continues. Polyploidization here is genuinely S-without-mitosis, not simply
+fewer cycles. The brake acts through MPF — raising it drives `CCNB_CDK1` down, `LMNAp`
+follows, and mitotic entry stops exactly when `LMNAp` can no longer reach its threshold.
+
+#### KNOWN MISS: hiPSC-CM
+
+Predicted polyploid, observed dividing. Recorded, not tuned away.
+
+`hipsc_cm` and `mncm_invitro` carry **identical** oxidative input (ROSenv 0.25,
+InVitro 1.0), so the DDR brake hits them equally and only `M` distinguishes them — and `M`
+acts on the abscission arm, not on mitotic entry. Tier 1 gets hipsc right because hipsc
+*is* its calibration context: its MitoticEntry gate is fitted to 0.7698 there, and
+`../MODEL.md` says plainly that "the fate layer is fitted exactly and predicts nothing" at
+that context. So this is a genuine prediction failure, and it says the model lacks
+whatever keeps the DDR response weak in immature cardiomyocytes.
+
+**Not fixed by gating the DDR arm on `!Maturation`** — that is one free parameter fitted
+to one outcome, and Tier 1 tested the directly analogous move (gating the clonidine
+response on `!Maturation`) and rejected it: mean fold error went 26 % → 55 %, worse than
+doing nothing.
+
+#### Two things declared rather than buried
+
+- **A parameter degeneracy.** Only the product `ks_Ccng1_p53 × kf_CCNB_Ccng1 / kd_Ccng1`
+  sets the brake strength — Ccng1 is at quasi-steady state, so halving synthesis and
+  doubling effect is the same model. Verified by test. Phase 3 must fit **one** effective
+  parameter here, not three.
+- **`p27` is deferred.** It would cost three species and ~8 parameters (mirroring p21's
+  complexes), none of which any available measurement constrains, and it is not required
+  for the triad. Tier 1 can afford it because a logic node is free; in a mass-action model
+  it is not. Adding eleven unconstrained quantities for no measurable gain is exactly what
+  the constraint budget exists to prevent.
+
+#### The p53 mass-balance defect, now fixed
+
+`d.p53p` gained p53p at a rate independent of available p53, because the `*p53` factor
+that `d.p53`'s matching loss term carries is missing. Harmless in the published figures —
+`Chk2p` is identically zero there, which is why nobody saw it — but not harmless with the
+arm live. `fix_p53_massbalance` defaults **off** so the reduction property stays
+*unconditional* (bit-exact for any state, not merely reachable ones) and ships with
+`DDR_ON`, which is exactly when the defect can bite.
+
+#### A second context-loading bug caught here
+
+`context_params` initially read an unlisted input as 0. But Tier 1's manifest declares
+`default_on = [... "ROSenv" ...]`, so an unlisted default-on input sits at **1.0**.
+`adult` names no `ROSenv`, so the adult heart was getting *no* oxidative stress — and
+produced adult cycling faster than P0 (39.3 h against 52.2 h), which is backwards. Puente
+2014, the source of this arm, is precisely about postnatal ROS rising. Fixed and pinned.
+
+## Next: Phase 3 — calibration and the population layer
+
+Phase 2 is complete. Remaining from its original list, deferred with reasons:
 
 3. **The cytokinesis arm** — Ect2 → RhoA → Centralspindlin/AurKB/Anillin → Midbody, with
    RhoA obligatory (Tier 1 learned that the hard way four times: an OR'd bypass made it
