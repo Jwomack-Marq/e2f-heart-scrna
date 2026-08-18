@@ -22,7 +22,8 @@ WORKDIR /srv/shiny-app
 # App code + the data-prep build scripts (scripts aren't needed at runtime, kept for reference).
 COPY shiny_app/app.R ./
 COPY shiny_app/build_communication.R shiny_app/build_refmap.R \
-     shiny_app/build_signature_scores.R shiny_app/build_subcluster_enrichment.R ./
+     shiny_app/build_signature_scores.R shiny_app/build_subcluster_enrichment.R \
+     shiny_app/build_fourgroup.R ./
 
 # app_data.rds (the ~103 MB enriched bundle) is git-ignored and NOT baked in by default —
 # it is supplied at runtime via a volume mount (see docker-compose.yml / DOCKER.md).

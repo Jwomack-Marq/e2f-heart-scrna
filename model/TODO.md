@@ -260,9 +260,13 @@ Ranked by how cleanly each could be run with assays both papers already use.
 3. **Propagate per-cell atrial/ventricular labels.** `cm_subtype` is declared in
    `CAT_COLS` in [app.R](../shiny_app/app.R) but absent from the bundle, so it is
    silently dropped; aCM/vCM exists only per-subcluster.
-4. **Add the sort-enrichment caveat to the About block.** Anyone reading cycling
-   fractions off a FACS-enriched dataset will get the developmental direction
-   backwards.
+   *Partly addressed:* `build_fourgroup.R` now writes a per-cell `cm_subcluster`
+   column, so res-0.2 subcluster is a first-class filter. The aCM/vCM label itself
+   is still per-subcluster only (CM11 is the sole atrial cluster).
+4. ~~**Add the sort-enrichment caveat to the About block.**~~ **Done** — the About
+   block now carries it, and `build_fourgroup.R` acts on it rather than only warning:
+   every P0-vs-P7 contrast is computed in a phase-matched (G1-only) stratum, which the
+   app shows by default, with the raw stratum labelled sort-confounded at the point of use.
 5. **Surface the model's predictions next to the data.** Now unblocked — Tier 1
    runs, and `model.e2f78_knockdown()` returns signed shifts per fate. The
    proliferation-versus-cytokinesis quadrant is already the right plot for it. Needs

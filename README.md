@@ -97,6 +97,28 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
 - **`build_refmap.R`** — reference-marker annotation concordance → `app$refmap`, drives
   the **Annotation check** tab (Help menu). A marker-signature check, not Seurat anchor
   transfer.
+- **`build_fourgroup.R`** — the four-group (WT-P0 / WT-P7 / KO-P0 / KO-P7) analysis within
+  CM subclusters → `app$fourgroup`, driving the **Four-group (WT/KO × P0/P7)** and
+  **Maturation ∩ P7 KO** tabs. Per-subcluster cell counts, cell-cycle phase composition,
+  maturation-score summaries, descriptive Wilcoxon DE for four contrasts × two phase strata,
+  a gene-level maturation axis, and its intersection with the P7 KO response. Also adds a
+  `cm_subcluster` column to `app$meta`, which makes CM subcluster a filter in the
+  **Subset & DEGs** tab and a colour/split option on the UMAP.
+  Must run **after** `build_signature_scores.R` — it consumes the `sig_*` columns.
+
+  Two design points worth knowing:
+  - **P0-vs-P7 contrasts are phase-matched by default.** P7 was FACS cycling-enriched
+    4.5–5.2× and P0 essentially unenriched, so a raw P0-vs-P7 contrast reads out the sort
+    as much as development. Every contrast exists in a `G1` stratum (the app's default) and
+    an `all` stratum (raw, labelled sort-confounded in the UI).
+  - **The maturation axis is cycle-free.** `sig_maturation`'s immature program contains
+    `Mki67` / `Top2a` / `Ccnd1`, so using it to argue "less mature ⇒ more cycling-competent"
+    would be partly circular. `build_signature_scores.R` now also emits
+    `sig_maturation_nocc` (those three dropped) and the intersection defaults to it.
+
+  Arms too thin to support a contrast are flagged rather than silently reported — note that
+  an arm can clear the 10-cell floor overall and still be a handful of cells once restricted
+  to G1 (CM2's KO-P0 arm is 31 cells, ~12 of them G1).
 
 Re-run order after `build_app_data.R` regenerates the bundle (each is idempotent and
 safe to skip; the app guards absent slots with a "run the builder" message):
@@ -108,8 +130,16 @@ Rscript shiny_app/build_signature_scores.R           # then compute + save
 Rscript shiny_app/build_communication.R
 Rscript shiny_app/build_refmap.R
 source("shiny_app/build_subcluster_enrichment.R")    # (existing) per-subcluster enrichment
+Rscript shiny_app/build_fourgroup.R --probe          # group sizes + size estimate, writes nothing
+Rscript shiny_app/build_fourgroup.R                  # then compute + save
 # then: rsconnect::deployApp("shiny_app")
 ```
+
+`build_fourgroup.R` runs DE on the broad `app$deg_expr` matrix by default; pass
+`--matrix=curated` to use the full-cell curated panel instead, or `--seurat=<path>` to
+compute over all genes × all CM cells from the upstream Seurat object (the only route to a
+genome-wide DEG table — `deg_expr` is downsampled to ~8k cells, which thins the smaller
+subcluster arms considerably).
 
 ## History
 

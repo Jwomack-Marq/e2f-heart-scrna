@@ -53,6 +53,12 @@ SETS <- list(
   ccexit        = c("Cdkn1a","Cdkn1c","Cdkn2a","Cdkn1b","Meis1","Rb1","Btg2","Gadd45a"),
   mat_mature    = c("Myh6","Tnni3","Pln","Atp2a2","Ckm","Myl2","Cox6a2","Ckmt2","Actn2","Csrp3"),
   mat_immature  = c("Myh7","Tnni1","Nppa","Nppb","Ccnd1","Mki67","Top2a","Myl7","Actc1"),
+  # Cycle-free immature program: mat_immature minus the three cell-cycle genes.
+  # sig_maturation is otherwise partly a cell-cycle score, so using it to argue
+  # "less mature => more cycling-competent" is circular (same failure mode the
+  # E2f8 phase-list audit found). build_fourgroup.R's intersection analysis
+  # defaults to the _nocc variant; the original stays for continuity.
+  mat_immature_nocc = c("Myh7","Tnni1","Nppa","Nppb","Myl7","Actc1"),
   glycolysis    = c("Slc2a1","Hk1","Hk2","Pfkm","Pfkl","Pkm","Ldha","Gapdh","Eno1","Aldoa","Pgk1"),
   faox          = c("Cpt1a","Cpt1b","Cpt2","Acadm","Acadvl","Acadl","Hadha","Hadhb",
                     "Ppargc1a","Cox6a2","Ndufa4","Sdha","Acaa2","Etfa"))
@@ -64,6 +70,8 @@ GROUPS <- list(
        comp = c(sig_prolif = "prolif", sig_cytokinesis = "cytokinesis")),
   list(net = "sig_maturation", pos = "mat_mature", neg = "mat_immature",
        comp = c(sig_mat_mature = "mat_mature", sig_mat_immature = "mat_immature")),
+  list(net = "sig_maturation_nocc", pos = "mat_mature", neg = "mat_immature_nocc",
+       comp = c(sig_mat_immature_nocc = "mat_immature_nocc")),
   list(net = "sig_metabolic",  pos = "faox",       neg = "glycolysis",
        comp = c(sig_faox = "faox", sig_glycolysis = "glycolysis")))
 # stand-alone single-set scores
@@ -159,7 +167,7 @@ for (gr in GROUPS) {
 app$score_meta <- do.call(rbind, score_meta)
 # columns to expose in the UMAP "colour by" dropdown (headline scores only)
 app$score_cols <- c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy",
-                    "sig_maturation","sig_metabolic")
+                    "sig_maturation","sig_maturation_nocc","sig_metabolic")
 app$score_cols <- intersect(app$score_cols, names(app$meta))
 
 cat("\n== summary ==\n"); print(app$score_meta, row.names = FALSE)

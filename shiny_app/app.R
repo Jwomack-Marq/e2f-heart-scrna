@@ -32,6 +32,7 @@ GENES_FULL <- app$deg_genes
 SCOREMETA  <- app$score_meta   # per-cell module-score definitions/coverage (build_signature_scores.R; may be NULL)
 COMMUN     <- app$commun       # curated ligand-receptor scores (build_communication.R; may be NULL)
 REFMAP     <- app$refmap       # reference-marker annotation check (build_refmap.R; may be NULL)
+FG         <- app$fourgroup    # four-group CM analysis (build_fourgroup.R; may be NULL)
 # Present WT before KO on every plot (genotype is otherwise alphabetical -> KO first).
 GENO_LEVELS <- c("WT","KO")
 relevel_geno <- function(df) {
@@ -76,18 +77,21 @@ genes_for_set <- function(set) if (is.null(set) || set == "__all__" || !set %in%
   ALL_GENES else GENE_SETS[[set]]
 
 has <- function(col, df = meta) col %in% names(df)
-CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype","seurat_clusters"))
+CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype",
+                           "cm_subcluster","seurat_clusters"))
 # per-cell module scores added by build_signature_scores.R (headline scores only;
 # absent columns drop out so an un-rebuilt bundle still loads).
 SCORE_COLS <- Filter(has, c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy",
-                            "sig_maturation","sig_metabolic"))
+                            "sig_maturation","sig_maturation_nocc","sig_metabolic"))
 CONT_COLS <- Filter(has, c("pseudotime","S.Score","G2M.Score", SCORE_COLS))
 
 nice <- c(gene = "Gene expression", celltype = "Cell type", genotype = "Genotype (KO/WT)",
           timepoint = "Timepoint (P0/P7)", Phase = "Cell-cycle phase", cycling = "Cycling (S/G2M)",
           cm_subtype = "CM subtype", seurat_clusters = "Cluster", pseudotime = "Pseudotime",
           S.Score = "S-phase score", G2M.Score = "G2/M score", subcluster = "Subcluster",
-          splitgrp = "Genotype × timepoint",
+          splitgrp = "Genotype × timepoint", cm_subcluster = "CM subcluster (res 0.2)",
+          sig_maturation_nocc = "CM maturation (cycle-free)",
+          sig_mat_immature_nocc = "Immature-CM program (cycle-free)",
           sig_prolif = "Proliferation score", sig_cytokinesis = "Cytokinesis score",
           sig_ccexit = "Cell-cycle exit score", sig_ploidy = "Polyploidization proxy",
           sig_maturation = "CM maturation score", sig_metabolic = "Metabolic maturation (FAO−glyc)",
@@ -698,6 +702,273 @@ refmap_table <- function() {
   enr_dt(d[order(d$celltype, -d$prop), ])
 }
 
+# ---- four-group CM analysis (FG; build_fourgroup.R) ---------------------------
+# WT-P0 / WT-P7 / KO-P0 / KO-P7 within each res-0.2 CM subcluster. Every contrast
+# exists in two phase strata: "G1" (phase-matched, the default) and "all" (raw).
+# Phase-matching matters because P7 was FACS cycling-enriched 4.5-5.2x and P0 was
+# not, so a raw P0-vs-P7 contrast largely reads out the sort.
+FG_MSG      <- "Four-group analysis isn't in this data build — run build_fourgroup.R and redeploy."
+FG_GROUPS   <- if (!is.null(FG)) FG$built$groups else c("WT-P0","WT-P7","KO-P0","KO-P7")
+FG_CLUSTERS <- if (!is.null(FG)) unique(FG$counts$cluster) else character(0)
+FG_CTAB     <- if (!is.null(FG)) FG$built$contrasts else NULL
+# light = P0, dark = P7; blue = WT, red = KO — same colour language as VOLC_PAL.
+FG_PAL <- setNames(c("#90caf9","#1565c0","#ef9a9a","#c62828"),
+                   c("WT-P0","WT-P7","KO-P0","KO-P7"))
+FG_SORT_NOTE <- paste(
+  "P7 was FACS cycling-enriched 4.5–5.2× and P0 essentially unenriched, so a raw",
+  "P0-vs-P7 contrast reads out the sort as much as development. Contrasts default to",
+  "the phase-matched (G1-only) stratum for this reason.")
+
+fg_ok <- function() validate(need(!is.null(FG), FG_MSG))
+# cluster dropdown: "All cardiomyocytes" + the usual "CM2 · Ventricular (2397 cells)"
+fg_cluster_choices <- function() {
+  if (is.null(FG)) return(character(0))
+  setNames(FG_CLUSTERS, vapply(FG_CLUSTERS, function(x)
+    if (x == "AllCM") "All cardiomyocytes" else sub_label("0.2", x), ""))
+}
+fg_contrast_choices <- function() {
+  if (is.null(FG_CTAB)) return(character(0))
+  setNames(FG_CTAB$key, FG_CTAB$label)
+}
+fg_ct <- function(key) {
+  if (is.null(FG_CTAB)) return(NULL)
+  r <- FG_CTAB[FG_CTAB$key == key, , drop = FALSE]
+  if (nrow(r)) as.list(r[1, ]) else NULL
+}
+# when a table is missing, say WHY (and with what cell counts) rather than "no data"
+fg_skip_msg <- function(cluster, contrast, stratum) {
+  s <- FG$skipped
+  if (!is.null(s)) {
+    r <- s[s$cluster == cluster & s$contrast == contrast & s$stratum == stratum, , drop = FALSE]
+    if (nrow(r)) return(sprintf(
+      "Not computed — %s. Group A: %d cells, group B: %d cells (floor is %d).%s",
+      r$reason[1], r$n_A[1], r$n_B[1], FG$built$min_cells,
+      if (stratum == "G1") " Try the “All cells” stratum." else ""))
+  }
+  "No DE table for this selection."
+}
+fg_de <- function(cluster, contrast, stratum) {
+  fg_ok(); req(cluster, contrast, stratum)
+  d <- FG$de[[cluster]][[paste0(contrast, "__", stratum)]]
+  validate(need(!is.null(d) && nrow(d), fg_skip_msg(cluster, contrast, stratum)))
+  d
+}
+# one row per cluster: counts + percentages for the four groups, with the
+# under-powered arms named explicitly rather than left to be discovered.
+fg_counts_wide <- function() {
+  fg_ok(); d <- FG$counts; cl <- FG_CLUSTERS
+  st <- subType[[paste0("res", FG$built$res)]]
+  out <- data.frame(cluster = cl, stringsAsFactors = FALSE)
+  if (!is.null(st)) out$subtype <- st$nearest_CM_subtype[match(cl, st$subcluster)]
+  key <- paste(d$cluster, d$group)
+  for (g in FG_GROUPS) {
+    i <- match(paste(cl, g), key)
+    out[[g]] <- d$n[i]
+    out[[paste0(g, " %")]] <- d$pct_of_cluster[i]
+    if ("n_G1" %in% names(d)) out[[paste0(g, " G1")]] <- d$n_G1[i]
+  }
+  out$total <- rowSums(out[, FG_GROUPS, drop = FALSE], na.rm = TRUE)
+  # name the arms that can't carry a contrast, and say which way they fail —
+  # "too few cells" kills the contrast, "thin in G1" only kills the default stratum.
+  out$underpowered <- vapply(cl, function(c) {
+    r <- d[d$cluster == c & d$status != "ok", , drop = FALSE]
+    if (!nrow(r)) return("—")
+    paste(sprintf("%s (%s)", r$group, sub(" \\(.*", "", r$status)), collapse = ", ") }, "")
+  out
+}
+fg_counts_plot <- function(mode = "prop", bs = 13) {
+  fg_ok(); d <- FG$counts
+  d$group   <- factor(d$group, levels = FG_GROUPS)
+  d$cluster <- factor(d$cluster, levels = FG_CLUSTERS)
+  d$y <- if (mode == "prop") d$pct_of_cluster else d$n
+  ggplot(d, aes(cluster, y, fill = group)) +
+    geom_col(position = if (mode == "prop") "stack" else position_dodge(width = .85),
+             width = .8) +
+    scale_fill_manual(values = FG_PAL, na.value = "grey85") +
+    theme_minimal(base_size = bs) +
+    theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = "CM subcluster", fill = NULL,
+         y = if (mode == "prop") "% of subcluster" else "cell count",
+         title = paste0("Four-group composition per CM subcluster — res ", FG$built$res))
+}
+# cell-cycle phase composition per cluster x group. Answers the G1-proportion
+# question and makes the P0->P7 S-phase jump (the sort) visible at the same time.
+fg_phase_plot <- function(clusters, bs = 13) {
+  fg_ok(); validate(need(!is.null(FG$phase), "No phase table in this data build."))
+  d <- FG$phase[FG$phase$cluster %in% clusters, , drop = FALSE]
+  validate(need(nrow(d), "Pick at least one subcluster."))
+  d$group   <- factor(d$group, levels = FG_GROUPS)
+  d$Phase   <- factor(d$Phase, levels = c("G1","S","G2M"))
+  d$cluster <- factor(d$cluster, levels = intersect(FG_CLUSTERS, clusters))
+  lab <- d[d$Phase == "G1", ]
+  ggplot(d, aes(group, pct, fill = Phase)) +
+    geom_col(width = .8) + facet_wrap(~ cluster) +
+    geom_text(data = lab, inherit.aes = FALSE, y = 4, size = 3,
+              colour = "white", fontface = "bold",
+              aes(x = group, label = ifelse(is.na(pct), "", paste0(round(pct), "%")))) +
+    scale_fill_manual(values = c(G1 = "#bdbdbd", S = "#1565c0", G2M = "#c62828")) +
+    theme_minimal(base_size = bs) +
+    theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = NULL, y = "% of cells in group", fill = NULL,
+         title = "Cell-cycle phase composition — four groups",
+         caption = "G1 % is printed on each bar. The P0→P7 S-phase jump is largely the FACS enrichment.")
+}
+# per-cell score violins, four groups, faceted by cluster. Built from cmm (real
+# per-cell values) rather than FG$scores (summaries) so the distribution shows.
+fg_score_plot <- function(scol, clusters, stratum, bs = 13) {
+  validate(need(scol %in% names(cmm),
+    "Score not in this data build — run build_signature_scores.R and redeploy."))
+  df <- cmm
+  df$cluster <- if ("cm_subcluster" %in% names(df)) df$cm_subcluster else
+                paste0("CM", df[[cm_subcol("0.2")]])
+  parts <- list()
+  if ("AllCM" %in% clusters) { a <- df; a$cluster <- "AllCM"; parts[[1]] <- a }
+  rest <- setdiff(clusters, "AllCM")
+  if (length(rest)) parts[[length(parts) + 1]] <- df[df$cluster %in% rest, , drop = FALSE]
+  validate(need(length(parts), "Pick at least one subcluster."))
+  df <- do.call(rbind, parts)
+  if (stratum == "G1") df <- df[as.character(df$Phase) == "G1", , drop = FALSE]
+  df$group   <- factor(paste(df$genotype, df$timepoint, sep = "-"), levels = FG_GROUPS)
+  df$cluster <- factor(df$cluster, levels = intersect(FG_CLUSTERS, clusters))
+  df <- df[!is.na(df[[scol]]) & !is.na(df$group), , drop = FALSE]
+  validate(need(nrow(df) > 0, paste0(
+    "No scored cells for this selection",
+    if (stratum == "G1") " — this subcluster may have no G1 cells." else ".")))
+  df$y <- df[[scol]]
+  ggplot(df, aes(group, y, fill = group)) +
+    geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2) +
+    geom_boxplot(width = .12, outlier.size = .3, alpha = .5) +
+    facet_wrap(~ cluster) + scale_fill_manual(values = FG_PAL) + guides(fill = "none") +
+    theme_minimal(base_size = bs) +
+    theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = NULL, y = labof(scol),
+         title = paste0(labof(scol), " — four groups",
+                        if (stratum == "G1") " (G1 cells only)" else ""))
+}
+# ---- maturation axis x P7 KO-vs-WT -------------------------------------------
+FG_QUAD <- c(immature_up_in_KO = "#c62828", mature_down_in_KO = "#1565c0",
+             immature_down_in_KO = "#cccccc", mature_up_in_KO = "#cccccc", ns = "#e8e8e8")
+fg_int_msg <- paste("Needs the maturation scores — run build_signature_scores.R,",
+                    "then build_fourgroup.R, then redeploy.")
+fg_intersect_df <- function(cluster, quadrants = NULL, hide_conf = TRUE) {
+  fg_ok(); validate(need(!is.null(FG$intersect), fg_int_msg))
+  d <- FG$intersect[FG$intersect$cluster == cluster, , drop = FALSE]
+  validate(need(nrow(d), "No intersection rows for this subcluster."))
+  if (isTRUE(hide_conf)) d <- d[!d$confounder, , drop = FALSE]
+  if (!is.null(quadrants) && length(quadrants)) d <- d[d$quadrant %in% quadrants, , drop = FALSE]
+  d[order(-abs(d$p7ko_log2FC)), , drop = FALSE]
+}
+fg_quadrant_plot <- function(cluster, hide_conf = TRUE, label_n = 20, bs = 13) {
+  d <- fg_intersect_df(cluster, NULL, hide_conf)
+  d$quadrant <- factor(d$quadrant, levels = names(FG_QUAD))
+  hit <- d[d$quadrant %in% c("immature_up_in_KO","mature_down_in_KO"), , drop = FALSE]
+  lab <- hit[order(-abs(hit$mat_log2FC) - abs(hit$p7ko_log2FC)), , drop = FALSE]
+  lab <- head(lab, label_n)
+  xr <- max(abs(d$mat_log2FC), na.rm = TRUE); yr <- max(abs(d$p7ko_log2FC), na.rm = TRUE)
+  ggplot(d, aes(mat_log2FC, p7ko_log2FC)) +
+    annotate("rect", xmin = -xr, xmax = 0, ymin = 0, ymax = yr, fill = "#c62828", alpha = .06) +
+    annotate("rect", xmin = 0, xmax = xr, ymin = -yr, ymax = 0, fill = "#1565c0", alpha = .06) +
+    geom_hline(yintercept = 0, colour = "grey70") +
+    geom_vline(xintercept = 0, colour = "grey70") +
+    geom_point(aes(colour = quadrant), size = 1.2, alpha = .7) +
+    geom_text(data = lab, aes(label = gene), size = 3, vjust = -0.7, check_overlap = TRUE) +
+    scale_colour_manual(values = FG_QUAD, drop = FALSE) +
+    theme_minimal(base_size = bs) +
+    labs(x = "maturation association  (← immature | mature →)",
+         y = "P7 KO vs WT  log2FC  (↑ up in KO)", colour = NULL,
+         title = paste0("Maturation axis × P7 KO response — ",
+                        if (cluster == "AllCM") "all cardiomyocytes" else cluster),
+         caption = paste("Shaded: immature genes up in P7 KO (red) and mature genes down in P7 KO (blue)",
+                         "— the two quadrants consistent with delayed maturation.",
+                         "\nMaturation axis uses the cycle-free score, so it is not circular with cycling."))
+}
+# ---- candidate genes: computed live, so any gene can be asked about ----------
+FG_SHORTLIST <- intersect(
+  c("Birc5","Foxm1","Rrm2","Aurkb","Prc1","Gabbr2","Tcf4","Adamts9"), ALL_GENES)
+# mean expression + % expressing per cluster x four-group, for a set of genes
+fg_candidate_df <- function(genes, clusters, stratum) {
+  validate(need(length(genes), "Pick at least one gene."))
+  df <- cmm
+  df$cluster <- if ("cm_subcluster" %in% names(df)) df$cm_subcluster else
+                paste0("CM", df[[cm_subcol("0.2")]])
+  parts <- list()
+  if ("AllCM" %in% clusters) { a <- df; a$cluster <- "AllCM"; parts[[1]] <- a }
+  rest <- setdiff(clusters, "AllCM")
+  if (length(rest)) parts[[length(parts) + 1]] <- df[df$cluster %in% rest, , drop = FALSE]
+  validate(need(length(parts), "Pick at least one subcluster."))
+  df <- do.call(rbind, parts)
+  if (stratum == "G1") df <- df[as.character(df$Phase) == "G1", , drop = FALSE]
+  df$group <- factor(paste(df$genotype, df$timepoint, sep = "-"), levels = FG_GROUPS)
+  df <- df[!is.na(df$group), , drop = FALSE]
+  validate(need(nrow(df), "No cells for this selection."))
+  out <- list()
+  for (g in genes) {
+    v <- expr_vec(g, df$cell)
+    if (all(is.na(v))) next
+    for (cl in unique(df$cluster)) for (gr in FG_GROUPS) {
+      s <- df$cluster == cl & df$group == gr & !is.na(v)
+      if (!any(s)) next
+      out[[length(out) + 1]] <- data.frame(
+        gene = g, cluster = cl, group = gr, n = sum(s),
+        pct_expressing = round(100 * mean(v[s] > 0), 1),
+        mean_expr = round(mean(v[s]), 3), stringsAsFactors = FALSE)
+    }
+  }
+  validate(need(length(out), "None of the selected genes are in this data build."))
+  d <- do.call(rbind, out)
+  d$cluster <- factor(d$cluster, levels = intersect(FG_CLUSTERS, unique(d$cluster)))
+  d$group   <- factor(d$group, levels = FG_GROUPS)
+  d$gene    <- factor(d$gene, levels = intersect(genes, unique(d$gene)))
+  d
+}
+fg_candidate_plot <- function(genes, clusters, stratum, bs = 13) {
+  d <- fg_candidate_df(genes, clusters, stratum)
+  ggplot(d, aes(group, gene, size = pct_expressing, colour = mean_expr)) +
+    geom_point() + facet_wrap(~ cluster) +
+    scale_size_area(max_size = 9) +
+    scale_color_viridis_c(option = "magma", direction = -1) +
+    theme_minimal(base_size = bs) +
+    theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
+    labs(x = NULL, y = NULL, size = "% expressing", colour = "mean expr",
+         title = paste0("Candidate genes across CM subclusters × four groups",
+                        if (stratum == "G1") " (G1 cells only)" else ""))
+}
+# Is a gene's KO effect P7-specific, and is it concentrated in CM2/CM4/CM5?
+# Read straight off the precomputed contrasts, so it matches the DEG tables.
+FG_PRIORITY <- c("CM2","CM4","CM5")
+fg_specificity_df <- function(genes, stratum) {
+  fg_ok(); validate(need(length(genes), "Pick at least one gene."))
+  pull <- function(cl, key, g) {
+    d <- FG$de[[cl]][[paste0(key, "__", stratum)]]
+    if (is.null(d)) return(NA_real_)
+    d$log2FoldChange[match(g, d$gene)]
+  }
+  rows <- list()
+  for (g in genes) for (cl in FG_CLUSTERS) {
+    p7 <- pull(cl, "P7_KO_vs_WT", g); p0 <- pull(cl, "P0_KO_vs_WT", g)
+    if (is.na(p7) && is.na(p0)) next
+    rows[[length(rows) + 1]] <- data.frame(
+      gene = g, cluster = cl,
+      P7_KO_vs_WT = p7, P0_KO_vs_WT = p0,
+      P7_specificity = round(abs(p7) - abs(p0), 3), stringsAsFactors = FALSE)
+  }
+  validate(need(length(rows), paste0(
+    "No contrasts cover these genes in the “",
+    if (stratum == "G1") "G1" else "All cells", "” stratum.")))
+  d <- do.call(rbind, rows)
+  # per gene: is the effect bigger inside CM2/CM4/CM5 than outside?
+  agg <- do.call(rbind, lapply(split(d, d$gene), function(x) {
+    pri <- mean(abs(x$P7_KO_vs_WT[x$cluster %in% FG_PRIORITY]), na.rm = TRUE)
+    oth <- mean(abs(x$P7_KO_vs_WT[!x$cluster %in% c(FG_PRIORITY, "AllCM")]), na.rm = TRUE)
+    data.frame(gene = x$gene[1],
+               CM2_4_5_mean_absLFC = round(pri, 3),
+               other_clusters_mean_absLFC = round(oth, 3),
+               priority_concentration = round(pri - oth, 3), stringsAsFactors = FALSE)
+  }))
+  d <- merge(d, agg, by = "gene", all.x = TRUE)
+  d[order(d$gene, factor(d$cluster, levels = FG_CLUSTERS)), , drop = FALSE]
+}
+
 # ---------------------------------------------------------------- UI ----------
 # Wrap every plot output in a loading spinner (shown while the output computes /
 # on tab switch), by shadowing the two output constructors used across the UI.
@@ -917,7 +1188,121 @@ ui <- page_navbar(
         accordion_panel("Fold-change options", figure_controls("e2ffc", palette = FALSE, rename = FALSE)))),
     navset_card_tab(
       nav_panel("E2f7 / E2f8", plotOutput("e2f_expr", height = "560px")),
-      nav_panel("Downstream targets — KO vs WT", plotOutput("e2f_fc", height = "560px")))))),
+      nav_panel("Downstream targets — KO vs WT", plotOutput("e2f_fc", height = "560px"))))),
+
+  nav_panel("Four-group (WT/KO × P0/P7)", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      conditionalPanel("input.fg_tabs == 'de'",
+        selectInput("fg_cluster", "Subcluster", choices = NULL),
+        selectInput("fg_contrast", "Comparison", choices = NULL),
+        radioButtons("fg_stratum", "Cells used",
+                     c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
+                     selected = "G1"),
+        checkboxInput("fg_hideconf", "Hide sex/construct genes", FALSE),
+        div(downloadButton("fg_de_dl", "Download DEG table (CSV)",
+                           class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
+      conditionalPanel("input.fg_tabs == 'counts'",
+        radioButtons("fg_count_mode", "Y axis",
+                     c("% of subcluster" = "prop", "Cell count" = "count"), inline = TRUE),
+        div(downloadButton("fg_counts_dl", "Download counts (CSV)",
+                           class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
+      conditionalPanel("input.fg_tabs == 'g1'",
+        selectizeInput("fg_g1_clusters", "Subclusters", choices = NULL, multiple = TRUE),
+        selectInput("fg_score", "Maturation / state score", choices = NULL),
+        radioButtons("fg_score_stratum", "Cells used",
+                     c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
+                     selected = "all"),
+        div(downloadButton("fg_scores_dl", "Download score summary (CSV)",
+                           class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
+      hr(),
+      helpText(strong("Sort caveat. "), FG_SORT_NOTE),
+      helpText(strong("Descriptive only — n = 1 animal per group."),
+               " Wilcoxon is run cell-level, so p-values are pseudoreplicated;",
+               " tables are ranked by effect size, not by p."),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("Composition figure options",
+          figure_controls("fgcount", palette = FALSE, rename = FALSE)),
+        accordion_panel("Phase figure options",
+          figure_controls("fgphase", palette = FALSE, rename = FALSE)),
+        accordion_panel("Score figure options",
+          figure_controls("fgscore", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(id = "fg_tabs",
+      nav_panel("Group sizes", value = "counts",
+        helpText("Cell counts and percentages for the four groups in every res-0.2 CM subcluster. ",
+                 "The ", strong("underpowered"), " column names any arm too small to support DE ",
+                 "— those contrasts are skipped rather than silently reported."),
+        plotOutput("fg_counts_plot", height = "380px"),
+        DTOutput("fg_counts_tab")),
+      nav_panel("Four-group DE", value = "de",
+        helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it."),
+        uiOutput("fg_de_note"),
+        fluidRow(
+          column(6, plotlyOutput("fg_volcano", height = "440px")),
+          column(6, uiOutput("fg_pick_ui"), DTOutput("fg_detab"))),
+        uiOutput("fg_geneinfo")),
+      nav_panel("G1 & maturation", value = "g1",
+        helpText("Top: cell-cycle phase composition per group (G1 % printed on each bar). ",
+                 "Bottom: per-cell maturation / state scores. ",
+                 "The question is whether P7 KO cardiomyocytes sit at a less mature score than P7 WT ",
+                 "— compare within the G1 stratum to hold cycling composition fixed."),
+        plotOutput("fg_phase_plot", height = "420px"),
+        plotOutput("fg_score_plot", height = "440px"))))),
+
+  nav_panel("Maturation ∩ P7 KO", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      conditionalPanel("input.mi_tabs != 'candidates'",
+        selectInput("mi_cluster", "Subcluster", choices = NULL),
+        checkboxGroupInput("mi_quad", "Show quadrants",
+          c("Immature genes UP in P7 KO" = "immature_up_in_KO",
+            "Mature genes DOWN in P7 KO" = "mature_down_in_KO",
+            "Immature DOWN in KO" = "immature_down_in_KO",
+            "Mature UP in KO" = "mature_up_in_KO"),
+          selected = c("immature_up_in_KO","mature_down_in_KO")),
+        checkboxInput("mi_hideconf", "Hide sex/construct genes", TRUE),
+        div(downloadButton("mi_dl", "Download intersection (CSV)",
+                           class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
+      conditionalPanel("input.mi_tabs == 'candidates'",
+        selectInput("mi_geneset", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
+        selectizeInput("mi_genes", "Genes", choices = NULL, multiple = TRUE,
+                       options = list(maxOptions = 50L)),
+        actionLink("mi_reset_genes", "reset to the shortlist"),
+        selectizeInput("mi_cand_clusters", "Subclusters", choices = NULL, multiple = TRUE),
+        radioButtons("mi_cand_stratum", "Cells used",
+                     c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
+                     selected = "all"),
+        div(class = "mt-2",
+          downloadButton("mi_cand_dl", "Download expression grid (CSV)",
+                         class = "btn-sm btn-outline-secondary"),
+          downloadButton("mi_spec_dl", "Download P7-specificity (CSV)",
+                         class = "btn-sm btn-outline-secondary"))),
+      hr(),
+      helpText(strong("Maturation axis. "),
+               "Genes are ranked by comparing the most- vs least-mature cardiomyocytes, ",
+               "within each timepoint and then averaged, so the axis is maturation and not P0-vs-P7. ",
+               "It uses the ", strong("cycle-free"), " maturation score (Mki67 / Top2a / Ccnd1 removed) ",
+               "— otherwise “less mature ⇒ more cycling” would be partly circular."),
+      helpText(strong("Descriptive only — n = 1 animal per group.")),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("Quadrant figure options",
+          figure_controls("miquad", palette = FALSE, rename = FALSE)),
+        accordion_panel("Candidate figure options",
+          figure_controls("micand", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(id = "mi_tabs",
+      nav_panel("Quadrant map", value = "quadrant",
+        helpText("x: how strongly a gene marks mature (right) vs immature (left) cardiomyocytes. ",
+                 "y: its P7 KO-vs-WT log2 fold change. The two shaded quadrants are the ones ",
+                 "consistent with P7 KO cells being held in a less mature state."),
+        plotOutput("mi_quadrant", height = "600px")),
+      nav_panel("Intersection table", value = "table",
+        DTOutput("mi_table")),
+      nav_panel("Candidate genes", value = "candidates",
+        helpText("Any gene, across CM subclusters × the four groups. ",
+                 "Size = % of cells expressing, colour = mean expression. ",
+                 "The table below reads the KO effect off the precomputed contrasts: ",
+                 strong("P7_specificity"), " > 0 means the KO effect is larger at P7 than at P0, and ",
+                 strong("priority_concentration"), " > 0 means it is larger inside CM2/CM4/CM5 than outside."),
+        plotOutput("mi_candidates", height = "480px"),
+        DTOutput("mi_spec_tab")))))),
 
   nav_menu("Dev",
   nav_panel("Cell–cell signalling", layout_sidebar(
@@ -1465,6 +1850,157 @@ server <- function(input, output, session) {
   output$e2f_fc <- renderPlot(apply_fig_opts(e2f_fc_plot(), "e2ffc", input))
   for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("e2ffc_dl_", f)]] <- dl_ggplot("e2ffc", e2f_fc_plot, input, f) })
 
+  # ---- Four-group (WT/KO x P0/P7) within CM subclusters ----
+  # Populate the selectors from the bundle; an un-rebuilt bundle leaves them empty
+  # and every output falls through to the "run build_fourgroup.R" validate().
+  observe({
+    cc <- fg_cluster_choices()
+    if (!length(cc)) return()
+    dflt <- if ("CM2" %in% cc) "CM2" else cc[[1]]
+    updateSelectInput(session, "fg_cluster", choices = cc, selected = dflt)
+    updateSelectInput(session, "mi_cluster", choices = cc, selected = dflt)
+    updateSelectInput(session, "fg_contrast", choices = fg_contrast_choices(),
+                      selected = "P7_KO_vs_WT")
+    pri <- intersect(c("AllCM", FG_PRIORITY, "CM9"), FG_CLUSTERS)
+    updateSelectizeInput(session, "fg_g1_clusters", choices = cc, selected = pri)
+    updateSelectizeInput(session, "mi_cand_clusters", choices = cc, selected = pri)
+    sc <- intersect(c("sig_maturation_nocc","sig_maturation","sig_mat_mature","sig_mat_immature",
+                      "sig_metabolic","sig_prolif","sig_cytokinesis","sig_ccexit"), names(cmm))
+    if (length(sc)) updateSelectInput(session, "fg_score",
+                      choices = setNames(sc, labof(sc)), selected = sc[[1]])
+  })
+  observe(updateSelectizeInput(session, "mi_genes", choices = genes_for_set(input$mi_geneset),
+                               selected = FG_SHORTLIST, server = TRUE))
+  observeEvent(input$mi_reset_genes,
+    updateSelectizeInput(session, "mi_genes", selected = FG_SHORTLIST, server = TRUE))
+
+  # group sizes
+  fg_counts_p <- reactive(fg_counts_plot(input$fg_count_mode %||% "prop",
+                                         input$fgcount_basesize %||% 13))
+  output$fg_counts_plot <- renderPlot(apply_fig_opts(fg_counts_p(), "fgcount", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("fgcount_dl_", f)]] <- dl_ggplot("fgcount", fg_counts_p, input, f) })
+  output$fg_counts_tab <- renderDT(DT::datatable(fg_counts_wide(), rownames = FALSE,
+    options = list(pageLength = 14, scrollX = TRUE, dom = "ft"),
+    class = "compact stripe hover"))
+  output$fg_counts_dl <- downloadHandler(
+    filename = function() paste0("fourgroup_counts_res", FG$built$res, "_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(FG$counts, f, row.names = FALSE))
+
+  # four-group DE: volcano <-> table <-> gene card (same wiring as the other DE tabs)
+  fg_d    <- reactive(drop_conf(fg_de(input$fg_cluster, input$fg_contrast, input$fg_stratum),
+                                input$fg_hideconf))
+  fg_tab  <- reactive(de_table(fg_d()))
+  fg_pick <- reactiveVal(NULL)
+  fg_dt_proxy <- DT::dataTableProxy("fg_detab")
+  output$fg_de_note <- renderUI({
+    ct <- fg_ct(input$fg_contrast); req(ct)
+    n <- try(fg_d(), silent = TRUE)
+    bad <- !inherits(n, "try-error")
+    nA <- if (bad) n$n_A[1] else NA; nB <- if (bad) n$n_B[1] else NA
+    txt <- if (!bad) "" else sprintf(" — %d vs %d cells, %d genes past the gate", nA, nB, nrow(n))
+    thin <- FG$built$thin_cells %||% 50
+    div(style = "font-size:13px;margin-bottom:6px",
+        HTML(paste0("<b>", ct$label, "</b> in ",
+                    if (input$fg_cluster == "AllCM") "all cardiomyocytes" else input$fg_cluster,
+                    if (input$fg_stratum == "G1") ", G1 cells only" else ", all cells", txt)),
+        # An arm can clear the 10-cell floor and still be far too thin to trust —
+        # say so here rather than letting the table look like any other.
+        if (bad && min(nA, nB) < thin)
+          div(style = "color:#c62828;font-weight:600",
+              HTML(sprintf("&#9888; Smallest group is %d cells — treat this contrast as unreliable%s.",
+                min(nA, nB),
+                if (max(nA, nB) / max(min(nA, nB), 1) >= 10)
+                  sprintf(" (%.0f× imbalance)", max(nA, nB) / max(min(nA, nB), 1)) else ""))),
+        if (input$fg_stratum == "all" && grepl("P0_vs_P7", input$fg_contrast))
+          span(style = "color:#c62828", HTML(" &middot; <b>sort-confounded</b> — see the caveat in the sidebar.")))
+  })
+  output$fg_volcano <- renderPlotly({
+    ct <- fg_ct(input$fg_contrast); req(ct)
+    de_volcano_ly(fg_d(),
+      paste0(ct$label, " — ", if (input$fg_cluster == "AllCM") "all CM" else input$fg_cluster,
+             if (input$fg_stratum == "G1") " (G1)" else ""),
+      "fg_volcano", pos = ct$pos, neg = ct$neg, xlab = ct$xlab, highlight = fg_pick())
+  })
+  outputOptions(output, "fg_volcano", suspendWhenHidden = FALSE)  # register the click source at startup
+  output$fg_detab    <- renderDT(de_datatable(fg_tab(), scroll = NULL))
+  output$fg_pick_ui  <- renderUI(pick_banner(fg_pick(), "fg_clear"))
+  output$fg_geneinfo <- renderUI(gene_info_card(fg_pick(), "fg_infoclose"))
+  observeEvent(event_data("plotly_click", source = "fg_volcano"),
+    fg_pick(event_data("plotly_click", source = "fg_volcano")$customdata))
+  observeEvent(input$fg_detab_rows_selected, {
+    r <- input$fg_detab_rows_selected; g <- if (length(r)) fg_tab()$gene[r] else NULL
+    if (!identical(g, fg_pick())) fg_pick(g)
+  }, ignoreNULL = FALSE)
+  observeEvent(fg_pick(), {
+    g <- fg_pick(); rows <- if (!is.null(g)) which(fg_tab()$gene == g) else integer(0)
+    if (!identical(as.integer(rows), as.integer(input$fg_detab_rows_selected)))
+      DT::selectRows(fg_dt_proxy, if (length(rows)) rows else NULL)
+  }, ignoreNULL = FALSE)
+  observeEvent(input$fg_clear, fg_pick(NULL))
+  observeEvent(input$fg_infoclose, fg_pick(NULL))
+  observeEvent(list(input$fg_cluster, input$fg_contrast, input$fg_stratum),
+               fg_pick(NULL), ignoreInit = TRUE)
+  output$fg_de_dl <- downloadHandler(
+    filename = function() paste0("fourgroup_DE_", input$fg_cluster, "_", input$fg_contrast,
+                                 "_", input$fg_stratum, "_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(fg_d(), f, row.names = FALSE))
+
+  # G1 proportion + maturation scores
+  fg_phase_p <- reactive(fg_phase_plot(input$fg_g1_clusters, input$fgphase_basesize %||% 13))
+  output$fg_phase_plot <- renderPlot(apply_fig_opts(fg_phase_p(), "fgphase", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("fgphase_dl_", f)]] <- dl_ggplot("fgphase", fg_phase_p, input, f) })
+  fg_score_p <- reactive({ req(input$fg_score)
+    fg_score_plot(input$fg_score, input$fg_g1_clusters, input$fg_score_stratum %||% "all",
+                  input$fgscore_basesize %||% 13) })
+  output$fg_score_plot <- renderPlot(apply_fig_opts(fg_score_p(), "fgscore", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("fgscore_dl_", f)]] <- dl_ggplot("fgscore", fg_score_p, input, f) })
+  output$fg_scores_dl <- downloadHandler(
+    filename = function() paste0("fourgroup_scores_", Sys.Date(), ".csv"),
+    content  = function(f) {
+      validate(need(!is.null(FG$scores), "No score summary in this data build."))
+      write.csv(FG$scores, f, row.names = FALSE) })
+
+  # ---- Maturation intersection + candidate genes ----
+  mi_quad_p <- reactive(fg_quadrant_plot(input$mi_cluster, input$mi_hideconf,
+                                         bs = input$miquad_basesize %||% 13))
+  output$mi_quadrant <- renderPlot(apply_fig_opts(mi_quad_p(), "miquad", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("miquad_dl_", f)]] <- dl_ggplot("miquad", mi_quad_p, input, f) })
+  mi_tab_df <- reactive(fg_intersect_df(input$mi_cluster, input$mi_quad, input$mi_hideconf))
+  output$mi_table <- renderDT(DT::datatable(mi_tab_df(), rownames = FALSE,
+    options = list(pageLength = 25, scrollX = TRUE, scrollY = "420px",
+                   scrollCollapse = TRUE, dom = "ftip"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(intersect(c("mat_log2FC","p7ko_log2FC","p7ko_padj"), names(mi_tab_df())), 3))
+  output$mi_dl <- downloadHandler(
+    filename = function() paste0("maturation_intersect_", input$mi_cluster, "_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(mi_tab_df(), f, row.names = FALSE))
+
+  mi_cand_p <- reactive(fg_candidate_plot(input$mi_genes, input$mi_cand_clusters,
+                                          input$mi_cand_stratum %||% "all",
+                                          input$micand_basesize %||% 13))
+  output$mi_candidates <- renderPlot(apply_fig_opts(mi_cand_p(), "micand", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("micand_dl_", f)]] <- dl_ggplot("micand", mi_cand_p, input, f) })
+  mi_spec_df <- reactive(fg_specificity_df(input$mi_genes, input$mi_cand_stratum %||% "all"))
+  output$mi_spec_tab <- renderDT(DT::datatable(mi_spec_df(), rownames = FALSE,
+    options = list(pageLength = 15, scrollX = TRUE, dom = "ftip"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(intersect(c("P7_KO_vs_WT","P0_KO_vs_WT","P7_specificity",
+                                 "CM2_4_5_mean_absLFC","other_clusters_mean_absLFC",
+                                 "priority_concentration"), names(mi_spec_df())), 3))
+  output$mi_cand_dl <- downloadHandler(
+    filename = function() paste0("candidate_expression_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(
+      fg_candidate_df(input$mi_genes, input$mi_cand_clusters, input$mi_cand_stratum %||% "all"),
+      f, row.names = FALSE))
+  output$mi_spec_dl <- downloadHandler(
+    filename = function() paste0("candidate_P7_specificity_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(mi_spec_df(), f, row.names = FALSE))
+
   # ---- Subset & DEGs (interactive descriptive DE) ----
   observeEvent(input$deg_by, {
     lv <- sort(unique(as.character(DMETA[[input$deg_by]])))
@@ -1580,6 +2116,11 @@ server <- function(input, output, session) {
     "<li><b>n = 1 animal per condition.</b> Two lanes per sample are the same library sequenced twice, not biological replicates.</li>",
     "<li><b>Sex confound:</b> KO and WT animals are different sexes (Y-genes top the KO-up list; flagged as 'sex/construct').</li>",
     "<li><b>KO not confirmed:</b> E2f7/E2f8 are not reduced at the transcript level (likely a conditional allele a 3' assay cannot see).</li>",
+    "<li><b>Cycling fractions are a sorting artefact.</b> P7 was FACS cycling-enriched 4.5&ndash;5.2&times; while P0 was ",
+    "essentially unenriched, so the raw cycling fraction <i>rises</i> from P0 to P7 in this data and <i>falls</i> in reality. ",
+    "Any P0-vs-P7 contrast on all cells partly reads out the sort rather than development &mdash; prefer the ",
+    "phase-matched (G1-only) contrasts on the <b>Four-group</b> tab. Only within-timepoint comparisons ",
+    "(P7 KO vs WT) are free of this.</li>",
     "<li>All KO-vs-WT differences are <b>descriptive / hypothesis-generating only.</b> ",
     "Valid inference needs a replicated, sex-matched cohort (&ge;3 animals/condition).</li>",
     "<li><b>Volcano p-axis is for ranking, not significance.</b> Because the n = 1 design treats technical ",
