@@ -862,19 +862,24 @@ fg_quadrant_plot <- function(cluster, hide_conf = TRUE, label_n = 20, bs = 13) {
   d <- fg_intersect_df(cluster, NULL, hide_conf)
   d$quadrant <- factor(d$quadrant, levels = names(FG_QUAD))
   hit <- d[d$quadrant %in% c("immature_up_in_KO","mature_down_in_KO"), , drop = FALSE]
-  lab <- hit[order(-abs(hit$mat_log2FC) - abs(hit$p7ko_log2FC)), , drop = FALSE]
+  lab <- hit[order(-abs(hit$mat_auc - 0.5) - abs(hit$p7ko_log2FC)), , drop = FALSE]
   lab <- head(lab, label_n)
-  xr <- max(abs(d$mat_log2FC), na.rm = TRUE); yr <- max(abs(d$p7ko_log2FC), na.rm = TRUE)
-  ggplot(d, aes(mat_log2FC, p7ko_log2FC)) +
-    annotate("rect", xmin = -xr, xmax = 0, ymin = 0, ymax = yr, fill = "#c62828", alpha = .06) +
-    annotate("rect", xmin = 0, xmax = xr, ymin = -yr, ymax = 0, fill = "#1565c0", alpha = .06) +
+  # x is AUC, not log2FC: immature markers are far higher dynamic-range genes than
+  # mature ones here (log2FC spans -1.86 to +0.43), so a log2FC axis would put every
+  # classified gene on the left. AUC is rank-based, so the axis is symmetric and the
+  # point position agrees with the colour.
+  mid <- 0.5
+  xr <- max(abs(d$mat_auc - mid), na.rm = TRUE); yr <- max(abs(d$p7ko_log2FC), na.rm = TRUE)
+  ggplot(d, aes(mat_auc, p7ko_log2FC)) +
+    annotate("rect", xmin = mid - xr, xmax = mid, ymin = 0, ymax = yr, fill = "#c62828", alpha = .06) +
+    annotate("rect", xmin = mid, xmax = mid + xr, ymin = -yr, ymax = 0, fill = "#1565c0", alpha = .06) +
     geom_hline(yintercept = 0, colour = "grey70") +
-    geom_vline(xintercept = 0, colour = "grey70") +
+    geom_vline(xintercept = mid, colour = "grey70") +
     geom_point(aes(colour = quadrant), size = 1.2, alpha = .7) +
     geom_text(data = lab, aes(label = gene), size = 3, vjust = -0.7, check_overlap = TRUE) +
     scale_colour_manual(values = FG_QUAD, drop = FALSE) +
     theme_minimal(base_size = bs) +
-    labs(x = "maturation association  (← immature | mature →)",
+    labs(x = "maturation association, AUC  (← immature | 0.5 | mature →)",
          y = "P7 KO vs WT  log2FC  (↑ up in KO)", colour = NULL,
          title = paste0("Maturation axis × P7 KO response — ",
                         if (cluster == "AllCM") "all cardiomyocytes" else cluster),
@@ -1974,7 +1979,7 @@ server <- function(input, output, session) {
     options = list(pageLength = 25, scrollX = TRUE, scrollY = "420px",
                    scrollCollapse = TRUE, dom = "ftip"),
     class = "compact stripe hover") |>
-    DT::formatSignif(intersect(c("mat_log2FC","p7ko_log2FC","p7ko_padj"), names(mi_tab_df())), 3))
+    DT::formatSignif(intersect(c("mat_log2FC","mat_auc","p7ko_log2FC","p7ko_padj"), names(mi_tab_df())), 3))
   output$mi_dl <- downloadHandler(
     filename = function() paste0("maturation_intersect_", input$mi_cluster, "_", Sys.Date(), ".csv"),
     content  = function(f) write.csv(mi_tab_df(), f, row.names = FALSE))

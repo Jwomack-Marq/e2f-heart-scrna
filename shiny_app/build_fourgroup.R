@@ -70,6 +70,13 @@ MIN_PCT    <- 5                        # row gate: expressed in >=5% of one side
 MIN_LFC    <- 0.5                      # row gate: OR |log2FC| >= this
 MAX_PADJ   <- 0.05                     # row gate: OR padj < this
 TERTILE_Q  <- c(1/3, 2/3)              # maturation-axis split
+# The maturation axis is classified on AUC, not log2FC. Immature markers (Nppa,
+# Nppb) are huge-dynamic-range genes while mature markers (Myh6, Pln, Atp2a2) are
+# moderate, so on this data log2FC spans -1.86 to +0.43 — a symmetric |log2FC|
+# cutoff classifies immature genes and can never classify a mature one. AUC is
+# rank-based and scale-free, so the same threshold means the same thing on both
+# sides. At 0.60/0.40 this yields ~135 mature- and ~42 immature-associated genes.
+MAT_AUC    <- 0.60
 MAT_SCORE  <- "sig_maturation_nocc"    # cycle-free maturation axis (see header)
 GROUPS     <- c("WT-P0", "WT-P7", "KO-P0", "KO-P7")
 # Genes that bypass the row gate, so a table never silently lacks a gene someone
@@ -142,8 +149,17 @@ pick_matrix <- function() {
 mx <- pick_matrix(); M <- mx$M; MD <- mx$MD
 MD$cm_subcluster <- unname(cm_lookup[MD$cell])
 MD$fourgrp <- fourgrp(MD)
+# build_signature_scores.R writes sig_* onto app$meta and app$cm$meta but NOT onto
+# app$deg_meta, so when DE runs on the broad matrix the scores are simply absent
+# from MD. Join them on by cell instead of assuming the DE metadata carries them —
+# without this the maturation axis silently produces nothing.
+sc_cols <- grep("^sig_", names(app$meta), value = TRUE)
+if (length(sc_cols)) {
+  i <- match(MD$cell, app$meta$cell)
+  for (s in setdiff(sc_cols, names(MD))) MD[[s]] <- app$meta[[s]][i]
+}
 MD <- MD[, intersect(c("cell","genotype","timepoint","Phase","cm_subcluster","fourgrp",
-                       "sig_maturation", MAT_SCORE), names(MD)), drop = FALSE]
+                       sc_cols), names(MD)), drop = FALSE]
 is_cm <- !is.na(MD$cm_subcluster)
 
 cat(sprintf("\nMatrix: %s  (%d genes x %d cells; %d are cardiomyocytes)\n",
@@ -290,6 +306,9 @@ skipped <- if (length(skipped)) do.call(rbind, skipped) else NULL
 # cells on MAT_USE. Done WITHIN each timepoint and averaged, so the axis is a
 # maturation axis and not a restatement of P0-vs-P7.
 maturation <- NULL
+if (!PROBE && !MAT_USE %in% names(MD))
+  cat("\n!! SKIPPING the maturation axis and the intersection: '", MAT_USE,
+      "' is not on the\n   DE metadata. Run build_signature_scores.R first.\n", sep = "")
 if (!PROBE && MAT_USE %in% names(MD)) {
   cat("\n== maturation association (", MAT_USE, ", tertile split within timepoint) ==\n", sep = "")
   per_tp <- list()
@@ -323,12 +342,13 @@ if (!PROBE && MAT_USE %in% names(MD)) {
       n_timepoints = rowSums(!is.na(lfcm)),
       stringsAsFactors = FALSE)
     maturation$mat_class <- with(maturation, ifelse(
-      is.na(mat_padj) | mat_padj >= MAX_PADJ | abs(mat_log2FC) < MIN_LFC, "ns",
-      ifelse(mat_log2FC > 0, "mature-associated", "immature-associated")))
+      is.na(mat_padj) | mat_padj >= MAX_PADJ, "ns",
+      ifelse(mat_auc >= MAT_AUC, "mature-associated",
+      ifelse(mat_auc <= 1 - MAT_AUC, "immature-associated", "ns"))))
     maturation$in_curated_program <- ifelse(
       maturation$gene %in% prog_mature, "mature",
       ifelse(maturation$gene %in% prog_immature, "immature", NA_character_))
-    maturation <- maturation[order(-abs(maturation$mat_log2FC)), ]
+    maturation <- maturation[order(-abs(maturation$mat_auc - 0.5)), ]
     cat(sprintf("  %d genes ranked; %d mature-associated, %d immature-associated\n",
                 nrow(maturation), sum(maturation$mat_class == "mature-associated"),
                 sum(maturation$mat_class == "immature-associated")))
@@ -350,6 +370,7 @@ if (!PROBE && !is.null(maturation)) {
     r <- data.frame(
       cluster = cl, gene = d$gene[ok], stratum = stratum,
       mat_log2FC = maturation$mat_log2FC[m[ok]],
+      mat_auc    = maturation$mat_auc[m[ok]],
       mat_class  = maturation$mat_class[m[ok]],
       p7ko_log2FC = d$log2FoldChange[ok], p7ko_padj = d$padj[ok],
       p7ko_pct_KO = d$pct_A[ok], p7ko_pct_WT = d$pct_B[ok],
@@ -438,7 +459,7 @@ app$fourgroup <- list(
     contrasts = do.call(rbind, lapply(CONTRASTS, function(x)
       data.frame(key = x$key, label = x$label, A = x$A, B = x$B,
                  pos = x$pos, neg = x$neg, xlab = x$xlab, stringsAsFactors = FALSE))),
-    strata = names(STRATA), maturation_score = MAT_USE,
+    strata = names(STRATA), maturation_score = MAT_USE, maturation_auc = MAT_AUC,
     gate = sprintf("max(pct) >= %g%% AND (padj < %g OR |log2FC| >= %g)",
                    MIN_PCT, MAX_PADJ, MIN_LFC),
     keep_always = KEEP_ALWAYS,
@@ -456,8 +477,12 @@ app$cm$meta$cm_subcluster <- cmm$cm_subcluster
 cat("\n== summary ==\n")
 cat(sprintf("  DE tables      : %d\n", sum(vapply(de, length, 0L))))
 cat(sprintf("  skipped        : %d\n", if (is.null(skipped)) 0L else nrow(skipped)))
-cat(sprintf("  maturation     : %s genes\n", if (is.null(maturation)) "0" else nrow(maturation)))
-cat(sprintf("  intersection   : %s rows\n", if (is.null(intersect_tab)) "0" else nrow(intersect_tab)))
+cat(sprintf("  maturation     : %s genes%s\n",
+            if (is.null(maturation)) "0" else nrow(maturation),
+            if (is.null(maturation)) "   <-- EMPTY, the intersection tab will be blank" else ""))
+cat(sprintf("  intersection   : %s rows%s\n",
+            if (is.null(intersect_tab)) "0" else nrow(intersect_tab),
+            if (is.null(intersect_tab)) "   <-- EMPTY" else ""))
 cat(sprintf("  cm_subcluster  : added to meta (%d CM cells labelled)\n",
             sum(!is.na(app$meta$cm_subcluster))))
 
