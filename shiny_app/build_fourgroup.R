@@ -356,7 +356,12 @@ axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
   # Keep the per-timepoint AUCs, not just their mean. Averaging is what stops the axis
   # from becoming a P0-vs-P7 axis, but it also hides whether a gene is maturation-linked
   # at one age and not the other -- which is a question worth being able to ask.
-  for (tp in names(per_tp)) out[[paste0(prefix, "_auc_", tp)]] <- round(grab(per_tp[[tp]], "auc"), 4)
+  for (tp in names(per_tp)) {
+    out[[paste0(prefix, "_auc_", tp)]]  <- round(grab(per_tp[[tp]], "auc"), 4)
+    # per-timepoint padj too, so a "confidently labelled" call can be made inside a
+    # single panel instead of borrowing the averaged axis's significance
+    out[[paste0(prefix, "_padj_", tp)]] <- signif(grab(per_tp[[tp]], "padj"), 3)
+  }
   out[[paste0(prefix, "_class")]] <- ifelse(
     is.na(padj) | padj >= MAX_PADJ, "ns",
     ifelse(auc >= MAT_AUC, paste0(hi_lab, "-associated"),

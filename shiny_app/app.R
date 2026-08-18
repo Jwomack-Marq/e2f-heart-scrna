@@ -1077,12 +1077,18 @@ GM_QUADS <- names(GM_QUAD_PAL)
 # Below this distance a gene is close enough to the centre that which side it falls on
 # is jitter — the P0 and P7 centres alone differ by 0.021 on the maturation axis.
 GM_MOVE_MIN <- 0.05
+# A gene counts as "confidently labelled" on an axis when it clears this margin from
+# that panel's centre AND is significant in that panel. Same margin the intersection
+# tab uses (its mat_class threshold is 0.60 against a 0.5 split), but measured from the
+# panel's own centre, so it means the same thing on the P0 and P7 panels too. Most
+# genes never clear it -- that is the point: it marks the ones worth trusting.
+GM_CONF_MARGIN <- 0.10
 
 # `panel` selects which pair of coordinates to plot: the timepoint-averaged axes, or
 # P0 / P7 on their own. Quadrant and distance are recomputed against that panel's own
 # centre rather than reused from the averaged one.
 gm_df <- function(panel = "avg", quadrants = NULL, min_dist = 0,
-                  hide_sets = TRUE, geneset = "__all__") {
+                  hide_sets = TRUE, geneset = "__all__", conf_only = FALSE) {
   validate(need(!is.null(GM), GM_MSG))
   panel <- panel %||% "avg"
   cols <- gm_cols(panel)
@@ -1096,6 +1102,19 @@ gm_df <- function(panel = "avg", quadrants = NULL, min_dist = 0,
   d$quadrant <- paste0(ifelse(d$x >= ctr[["mat"]], "mature", "immature"), "+",
                        ifelse(d$y >= ctr[["met"]], "oxidative", "glycolytic"))
   d$distance <- round(sqrt((d$x - ctr[["mat"]])^2 + (d$y - ctr[["met"]])^2), 4)
+  # which points are the confident ones — effect clear of the centre AND significant,
+  # judged inside this panel rather than borrowed from the averaged axis
+  pcol <- function(pre) if (identical(panel, "avg")) paste0(pre, "_padj")
+                        else paste0(pre, "_padj_", panel)
+  conf1 <- function(v, c0, pc) {
+    if (!pc %in% names(d)) return(rep(NA, nrow(d)))
+    pv <- d[[pc]]; !is.na(pv) & pv < 0.05 & abs(v - c0) >= GM_CONF_MARGIN
+  }
+  d$mat_confident <- conf1(d$x, ctr[["mat"]], pcol("mat"))
+  d$met_confident <- conf1(d$y, ctr[["met"]], pcol("met"))
+  d$confidence <- ifelse(d$mat_confident & d$met_confident, "both axes",
+                  ifelse(d$mat_confident, "maturation only",
+                  ifelse(d$met_confident, "metabolic only", "neither")))
   # genes inside the scoring sets sit at the extremes of their own axis by
   # construction; hidden by default so the map isn't just recovering its own inputs
   if (isTRUE(hide_sets)) d <- d[is.na(d$in_score_set), , drop = FALSE]
@@ -1103,14 +1122,15 @@ gm_df <- function(panel = "avg", quadrants = NULL, min_dist = 0,
     d <- d[d$gene %in% genes_for_set(geneset), , drop = FALSE]
   if (!is.null(quadrants) && length(quadrants)) d <- d[d$quadrant %in% quadrants, , drop = FALSE]
   if (!is.null(min_dist)) d <- d[d$distance >= min_dist, , drop = FALSE]
-  validate(need(nrow(d), "No genes pass these filters — lower the distance cut or re-enable a quadrant."))
+  if (isTRUE(conf_only)) d <- d[d$confidence != "neither", , drop = FALSE]
+  validate(need(nrow(d), "No genes pass these filters — lower the distance cut, re-enable a quadrant, or untick “confidently labelled only”."))
   d[order(-d$distance), , drop = FALSE]
 }
 # table view: the columns worth reading, plus the per-timepoint AUCs so a gene's
 # movement between P0 and P7 is visible without switching panels
 gm_table <- function(d) {
   tps <- setdiff(GM_PANELS, "avg")
-  cols <- intersect(c("gene","quadrant","distance","x","y",
+  cols <- intersect(c("gene","quadrant","confidence","distance","x","y",
                       paste0("mat_auc_", tps), paste0("met_auc_", tps),
                       "p7ko_log2FC","mat_class","met_class","in_score_set"), names(d))
   out <- d[, cols, drop = FALSE]
@@ -1155,6 +1175,13 @@ gm_plot_ly <- function(d, label_n = 20, highlight = NULL, panel = "avg") {
         corner(mean(c(cx, xr[2])), yr[1], "mature + glycolytic",   "#ef6c00"),
         corner(mean(c(xr[1], cx)), yr[2], "immature + oxidative",  "#00838f")),
       margin = list(t = 30))
+  # ring the confidently-labelled points so it is visible at a glance which of the
+  # 11k are the ones that actually clear significance — most do not
+  cf <- d[!is.na(d$confidence) & d$confidence != "neither", , drop = FALSE]
+  if (nrow(cf)) p <- add_trace(p, data = cf, x = ~x, y = ~y, type = "scattergl", mode = "markers",
+    marker = list(size = 9, color = "rgba(0,0,0,0)", line = list(color = "#222", width = 1.2)),
+    name = sprintf("confidently labelled (%d)", nrow(cf)),
+    text = ~hover, hovertemplate = "%{text}<extra></extra>", inherit = FALSE)
   # name the genes furthest from the centre — that ranking IS the "distance" question
   if (!is.null(label_n) && label_n > 0) {
     lab <- head(d[order(-d$distance), , drop = FALSE], label_n)
@@ -1214,6 +1241,12 @@ gm_gene_note <- function(gene, panel = "avg") {
   div(style = "font-size:13px;margin-bottom:6px",
     HTML(paste0("<b>", gene, "</b><br>", paste(parts, collapse = "<br>"))),
     if (!is.null(delta)) div(style = "color:#555", HTML(delta)),
+    local({
+      cl <- c(r$mat_class[1], r$met_class[1])
+      cl <- cl[!is.na(cl) & cl != "ns"]
+      if (length(cl)) div(style = "color:#1b5e20",
+        HTML(paste0("Confidently labelled on the averaged axis: ", paste(cl, collapse = ", ")))) else NULL
+    }),
     if (moved) div(style = "color:#c62828;font-weight:600",
       HTML(sprintf("&#9888; sits on a different side at each age: %s",
                    paste(sprintf("%s %s", names(qs), vapply(qs, `[[`, "", "q")), collapse = " → ")))),
@@ -1613,6 +1646,7 @@ ui <- page_navbar(
                      selected = "avg"),
         sliderInput("gm_dist", "Minimum distance from centre", 0, 0.25, 0, 0.005),
         checkboxGroupInput("gm_quad", "Quadrants", setNames(GM_QUADS, GM_QUADS), selected = GM_QUADS),
+        checkboxInput("gm_conf", "Confidently labelled only", FALSE),
         checkboxInput("gm_hidesets", "Hide genes from the scoring sets", TRUE),
         selectInput("gm_geneset", "Restrict to gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
         selectizeInput("gm_gene", "Find a gene", choices = NULL, options = list(maxOptions = 50L)),
@@ -1641,7 +1675,12 @@ ui <- page_navbar(
                  "Axes split at each one's ", strong("median"), ", not 0.5, because AUC carries a ",
                  "small global offset; splitting at 0.5 would put most genes in one corner.", br(), br(),
                  strong("Scoring-set genes are hidden by default"), " — they sit at the extremes of ",
-                 "their own axis by construction, so leaving them in would partly just recover the inputs.")),
+                 "their own axis by construction, so leaving them in would partly just recover the inputs.", br(), br(),
+                 strong("Ringed points are confidently labelled"), " — clear of the centre by 0.10 and ",
+                 "significant, judged within the panel shown. That is the same bar the ",
+                 em("Maturation ∩ P7 KO"), " tab uses before it will call a gene maturation-linked, and ",
+                 "very few genes clear it. Everything else still gets a side so it can be ranked by ",
+                 "distance, but treat an unringed point as a position, not a claim.")),
       conditionalPanel("input.matt != 'genemap'",
         helpText("P0→P7 maturation and the glycolysis→fatty-acid-oxidation metabolic switch. ",
                  "The within-genotype P0→P7 axis is the most robust signal in this design. ",
@@ -2484,7 +2523,8 @@ server <- function(input, output, session) {
   observe(updateSelectizeInput(session, "gm_gene",
     choices = c("", if (!is.null(GM)) sort(GM$gene) else character(0)), server = TRUE))
   gm_d    <- reactive(gm_df(input$gm_panel %||% "avg", input$gm_quad, input$gm_dist %||% 0,
-                            input$gm_hidesets %||% TRUE, input$gm_geneset %||% "__all__"))
+                            input$gm_hidesets %||% TRUE, input$gm_geneset %||% "__all__",
+                            input$gm_conf %||% FALSE))
   gm_tab  <- reactive(gm_table(gm_d()))
   gm_pick <- reactiveVal(NULL)
   gm_dt_proxy <- DT::dataTableProxy("gm_table")
@@ -2496,9 +2536,11 @@ server <- function(input, output, session) {
     n <- if (inherits(d, "try-error")) 0 else nrow(d)
     tagList(
       div(style = "font-size:13px;margin-bottom:4px",
-          sprintf("%d genes shown of %d on the map — %s.", n, if (is.null(GM)) 0L else nrow(GM),
+          sprintf("%d genes shown of %d on the map — %s. %s confidently labelled.",
+                  n, if (is.null(GM)) 0L else nrow(GM),
                   if (identical(input$gm_panel %||% "avg", "avg")) "P0 and P7 averaged"
-                  else paste0(input$gm_panel, " cells only")),
+                  else paste0(input$gm_panel, " cells only"),
+                  if (inherits(d, "try-error")) "?" else sum(d$confidence != "neither")),
           if (isTRUE(input$gm_hidesets)) " Scoring-set genes hidden." else
             span(style = "color:#c62828", " Scoring-set genes shown — those sit at their own axis's extreme by construction.")),
       gm_gene_note(gm_pick(), input$gm_panel %||% "avg"))
