@@ -1054,16 +1054,48 @@ GM_MSG    <- "Gene map isn't in this data build — run build_fourgroup.R and re
 # The split point is each axis's own MEDIAN, not 0.5: wilcoxauc's AUC carries a small
 # global offset (the tertile groups differ in detection rate), and since most genes sit
 # within ~0.02 of the median, splitting at 0.5 would pile 65% of them into one corner.
-GM_CENTRE <- if (!is.null(GM) && !is.null(attr(GM, "centre"))) attr(GM, "centre") else c(mat = 0.5, met = 0.5)
+# One centre per panel. The AUC offset is a property of the cells being compared, so
+# P0 and P7 do not share the pooled median -- here P0 sits at 0.498 and P7 at 0.519.
+GM_CENTRES <- local({
+  a <- if (!is.null(GM)) attr(GM, "centre") else NULL
+  # older builds stored a bare vector rather than one centre per panel
+  if (is.null(a)) list(avg = c(mat = 0.5, met = 0.5)) else if (is.list(a)) a else list(avg = a)
+})
+GM_PANELS <- names(GM_CENTRES)
+# column pair backing each panel; "avg" uses the averaged AUCs
+gm_cols <- function(panel) {
+  if (identical(panel, "avg")) c("mat_auc", "met_auc")
+  else paste0(c("mat_auc_", "met_auc_"), panel)
+}
+gm_centre <- function(panel) if (!is.null(GM_CENTRES[[panel]])) GM_CENTRES[[panel]] else GM_CENTRES[[1]]
+GM_NCELL <- if (!is.null(GM)) attr(GM, "n_cells_per_tp") else NULL
 # diagonal = the expected coupling (mature<->oxidative, immature<->glycolytic);
 # off-diagonal = genes that uncouple the two programs, which is the interesting part.
 GM_QUAD_PAL <- c("mature+oxidative"    = "#c62828", "immature+glycolytic" = "#1565c0",
                  "mature+glycolytic"   = "#ef6c00", "immature+oxidative"  = "#00838f")
 GM_QUADS <- names(GM_QUAD_PAL)
+# Below this distance a gene is close enough to the centre that which side it falls on
+# is jitter — the P0 and P7 centres alone differ by 0.021 on the maturation axis.
+GM_MOVE_MIN <- 0.05
 
-gm_df <- function(quadrants = NULL, min_dist = 0, hide_sets = TRUE, geneset = "__all__") {
+# `panel` selects which pair of coordinates to plot: the timepoint-averaged axes, or
+# P0 / P7 on their own. Quadrant and distance are recomputed against that panel's own
+# centre rather than reused from the averaged one.
+gm_df <- function(panel = "avg", quadrants = NULL, min_dist = 0,
+                  hide_sets = TRUE, geneset = "__all__") {
   validate(need(!is.null(GM), GM_MSG))
+  panel <- panel %||% "avg"
+  cols <- gm_cols(panel)
+  validate(need(all(cols %in% names(GM)), paste0(
+    "The ", panel, " panel isn't in this data build — re-run build_fourgroup.R and redeploy.")))
   d <- GM
+  d$x <- d[[cols[1]]]; d$y <- d[[cols[2]]]
+  d <- d[!is.na(d$x) & !is.na(d$y), , drop = FALSE]
+  validate(need(nrow(d), paste0("No genes have coordinates in the ", panel, " panel.")))
+  ctr <- gm_centre(panel)
+  d$quadrant <- paste0(ifelse(d$x >= ctr[["mat"]], "mature", "immature"), "+",
+                       ifelse(d$y >= ctr[["met"]], "oxidative", "glycolytic"))
+  d$distance <- round(sqrt((d$x - ctr[["mat"]])^2 + (d$y - ctr[["met"]])^2), 4)
   # genes inside the scoring sets sit at the extremes of their own axis by
   # construction; hidden by default so the map isn't just recovering its own inputs
   if (isTRUE(hide_sets)) d <- d[is.na(d$in_score_set), , drop = FALSE]
@@ -1074,33 +1106,43 @@ gm_df <- function(quadrants = NULL, min_dist = 0, hide_sets = TRUE, geneset = "_
   validate(need(nrow(d), "No genes pass these filters — lower the distance cut or re-enable a quadrant."))
   d[order(-d$distance), , drop = FALSE]
 }
-# table view: the columns worth reading, in a sensible order
+# table view: the columns worth reading, plus the per-timepoint AUCs so a gene's
+# movement between P0 and P7 is visible without switching panels
 gm_table <- function(d) {
-  cols <- intersect(c("gene","quadrant","distance","mat_auc","met_auc",
+  tps <- setdiff(GM_PANELS, "avg")
+  cols <- intersect(c("gene","quadrant","distance","x","y",
+                      paste0("mat_auc_", tps), paste0("met_auc_", tps),
                       "p7ko_log2FC","mat_class","met_class","in_score_set"), names(d))
-  d[, cols, drop = FALSE]
+  out <- d[, cols, drop = FALSE]
+  names(out)[match(c("x","y"), names(out), nomatch = 0)] <-
+    c("mat_auc","met_auc")[c("x","y") %in% names(out)]
+  out
 }
-gm_plot_ly <- function(d, label_n = 20, highlight = NULL) {
+gm_plot_ly <- function(d, label_n = 20, highlight = NULL, panel = "avg") {
   validate(need(nrow(d), "No genes to plot."))
-  cx <- unname(GM_CENTRE[["mat"]]); cy <- unname(GM_CENTRE[["met"]])
+  ctr <- gm_centre(panel)
+  cx <- unname(ctr[["mat"]]); cy <- unname(ctr[["met"]])
   d$quadrant <- factor(d$quadrant, levels = GM_QUADS)
   d$hover <- sprintf(
     "<b>%s</b><br>maturation AUC: %.3f<br>metabolic AUC: %.3f<br>%s<br>distance: %.3f%s%s",
-    d$gene, d$mat_auc, d$met_auc, as.character(d$quadrant), d$distance,
+    d$gene, d$x, d$y, as.character(d$quadrant), d$distance,
     ifelse(is.na(d$p7ko_log2FC), "", sprintf("<br>P7 KO vs WT log2FC: %+.2f", d$p7ko_log2FC)),
     ifelse(is.na(d$in_score_set), "", paste0("<br><i>in the ", d$in_score_set, " scoring set</i>")))
   rng <- function(v, c0) { m <- max(abs(v - c0), na.rm = TRUE) * 1.08; c(c0 - m, c0 + m) }
-  xr <- rng(d$mat_auc, cx); yr <- rng(d$met_auc, cy)
+  xr <- rng(d$x, cx); yr <- rng(d$y, cy)
   ln <- function(x0, x1, y0, y1) list(type = "line", x0 = x0, x1 = x1, y0 = y0, y1 = y1,
                                       line = list(color = "grey65", width = 1))
   corner <- function(x, y, txt, col) list(x = x, y = y, text = txt, showarrow = FALSE,
     font = list(size = 10, color = col), xanchor = "center", yanchor = "middle", opacity = 0.75)
-  p <- plot_ly(d, x = ~mat_auc, y = ~met_auc, color = ~quadrant, colors = GM_QUAD_PAL,
+  p <- plot_ly(d, x = ~x, y = ~y, color = ~quadrant, colors = GM_QUAD_PAL,
         customdata = ~gene, text = ~hover, hovertemplate = "%{text}<extra></extra>",
         type = "scattergl", mode = "markers",
         marker = list(size = 6, opacity = 0.5, line = list(width = 0)),
         source = "gm_scatter") |>
     layout(
+      title = list(text = paste0("Gene map — ",
+        if (identical(panel, "avg")) "timepoints averaged" else paste0(panel, " only")),
+        font = list(size = 13)),
       xaxis = list(title = "maturation association, AUC  (← immature | mature →)",
                    range = xr, zeroline = FALSE),
       yaxis = list(title = "metabolic association, AUC  (← glycolytic | oxidative →)",
@@ -1116,12 +1158,12 @@ gm_plot_ly <- function(d, label_n = 20, highlight = NULL) {
   # name the genes furthest from the centre — that ranking IS the "distance" question
   if (!is.null(label_n) && label_n > 0) {
     lab <- head(d[order(-d$distance), , drop = FALSE], label_n)
-    if (nrow(lab)) p <- add_annotations(p, data = lab, x = ~mat_auc, y = ~met_auc, text = ~gene,
+    if (nrow(lab)) p <- add_annotations(p, data = lab, x = ~x, y = ~y, text = ~gene,
       showarrow = FALSE, yshift = 9, font = list(size = 9, color = "#333"), inherit = FALSE)
   }
   if (!is.null(highlight) && nzchar(highlight) && highlight %in% d$gene) {
     hd <- d[match(highlight, d$gene), , drop = FALSE]
-    p <- add_trace(p, x = hd$mat_auc, y = hd$met_auc, type = "scattergl", mode = "markers",
+    p <- add_trace(p, x = hd$x, y = hd$y, type = "scattergl", mode = "markers",
                    marker = list(size = 16, color = "rgba(0,0,0,0)", line = list(color = "#111", width = 3)),
                    name = "selected", showlegend = FALSE, hoverinfo = "skip", inherit = FALSE)
   }
@@ -1129,20 +1171,56 @@ gm_plot_ly <- function(d, label_n = 20, highlight = NULL) {
 }
 # where a gene sits, in words — shown next to the table so a single gene can be read
 # off without hunting for its row
-gm_gene_note <- function(gene) {
+gm_gene_note <- function(gene, panel = "avg") {
   if (is.null(GM) || is.null(gene) || !nzchar(gene)) return(NULL)
   r <- GM[GM$gene == gene, , drop = FALSE]
   if (!nrow(r)) return(div(style = "font-size:13px;color:#777",
     paste0(gene, " is not on the gene map (it needs an association on both axes).")))
-  rk <- sum(GM$distance >= r$distance[1], na.rm = TRUE)
+  # position in every panel, so "is this gene maturation-linked at P7 but not P0?" can be
+  # read off directly instead of by flipping between panels
+  one <- function(pn) {
+    cols <- gm_cols(pn); if (!all(cols %in% names(r))) return(NULL)
+    x <- r[[cols[1]]][1]; y <- r[[cols[2]]][1]
+    if (is.na(x) || is.na(y)) return(sprintf("<b>%s</b>: not measured", pn))
+    ct <- gm_centre(pn)
+    q <- paste0(ifelse(x >= ct[["mat"]], "mature", "immature"), "+",
+                ifelse(y >= ct[["met"]], "oxidative", "glycolytic"))
+    dd <- sqrt((x - ct[["mat"]])^2 + (y - ct[["met"]])^2)
+    sprintf("<b>%s</b>: %s &middot; mat %.3f, met %.3f &middot; dist %.3f",
+            if (pn == "avg") "averaged" else pn, q, x, y, dd)
+  }
+  parts <- Filter(Negate(is.null), lapply(GM_PANELS, one))
+  tps <- setdiff(GM_PANELS, "avg")
+  qd <- function(pn) {
+    cols <- gm_cols(pn); if (!all(cols %in% names(r))) return(NULL)
+    x <- r[[cols[1]]][1]; y <- r[[cols[2]]][1]; if (is.na(x) || is.na(y)) return(NULL)
+    ct <- gm_centre(pn)
+    list(q = paste0(ifelse(x >= ct[["mat"]], "mature", "immature"), "+",
+                    ifelse(y >= ct[["met"]], "oxidative", "glycolytic")),
+         x = x, y = y, d = sqrt((x - ct[["mat"]])^2 + (y - ct[["met"]])^2))
+  }
+  qs <- Filter(Negate(is.null), setNames(lapply(tps, qd), tps))
+  delta <- NULL; moved <- FALSE
+  if (length(qs) == 2) {
+    a <- qs[[1]]; b <- qs[[2]]
+    delta <- sprintf("%s → %s: maturation %+.3f, metabolic %+.3f",
+                     names(qs)[1], names(qs)[2], b$x - a$x, b$y - a$y)
+    # A bare quadrant flip is NOT evidence of movement: the panel centres themselves
+    # differ by 0.021 on the maturation axis while the median gene's own AUC moves
+    # 0.027, so 66% of genes "flip" on centre-line jitter alone. Only call it a move
+    # when the gene is clear of the centre in BOTH panels.
+    moved <- a$q != b$q && min(a$d, b$d) >= GM_MOVE_MIN
+  }
   div(style = "font-size:13px;margin-bottom:6px",
-    HTML(sprintf("<b>%s</b> — %s &middot; distance %.3f (rank %d of %d)%s",
-      gene, r$quadrant[1], r$distance[1], rk, nrow(GM),
-      if (!is.na(r$in_score_set[1]))
-        paste0(" &middot; <span style='color:#c62828'>in the ", r$in_score_set[1],
-               " scoring set, so its position on that axis is partly circular</span>") else "")))
+    HTML(paste0("<b>", gene, "</b><br>", paste(parts, collapse = "<br>"))),
+    if (!is.null(delta)) div(style = "color:#555", HTML(delta)),
+    if (moved) div(style = "color:#c62828;font-weight:600",
+      HTML(sprintf("&#9888; sits on a different side at each age: %s",
+                   paste(sprintf("%s %s", names(qs), vapply(qs, `[[`, "", "q")), collapse = " → ")))),
+    if (!is.na(r$in_score_set[1])) div(style = "color:#c62828",
+      HTML(paste0("In the ", r$in_score_set[1],
+                  " scoring set — its position on that axis is partly circular."))))
 }
-
 
 # ---------------------------------------------------------------- UI ----------
 # Wrap every plot output in a loading spinner (shown while the output computes /
@@ -1530,6 +1608,9 @@ ui <- page_navbar(
       conditionalPanel("input.matt == 'cells'",
         checkboxInput("mat_showcells", "Show individual cells under the contours", TRUE)),
       conditionalPanel("input.matt == 'genemap'",
+        radioButtons("gm_panel", "Timepoint",
+                     setNames(GM_PANELS, ifelse(GM_PANELS == "avg", "Averaged (P0 & P7)", GM_PANELS)),
+                     selected = "avg"),
         sliderInput("gm_dist", "Minimum distance from centre", 0, 0.25, 0, 0.005),
         checkboxGroupInput("gm_quad", "Quadrants", setNames(GM_QUADS, GM_QUADS), selected = GM_QUADS),
         checkboxInput("gm_hidesets", "Hide genes from the scoring sets", TRUE),
@@ -1546,6 +1627,17 @@ ui <- page_navbar(
                  "restatement of P0-vs-P7.", br(), br(),
                  strong("Distance"), " is how far a gene sits from the centre — the ranking of ",
                  "how strongly it defines the joint program.", br(), br(),
+                 strong("Timepoint"), ": the averaged panel is what keeps the axis a maturation ",
+                 "axis rather than a P0-vs-P7 axis. The P0 and P7 panels show the same genes scored ",
+                 "within one age only — useful for asking whether a gene is maturation-linked at one ",
+                 "age and not the other, but they are not equally powered (P0 splits ~1,144 vs 1,144 ",
+                 "cells, P7 only ~775 vs 775), so treat a difference between them cautiously.", br(), br(),
+                 "Worth knowing before comparing panels: the two axes are ", strong("tightly coupled at P0 ",
+                 "and decoupled at P7"), " (correlation +0.68 vs +0.13 over all genes; +0.89 vs +0.16 ",
+                 "restricted to genes measured well at that age). So the P7 panel legitimately looks ",
+                 "more scattered. Also, a gene near the centre flips side on jitter alone — the two ",
+                 "panels' centres differ by about as much as a typical gene moves — so only movement ",
+                 "well clear of the centre is flagged.", br(), br(),
                  "Axes split at each one's ", strong("median"), ", not 0.5, because AUC carries a ",
                  "small global offset; splitting at 0.5 would put most genes in one corner.", br(), br(),
                  strong("Scoring-set genes are hidden by default"), " — they sit at the extremes of ",
@@ -2391,22 +2483,25 @@ server <- function(input, output, session) {
   # ---- Gene map (maturation axis x metabolic axis) ----
   observe(updateSelectizeInput(session, "gm_gene",
     choices = c("", if (!is.null(GM)) sort(GM$gene) else character(0)), server = TRUE))
-  gm_d    <- reactive(gm_df(input$gm_quad, input$gm_dist %||% 0,
+  gm_d    <- reactive(gm_df(input$gm_panel %||% "avg", input$gm_quad, input$gm_dist %||% 0,
                             input$gm_hidesets %||% TRUE, input$gm_geneset %||% "__all__"))
   gm_tab  <- reactive(gm_table(gm_d()))
   gm_pick <- reactiveVal(NULL)
   gm_dt_proxy <- DT::dataTableProxy("gm_table")
-  output$gm_scatter <- renderPlotly(gm_plot_ly(gm_d(), input$gm_labeln %||% 20, gm_pick()))
+  output$gm_scatter <- renderPlotly(gm_plot_ly(gm_d(), input$gm_labeln %||% 20, gm_pick(),
+                                                input$gm_panel %||% "avg"))
   outputOptions(output, "gm_scatter", suspendWhenHidden = FALSE)  # register the click source at startup
   output$gm_note <- renderUI({
     d <- try(gm_d(), silent = TRUE)
     n <- if (inherits(d, "try-error")) 0 else nrow(d)
     tagList(
       div(style = "font-size:13px;margin-bottom:4px",
-          sprintf("%d genes shown of %d on the map.", n, if (is.null(GM)) 0L else nrow(GM)),
+          sprintf("%d genes shown of %d on the map — %s.", n, if (is.null(GM)) 0L else nrow(GM),
+                  if (identical(input$gm_panel %||% "avg", "avg")) "P0 and P7 averaged"
+                  else paste0(input$gm_panel, " cells only")),
           if (isTRUE(input$gm_hidesets)) " Scoring-set genes hidden." else
             span(style = "color:#c62828", " Scoring-set genes shown — those sit at their own axis's extreme by construction.")),
-      gm_gene_note(gm_pick()))
+      gm_gene_note(gm_pick(), input$gm_panel %||% "avg"))
   })
   output$gm_table    <- renderDT(de_datatable(gm_tab(), scroll = "340px"))
   output$gm_pick_ui  <- renderUI(pick_banner(gm_pick(), "gm_clear"))
@@ -2426,7 +2521,7 @@ server <- function(input, output, session) {
   observeEvent(input$gm_clear, gm_pick(NULL))
   observeEvent(input$gm_infoclose, gm_pick(NULL))
   output$gm_dl <- downloadHandler(
-    filename = function() paste0("gene_map_maturation_metabolic_", Sys.Date(), ".csv"),
+    filename = function() paste0("gene_map_", input$gm_panel %||% "avg", "_", Sys.Date(), ".csv"),
     content  = function(f) write.csv(gm_d(), f, row.names = FALSE))
 
   # ---- Cell-cell signalling (curated L-R; build_communication.R) ----

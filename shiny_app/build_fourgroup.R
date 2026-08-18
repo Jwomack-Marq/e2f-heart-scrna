@@ -323,7 +323,7 @@ axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
     return(NULL)
   }
   cat("\n== ", label, " association (", score, ", tertile split within timepoint) ==\n", sep = "")
-  per_tp <- list(); n_cells <- 0L
+  per_tp <- list(); n_cells <- 0L; n_tp <- list()
   for (tp in unique(as.character(MD$timepoint[is_cm]))) {
     sel <- is_cm & as.character(MD$timepoint) == tp & !is.na(MD[[score]])
     v   <- MD[[score]][sel]
@@ -335,6 +335,7 @@ axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
     per_tp[[tp]] <- data.frame(gene = d$gene, lfc = d$log2FoldChange,
                                auc = d$auc, padj = d$padj, stringsAsFactors = FALSE)
     n_cells <- n_cells + length(idxHi) + length(idxLo)
+    n_tp[[tp]] <- length(idxHi) + length(idxLo)
     cat(sprintf("  %-3s  %d %s-high vs %d %s-low cells, %d genes\n",
                 tp, length(idxHi), hi_lab, length(idxLo), lo_lab, nrow(d)))
   }
@@ -352,11 +353,16 @@ axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
   out[[paste0(prefix, "_padj")]] <- padj
   out[[paste0(prefix, "_n_timepoints")]] <- rowSums(!is.na(lfcm))
   out[[paste0(prefix, "_n_cells")]] <- n_cells
+  # Keep the per-timepoint AUCs, not just their mean. Averaging is what stops the axis
+  # from becoming a P0-vs-P7 axis, but it also hides whether a gene is maturation-linked
+  # at one age and not the other -- which is a question worth being able to ask.
+  for (tp in names(per_tp)) out[[paste0(prefix, "_auc_", tp)]] <- round(grab(per_tp[[tp]], "auc"), 4)
   out[[paste0(prefix, "_class")]] <- ifelse(
     is.na(padj) | padj >= MAX_PADJ, "ns",
     ifelse(auc >= MAT_AUC, paste0(hi_lab, "-associated"),
     ifelse(auc <= 1 - MAT_AUC, paste0(lo_lab, "-associated"), "ns")))
   out <- out[order(-abs(auc - 0.5)), ]
+  attr(out, "n_cells_per_tp") <- unlist(n_tp)
   cat(sprintf("  %d genes ranked; %d %s-associated, %d %s-associated\n",
               nrow(out), sum(out[[paste0(prefix, "_class")]] == paste0(hi_lab, "-associated")),
               hi_lab, sum(out[[paste0(prefix, "_class")]] == paste0(lo_lab, "-associated")), lo_lab))
@@ -409,6 +415,14 @@ if (!PROBE) {
     g$quadrant <- paste0(ifelse(g$mat_auc >= mat_centre, "mature", "immature"), "+",
                          ifelse(g$met_auc >= met_centre, "oxidative", "glycolytic"))
     g$distance <- round(sqrt((g$mat_auc - mat_centre)^2 + (g$met_auc - met_centre)^2), 4)
+    # Each panel gets its OWN centre: the AUC offset that forces median-centring is a
+    # property of the cells being compared, so P0 and P7 do not share P0+P7's median.
+    centres <- list(avg = c(mat = mat_centre, met = met_centre))
+    tps <- intersect(sub("^mat_auc_", "", grep("^mat_auc_", names(g), value = TRUE)),
+                     sub("^met_auc_", "", grep("^met_auc_", names(g), value = TRUE)))
+    for (tp in tps) centres[[tp]] <- c(
+      mat = stats::median(g[[paste0("mat_auc_", tp)]], na.rm = TRUE),
+      met = stats::median(g[[paste0("met_auc_", tp)]], na.rm = TRUE))
     g$in_score_set <- ifelse(g$gene %in% SET_MATURATION & g$gene %in% SET_METABOLIC, "both",
                       ifelse(g$gene %in% SET_MATURATION, "maturation",
                       ifelse(g$gene %in% SET_METABOLIC,  "metabolic", NA_character_)))
@@ -417,9 +431,14 @@ if (!PROBE) {
     if (is.null(ko)) ko <- de[["AllCM"]][["P7_KO_vs_WT__all"]]
     g$p7ko_log2FC <- if (is.null(ko)) NA_real_ else ko$log2FoldChange[match(g$gene, ko$gene)]
     geneaxes <- g[order(-g$distance), ]
-    attr(geneaxes, "centre") <- c(mat = mat_centre, met = met_centre)
+    attr(geneaxes, "centre") <- centres
+    attr(geneaxes, "n_cells_per_tp") <- list(
+      mat = attr(mat_raw, "n_cells_per_tp"), met = attr(met_raw, "n_cells_per_tp"))
     cat("\n== gene map (maturation x metabolic) ==\n")
-    cat(sprintf("  axis centres (medians, NOT 0.5): mat %.4f, met %.4f\n", mat_centre, met_centre))
+    cat("  panels:", paste(names(centres), collapse = ", "), "\n")
+    for (nm in names(centres))
+      cat(sprintf("    %-4s axis centres (medians, NOT 0.5): mat %.4f, met %.4f\n",
+                  nm, centres[[nm]][["mat"]], centres[[nm]][["met"]]))
     cat(sprintf("  %d genes carry both axes (%d maturation-only, %d metabolic-only dropped)\n",
                 nrow(geneaxes), sum(!mat_raw$gene %in% met_raw$gene),
                 sum(!met_raw$gene %in% mat_raw$gene)))
