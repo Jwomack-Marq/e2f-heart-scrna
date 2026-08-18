@@ -245,7 +245,11 @@ MAT_USE <- if (MAT_SCORE %in% names(MD)) MAT_SCORE else "sig_maturation"
 
 # ---- shared DE core --------------------------------------------------------
 # Descriptive cell-level Wilcoxon (presto), gated to keep the bundle small.
-de_one <- function(idxA, idxB) {
+# gate: "de" keeps the DE tables small (77 of them); "pct" keeps every gene that is
+# expressed at all, which is what the gene-map axes need -- a gene with no association
+# belongs at the origin of the map, not missing from it. Gating the axes the DE way
+# silently dropped Gapdh, Aldoa, Pgk1, Eno1, Hk1 and Cpt1a off the map entirely.
+de_one <- function(idxA, idxB, gate = "de") {
   nA <- length(idxA); nB <- length(idxB)
   if (nA < MIN_CELLS || nB < MIN_CELLS) return(NULL)
   cols <- c(idxA, idxB)
@@ -262,7 +266,8 @@ de_one <- function(idxA, idxB) {
     mean_A = round(rA$avgExpr, 4), mean_B = round(rB$avgExpr[m], 4),
     confounder = rA$feature %in% CONF,
     n_A = nA, n_B = nB, stringsAsFactors = FALSE)
-  keep <- (pmax(d$pct_A, d$pct_B) >= MIN_PCT &
+  keep <- if (gate == "pct") pmax(d$pct_A, d$pct_B) >= MIN_PCT else
+          (pmax(d$pct_A, d$pct_B) >= MIN_PCT &
            (d$padj < MAX_PADJ | abs(d$log2FoldChange) >= MIN_LFC)) |
           d$gene %in% KEEP_ALWAYS
   d <- d[which(keep), , drop = FALSE]
@@ -301,60 +306,127 @@ if (!PROBE) {
 }
 skipped <- if (length(skipped)) do.call(rbind, skipped) else NULL
 
-# ---- 5. maturation association --------------------------------------------
-# Rank every gene along the maturation axis by comparing top- vs bottom-tertile
-# cells on MAT_USE. Done WITHIN each timepoint and averaged, so the axis is a
-# maturation axis and not a restatement of P0-vs-P7.
-maturation <- NULL
-if (!PROBE && !MAT_USE %in% names(MD))
-  cat("\n!! SKIPPING the maturation axis and the intersection: '", MAT_USE,
-      "' is not on the\n   DE metadata. Run build_signature_scores.R first.\n", sep = "")
-if (!PROBE && MAT_USE %in% names(MD)) {
-  cat("\n== maturation association (", MAT_USE, ", tertile split within timepoint) ==\n", sep = "")
-  per_tp <- list()
+# ---- 5. gene-level score axes ---------------------------------------------
+# Rank every gene along a per-cell score axis: tertile-split the cells on `score`,
+# then compare the top vs bottom third WITHIN each timepoint and average the
+# per-timepoint AUCs. Within-timepoint matters -- pooling P0 and P7 would make the
+# axis partly a restatement of P0-vs-P7, which is confounded by the cycling sort.
+#
+# Classification is on AUC, not log2FC: the two poles of these axes have very
+# different dynamic ranges (immature markers like Nppa swing far harder than mature
+# ones), so a symmetric |log2FC| cutoff can only ever classify one side. AUC is
+# rank-based, so one threshold means the same thing at both ends.
+axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
+  if (!score %in% names(MD)) {
+    cat("\n!! SKIPPING the ", label, " axis: '", score,
+        "' is not on the DE metadata.\n   Run build_signature_scores.R first.\n", sep = "")
+    return(NULL)
+  }
+  cat("\n== ", label, " association (", score, ", tertile split within timepoint) ==\n", sep = "")
+  per_tp <- list(); n_cells <- 0L
   for (tp in unique(as.character(MD$timepoint[is_cm]))) {
-    sel <- is_cm & as.character(MD$timepoint) == tp & !is.na(MD[[MAT_USE]])
-    v   <- MD[[MAT_USE]][sel]
+    sel <- is_cm & as.character(MD$timepoint) == tp & !is.na(MD[[score]])
+    v   <- MD[[score]][sel]
     if (sum(sel) < 3 * MIN_CELLS) next
     qs  <- stats::quantile(v, TERTILE_Q, na.rm = TRUE)
     idxHi <- which(sel)[v >= qs[2]]; idxLo <- which(sel)[v <= qs[1]]
-    d <- de_one(idxHi, idxLo)          # logFC > 0 => higher in MATURE cells
+    d <- de_one(idxHi, idxLo, gate = "pct")   # logFC > 0 => higher in the `hi_lab` cells
     if (is.null(d)) next
     per_tp[[tp]] <- data.frame(gene = d$gene, lfc = d$log2FoldChange,
                                auc = d$auc, padj = d$padj, stringsAsFactors = FALSE)
-    cat(sprintf("  %-3s  %d mature-high vs %d mature-low cells, %d genes\n",
-                tp, length(idxHi), length(idxLo), nrow(d)))
+    n_cells <- n_cells + length(idxHi) + length(idxLo)
+    cat(sprintf("  %-3s  %d %s-high vs %d %s-low cells, %d genes\n",
+                tp, length(idxHi), hi_lab, length(idxLo), lo_lab, nrow(d)))
   }
-  if (length(per_tp)) {
-    genes_all <- Reduce(union, lapply(per_tp, function(x) x$gene))
-    grab <- function(x, col) x[[col]][match(genes_all, x$gene)]
-    lfcm <- do.call(cbind, lapply(per_tp, grab, col = "lfc"))
-    aucm <- do.call(cbind, lapply(per_tp, grab, col = "auc"))
-    padm <- do.call(cbind, lapply(per_tp, grab, col = "padj"))
-    # curated program membership, for cross-checking the data-driven axis
-    prog_mature   <- c("Myh6","Tnni3","Pln","Atp2a2","Ckm","Myl2","Cox6a2","Ckmt2","Actn2","Csrp3")
-    prog_immature <- c("Myh7","Tnni1","Nppa","Nppb","Myl7","Actc1")
-    maturation <- data.frame(
-      gene = genes_all,
-      mat_log2FC = round(rowMeans(lfcm, na.rm = TRUE), 4),
-      mat_auc    = round(rowMeans(aucm, na.rm = TRUE), 4),
-      mat_padj   = apply(padm, 1, function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)),
-      n_timepoints = rowSums(!is.na(lfcm)),
-      stringsAsFactors = FALSE)
-    maturation$mat_class <- with(maturation, ifelse(
-      is.na(mat_padj) | mat_padj >= MAX_PADJ, "ns",
-      ifelse(mat_auc >= MAT_AUC, "mature-associated",
-      ifelse(mat_auc <= 1 - MAT_AUC, "immature-associated", "ns"))))
-    maturation$in_curated_program <- ifelse(
-      maturation$gene %in% prog_mature, "mature",
-      ifelse(maturation$gene %in% prog_immature, "immature", NA_character_))
-    maturation <- maturation[order(-abs(maturation$mat_auc - 0.5)), ]
-    cat(sprintf("  %d genes ranked; %d mature-associated, %d immature-associated\n",
-                nrow(maturation), sum(maturation$mat_class == "mature-associated"),
-                sum(maturation$mat_class == "immature-associated")))
-  }
+  if (!length(per_tp)) { cat("  no timepoint had enough cells\n"); return(NULL) }
+  genes_all <- Reduce(union, lapply(per_tp, function(x) x$gene))
+  grab <- function(x, col) x[[col]][match(genes_all, x$gene)]
+  lfcm <- do.call(cbind, lapply(per_tp, grab, col = "lfc"))
+  aucm <- do.call(cbind, lapply(per_tp, grab, col = "auc"))
+  padm <- do.call(cbind, lapply(per_tp, grab, col = "padj"))
+  out <- data.frame(gene = genes_all, stringsAsFactors = FALSE)
+  out[[paste0(prefix, "_log2FC")]] <- round(rowMeans(lfcm, na.rm = TRUE), 4)
+  auc <- round(rowMeans(aucm, na.rm = TRUE), 4)
+  out[[paste0(prefix, "_auc")]] <- auc
+  padj <- apply(padm, 1, function(x) if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE))
+  out[[paste0(prefix, "_padj")]] <- padj
+  out[[paste0(prefix, "_n_timepoints")]] <- rowSums(!is.na(lfcm))
+  out[[paste0(prefix, "_n_cells")]] <- n_cells
+  out[[paste0(prefix, "_class")]] <- ifelse(
+    is.na(padj) | padj >= MAX_PADJ, "ns",
+    ifelse(auc >= MAT_AUC, paste0(hi_lab, "-associated"),
+    ifelse(auc <= 1 - MAT_AUC, paste0(lo_lab, "-associated"), "ns")))
+  out <- out[order(-abs(auc - 0.5)), ]
+  cat(sprintf("  %d genes ranked; %d %s-associated, %d %s-associated\n",
+              nrow(out), sum(out[[paste0(prefix, "_class")]] == paste0(hi_lab, "-associated")),
+              hi_lab, sum(out[[paste0(prefix, "_class")]] == paste0(lo_lab, "-associated")), lo_lab))
+  out
 }
 
+# The gene sets that DEFINE each score. Genes inside a set sit at the extremes of
+# their own axis by construction, so they are flagged rather than quietly trusted --
+# the same audit the repo applies to the E2f8 phase-list problem. Note Cox6a2 is in
+# BOTH mat_mature and faox, so it is doubly circular.
+SET_MATURATION <- c("Myh6","Tnni3","Pln","Atp2a2","Ckm","Myl2","Cox6a2","Ckmt2","Actn2","Csrp3",
+                    "Myh7","Tnni1","Nppa","Nppb","Myl7","Actc1")
+SET_METABOLIC  <- c("Slc2a1","Hk1","Hk2","Pfkm","Pfkl","Pkm","Ldha","Gapdh","Eno1","Aldoa","Pgk1",
+                    "Cpt1a","Cpt1b","Cpt2","Acadm","Acadvl","Acadl","Hadha","Hadhb",
+                    "Ppargc1a","Cox6a2","Ndufa4","Sdha","Acaa2","Etfa")
+
+maturation <- NULL; metabolic <- NULL; geneaxes <- NULL
+if (!PROBE) {
+  mat_raw <- axis_association(MAT_USE, "mat", "mature", "immature", "maturation")
+  met_raw <- axis_association("sig_metabolic", "met", "oxidative", "glycolytic", "metabolic")
+
+  # app$fourgroup$maturation keeps exactly the columns the intersection tab and the
+  # existing quadrant map already read -- do not reshape it here.
+  if (!is.null(mat_raw)) {
+    maturation <- data.frame(
+      gene = mat_raw$gene, mat_log2FC = mat_raw$mat_log2FC, mat_auc = mat_raw$mat_auc,
+      mat_padj = mat_raw$mat_padj, n_timepoints = mat_raw$mat_n_timepoints,
+      mat_class = mat_raw$mat_class, stringsAsFactors = FALSE)
+    maturation$in_curated_program <- ifelse(
+      maturation$gene %in% c("Myh6","Tnni3","Pln","Atp2a2","Ckm","Myl2","Cox6a2","Ckmt2","Actn2","Csrp3"), "mature",
+      ifelse(maturation$gene %in% c("Myh7","Tnni1","Nppa","Nppb","Myl7","Actc1"), "immature", NA_character_))
+  }
+
+  # ---- the joint gene map: maturation axis x metabolic axis -----------------
+  # Quadrant is assigned by SIGN, so every gene gets a group; `distance` carries the
+  # strength and the app filters on it. Baking a significance cut into the data here
+  # would take that choice away from whoever is reading the plot.
+  if (!is.null(mat_raw) && !is.null(met_raw)) {
+    g <- merge(mat_raw, met_raw, by = "gene")
+    # Centre each axis on its OWN median, not on 0.5. wilcoxauc's AUC is not centred
+    # at 0.5 across genes -- the two tertile groups differ in overall detection rate,
+    # which shifts every gene's AUC by a small constant (here mat +0.009, met -0.014).
+    # The bulk of genes sit within ~0.02 of the median, so splitting at a hard 0.5 put
+    # 65% of them in one corner: an artifact of the shift, not biology. Median-centring
+    # balances the background (roughly 3.1k/2.4k/2.3k/3.2k) and still lands Myh6, Pln,
+    # Atp2a2, Ckmt2, Ppargc1a and Hadha mature+oxidative and Nppa, Nppb, Myh7, Ldha and
+    # Gapdh immature+glycolytic. Raw AUCs are kept -- only the split point moves.
+    mat_centre <- stats::median(g$mat_auc, na.rm = TRUE)
+    met_centre <- stats::median(g$met_auc, na.rm = TRUE)
+    g$quadrant <- paste0(ifelse(g$mat_auc >= mat_centre, "mature", "immature"), "+",
+                         ifelse(g$met_auc >= met_centre, "oxidative", "glycolytic"))
+    g$distance <- round(sqrt((g$mat_auc - mat_centre)^2 + (g$met_auc - met_centre)^2), 4)
+    g$in_score_set <- ifelse(g$gene %in% SET_MATURATION & g$gene %in% SET_METABOLIC, "both",
+                      ifelse(g$gene %in% SET_MATURATION, "maturation",
+                      ifelse(g$gene %in% SET_METABOLIC,  "metabolic", NA_character_)))
+    # carry the KO effect so the map links back to the KO story without a second lookup
+    ko <- de[["AllCM"]][["P7_KO_vs_WT__G1"]]
+    if (is.null(ko)) ko <- de[["AllCM"]][["P7_KO_vs_WT__all"]]
+    g$p7ko_log2FC <- if (is.null(ko)) NA_real_ else ko$log2FoldChange[match(g$gene, ko$gene)]
+    geneaxes <- g[order(-g$distance), ]
+    attr(geneaxes, "centre") <- c(mat = mat_centre, met = met_centre)
+    cat("\n== gene map (maturation x metabolic) ==\n")
+    cat(sprintf("  axis centres (medians, NOT 0.5): mat %.4f, met %.4f\n", mat_centre, met_centre))
+    cat(sprintf("  %d genes carry both axes (%d maturation-only, %d metabolic-only dropped)\n",
+                nrow(geneaxes), sum(!mat_raw$gene %in% met_raw$gene),
+                sum(!met_raw$gene %in% mat_raw$gene)))
+    print(table(geneaxes$quadrant))
+    cat(sprintf("  flagged as scoring-set genes: %d\n", sum(!is.na(geneaxes$in_score_set))))
+  }
+}
 # ---- 6. intersection: maturation axis x P7 KO-vs-WT ------------------------
 intersect_tab <- NULL
 if (!PROBE && !is.null(maturation)) {
@@ -460,13 +532,15 @@ app$fourgroup <- list(
       data.frame(key = x$key, label = x$label, A = x$A, B = x$B,
                  pos = x$pos, neg = x$neg, xlab = x$xlab, stringsAsFactors = FALSE))),
     strata = names(STRATA), maturation_score = MAT_USE, maturation_auc = MAT_AUC,
+    metabolic_score = "sig_metabolic",
+    score_set_genes = list(maturation = SET_MATURATION, metabolic = SET_METABOLIC),
     gate = sprintf("max(pct) >= %g%% AND (padj < %g OR |log2FC| >= %g)",
                    MIN_PCT, MAX_PADJ, MIN_LFC),
     keep_always = KEEP_ALWAYS,
     min_cells = MIN_CELLS, thin_cells = THIN_CELLS),
   counts = counts, phase = phase, scores = scores,
   de = de, skipped = skipped,
-  maturation = maturation, intersect = intersect_tab)
+  maturation = maturation, intersect = intersect_tab, geneaxes = geneaxes)
 
 # CM subcluster as a first-class metadata column, so the existing "Subset & DEGs"
 # tab can filter to CM2 and the UMAP can colour/split by subcluster.
@@ -483,6 +557,9 @@ cat(sprintf("  maturation     : %s genes%s\n",
 cat(sprintf("  intersection   : %s rows%s\n",
             if (is.null(intersect_tab)) "0" else nrow(intersect_tab),
             if (is.null(intersect_tab)) "   <-- EMPTY" else ""))
+cat(sprintf("  gene map       : %s genes%s\n",
+            if (is.null(geneaxes)) "0" else nrow(geneaxes),
+            if (is.null(geneaxes)) "   <-- EMPTY, the Gene map tab will be blank" else ""))
 cat(sprintf("  cm_subcluster  : added to meta (%d CM cells labelled)\n",
             sum(!is.na(app$meta$cm_subcluster))))
 

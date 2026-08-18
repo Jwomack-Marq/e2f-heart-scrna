@@ -605,17 +605,38 @@ score_df <- function(scol, ct) {
   validate(need(nrow(df), "No scored cells for this selection."))
   df
 }
-# violin+box of a score by genotype, faceted by timepoint
-score_violin <- function(scol, ct, bs = 13, pal = "Default") {
-  df <- score_df(scol, ct); df$y <- df[[scol]]
-  p <- ggplot(df, aes(genotype, y, fill = genotype)) +
+# violin+box of a score across the four groups. One axis rather than genotype +
+# timepoint facets, so WT-P0/WT-P7/KO-P0/KO-P7 can be compared directly; n and the
+# mean are drawn on, and the G1 stratum holds cycling composition fixed (P7 was
+# cycling-enriched 4.5-5.2x relative to P0, which shifts any score that tracks cycling).
+score_violin <- function(scol, ct, bs = 13, pal = "Default", stratum = "all") {
+  df <- score_df(scol, ct)
+  if (stratum == "G1" && "Phase" %in% names(df)) df <- df[as.character(df$Phase) == "G1", , drop = FALSE]
+  validate(need(nrow(df), "No cells for this selection — the G1 stratum may be empty here."))
+  df$y <- df[[scol]]
+  has_tp <- "timepoint" %in% names(df)
+  df$grp <- if (has_tp) factor(paste(df$genotype, df$timepoint, sep = "-"), levels = FG_GROUPS)
+            else factor(df$genotype)
+  df <- df[!is.na(df$grp), , drop = FALSE]
+  validate(need(nrow(df), "No cells for this selection."))
+  fill <- if (pal != "Default") disc_pal(levels(df$grp), pal)
+          else if (has_tp) FG_PAL else setNames(c("#1565c0","#c62828"), levels(df$grp))
+  lo <- min(df$y, na.rm = TRUE)
+  n_lab <- as.data.frame(table(df$grp)); names(n_lab) <- c("grp", "n")
+  ggplot(df, aes(grp, y, fill = grp)) +
     geom_violin(scale = "width", trim = TRUE, alpha = .85, linewidth = .2) +
     geom_boxplot(width = .12, outlier.size = .3, alpha = .5) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 2.4,
+                 fill = "white", colour = "grey20") +
+    geom_text(data = n_lab, inherit.aes = FALSE, aes(x = grp, label = paste0("n=", n)),
+              y = lo, vjust = 1.4, size = 3, colour = "#666") +
+    scale_fill_manual(values = fill, na.value = "grey85") +
     guides(fill = "none") + theme_minimal(base_size = bs) +
-    labs(x = NULL, y = labof(scol), title = paste0(labof(scol), " — ", ct))
-  if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
-  if (pal != "Default") p <- p + scale_fill_manual(values = disc_pal(levels(factor(df$genotype)), pal))
-  p
+    theme(axis.text.x = element_text(angle = 20, hjust = 1)) +
+    labs(x = NULL, y = labof(scol),
+         title = paste0(labof(scol), " — ", ct,
+                        if (stratum == "G1") " (G1 cells only)" else ""),
+         caption = "White diamond = mean. Descriptive only: n = 1 animal per group.")
 }
 # proliferation vs cytokinesis scatter — the polyploidization quadrant
 ploidy_scatter <- function(ct, bs = 13) {
@@ -635,23 +656,68 @@ ploidy_scatter <- function(ct, bs = 13) {
   if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
   p
 }
-# transcriptional maturation vs metabolic maturation, per cell (this bundle has no
-# pseudotime, so the joint score distribution is the maturation read-out)
-mat_scatter <- function(ct, bs = 13) {
+# Transcriptional vs metabolic maturation, per CELL. 30k points plotted raw is an
+# unreadable blob, so this draws density contours over a thinned point layer and puts
+# each group's centroid on top; the WT->KO segment in each panel is the shift the KO
+# question actually asks about, annotated with its size.
+mat_scatter <- function(ct, bs = 13, stratum = "all", show_cells = TRUE) {
   need_cols <- c("sig_maturation","sig_metabolic")
   validate(need(all(need_cols %in% names(meta)),
     "Run build_signature_scores.R for the maturation/metabolic scores."))
   df <- meta; if (ct != "All" && has("celltype")) df <- df[as.character(df$celltype) == ct, ]
   df <- df[stats::complete.cases(df[need_cols]), ]
-  validate(need(nrow(df), "No cells with both maturation and metabolic scores for this selection."))
-  p <- ggplot(df, aes(sig_maturation, sig_metabolic, color = genotype)) +
-    geom_point(size = .5, alpha = .35) +
-    geom_hline(yintercept = 0, color = "grey70") + geom_vline(xintercept = 0, color = "grey70") +
+  if (stratum == "G1" && "Phase" %in% names(df)) df <- df[as.character(df$Phase) == "G1", , drop = FALSE]
+  validate(need(nrow(df) > 10, "No cells with both scores for this selection."))
+  has_tp <- "timepoint" %in% names(df)
+  df$grp <- if (has_tp) factor(paste(df$genotype, df$timepoint, sep = "-"), levels = FG_GROUPS)
+            else factor(df$genotype)
+  df <- df[!is.na(df$grp), , drop = FALSE]
+  pal <- if (has_tp) FG_PAL else setNames(c("#1565c0","#c62828"), levels(df$grp))
+  # centroids, and the KO-WT displacement within each timepoint
+  cen <- do.call(rbind, lapply(split(df, df$grp), function(x) if (!nrow(x)) NULL else data.frame(
+    grp = x$grp[1], genotype = x$genotype[1],
+    timepoint = if (has_tp) x$timepoint[1] else NA,
+    x = mean(x$sig_maturation), y = mean(x$sig_metabolic), n = nrow(x), stringsAsFactors = FALSE)))
+  seg <- NULL; shift_txt <- ""
+  if (has_tp && !is.null(cen)) {
+    parts <- lapply(split(cen, cen$timepoint), function(cc) {
+      w <- cc[cc$genotype == "WT", ]; k <- cc[cc$genotype == "KO", ]
+      if (!nrow(w) || !nrow(k)) return(NULL)
+      data.frame(timepoint = cc$timepoint[1], x = w$x, y = w$y, xend = k$x, yend = k$y,
+                 d = sqrt((k$x - w$x)^2 + (k$y - w$y)^2), dmat = k$x - w$x, stringsAsFactors = FALSE)
+    })
+    seg <- do.call(rbind, Filter(Negate(is.null), parts))
+    if (!is.null(seg)) shift_txt <- paste0("KO−WT centroid shift — ",
+      paste(sprintf("%s: %.3f (maturation %+.3f)", seg$timepoint, seg$d, seg$dmat), collapse = "; "))
+  }
+  # quadrant occupancy per group, relative to 0 on both scores
+  qd <- do.call(rbind, lapply(split(df, df$grp), function(x) if (!nrow(x)) NULL else data.frame(
+    grp = x$grp[1], pct = round(100 * mean(x$sig_maturation > 0 & x$sig_metabolic > 0), 1),
+    stringsAsFactors = FALSE)))
+  quad_txt <- if (is.null(qd)) "" else paste0("Mature+oxidative quadrant — ",
+    paste(sprintf("%s %.1f%%", qd$grp, qd$pct), collapse = ", "))
+  thin <- if (nrow(df) > 6000) df[sample.int(nrow(df), 6000), ] else df
+  p <- ggplot(df, aes(sig_maturation, sig_metabolic, colour = grp))
+  if (isTRUE(show_cells)) p <- p + geom_point(data = thin, size = .35, alpha = .16)
+  p <- p +
+    stat_density_2d(bins = 5, linewidth = .45, contour = TRUE) +
+    geom_hline(yintercept = 0, colour = "grey70") + geom_vline(xintercept = 0, colour = "grey70")
+  if (!is.null(seg)) p <- p + geom_segment(data = seg, inherit.aes = FALSE,
+    aes(x = x, y = y, xend = xend, yend = yend), colour = "grey25", linewidth = .6,
+    arrow = grid::arrow(length = grid::unit(7, "pt"), type = "closed"))
+  p <- p +
+    geom_point(data = cen, inherit.aes = FALSE, aes(x, y, fill = grp),
+               shape = 21, size = 4.2, stroke = 1.1, colour = "grey15") +
+    scale_colour_manual(values = pal) + scale_fill_manual(values = pal, guide = "none") +
     theme_minimal(base_size = bs) +
-    labs(x = "CM maturation score", y = "Metabolic maturation (FAO−glyc)", color = NULL,
-         title = paste0("Transcriptional vs metabolic maturation — ", ct),
-         caption = "Upper-right = mature sarcomere program + oxidative metabolism. Co-varying? Does KO shift the joint distribution?")
-  if ("timepoint" %in% names(df)) p <- p + facet_wrap(~ timepoint)
+    labs(x = "CM maturation score", y = "Metabolic maturation (FAO−glyc)", colour = NULL,
+         title = paste0("Transcriptional vs metabolic maturation — ", ct,
+                        if (stratum == "G1") " (G1 cells only)" else ""),
+         subtitle = if (nzchar(shift_txt)) shift_txt else NULL,
+         caption = paste0(quad_txt,
+           "\nContours = per-group density; large circles = centroids; arrow = WT→KO.",
+           "\nDescriptive only — n = 1 animal per group."))
+  if (has_tp) p <- p + facet_wrap(~ timepoint)
   p
 }
 # ---- curated cell-cell communication (COMMUN$scores) --------------------------
@@ -869,7 +935,11 @@ fg_quadrant_plot <- function(cluster, hide_conf = TRUE, label_n = 20, bs = 13) {
   # classified gene on the left. AUC is rank-based, so the axis is symmetric and the
   # point position agrees with the colour.
   mid <- 0.5
-  xr <- max(abs(d$mat_auc - mid), na.rm = TRUE); yr <- max(abs(d$p7ko_log2FC), na.rm = TRUE)
+  # an all-NA or empty frame makes max() return -Inf, which silently yields a
+  # degenerate plot rather than an error — fall back to a sane range instead
+  span <- function(v, default) { m <- suppressWarnings(max(abs(v), na.rm = TRUE))
+                                 if (!is.finite(m) || m <= 0) default else m }
+  xr <- span(d$mat_auc - mid, 0.1); yr <- span(d$p7ko_log2FC, 1)
   ggplot(d, aes(mat_auc, p7ko_log2FC)) +
     annotate("rect", xmin = mid - xr, xmax = mid, ymin = 0, ymax = yr, fill = "#c62828", alpha = .06) +
     annotate("rect", xmin = mid, xmax = mid + xr, ymin = -yr, ymax = 0, fill = "#1565c0", alpha = .06) +
@@ -973,6 +1043,106 @@ fg_specificity_df <- function(genes, stratum) {
   d <- merge(d, agg, by = "gene", all.x = TRUE)
   d[order(d$gene, factor(d$cluster, levels = FG_CLUSTERS)), , drop = FALSE]
 }
+
+# ---- gene map: maturation axis x metabolic axis (FG$geneaxes) ----------------
+# Each point is a GENE, placed by how strongly it marks mature-vs-immature CMs (x)
+# and oxidative-vs-glycolytic metabolism (y). Both coordinates are AUCs from a
+# tertile split computed within each timepoint and averaged, so neither axis is a
+# restatement of P0-vs-P7.
+GM        <- if (!is.null(FG)) FG$geneaxes else NULL
+GM_MSG    <- "Gene map isn't in this data build — run build_fourgroup.R and redeploy."
+# The split point is each axis's own MEDIAN, not 0.5: wilcoxauc's AUC carries a small
+# global offset (the tertile groups differ in detection rate), and since most genes sit
+# within ~0.02 of the median, splitting at 0.5 would pile 65% of them into one corner.
+GM_CENTRE <- if (!is.null(GM) && !is.null(attr(GM, "centre"))) attr(GM, "centre") else c(mat = 0.5, met = 0.5)
+# diagonal = the expected coupling (mature<->oxidative, immature<->glycolytic);
+# off-diagonal = genes that uncouple the two programs, which is the interesting part.
+GM_QUAD_PAL <- c("mature+oxidative"    = "#c62828", "immature+glycolytic" = "#1565c0",
+                 "mature+glycolytic"   = "#ef6c00", "immature+oxidative"  = "#00838f")
+GM_QUADS <- names(GM_QUAD_PAL)
+
+gm_df <- function(quadrants = NULL, min_dist = 0, hide_sets = TRUE, geneset = "__all__") {
+  validate(need(!is.null(GM), GM_MSG))
+  d <- GM
+  # genes inside the scoring sets sit at the extremes of their own axis by
+  # construction; hidden by default so the map isn't just recovering its own inputs
+  if (isTRUE(hide_sets)) d <- d[is.na(d$in_score_set), , drop = FALSE]
+  if (!is.null(geneset) && geneset != "__all__")
+    d <- d[d$gene %in% genes_for_set(geneset), , drop = FALSE]
+  if (!is.null(quadrants) && length(quadrants)) d <- d[d$quadrant %in% quadrants, , drop = FALSE]
+  if (!is.null(min_dist)) d <- d[d$distance >= min_dist, , drop = FALSE]
+  validate(need(nrow(d), "No genes pass these filters — lower the distance cut or re-enable a quadrant."))
+  d[order(-d$distance), , drop = FALSE]
+}
+# table view: the columns worth reading, in a sensible order
+gm_table <- function(d) {
+  cols <- intersect(c("gene","quadrant","distance","mat_auc","met_auc",
+                      "p7ko_log2FC","mat_class","met_class","in_score_set"), names(d))
+  d[, cols, drop = FALSE]
+}
+gm_plot_ly <- function(d, label_n = 20, highlight = NULL) {
+  validate(need(nrow(d), "No genes to plot."))
+  cx <- unname(GM_CENTRE[["mat"]]); cy <- unname(GM_CENTRE[["met"]])
+  d$quadrant <- factor(d$quadrant, levels = GM_QUADS)
+  d$hover <- sprintf(
+    "<b>%s</b><br>maturation AUC: %.3f<br>metabolic AUC: %.3f<br>%s<br>distance: %.3f%s%s",
+    d$gene, d$mat_auc, d$met_auc, as.character(d$quadrant), d$distance,
+    ifelse(is.na(d$p7ko_log2FC), "", sprintf("<br>P7 KO vs WT log2FC: %+.2f", d$p7ko_log2FC)),
+    ifelse(is.na(d$in_score_set), "", paste0("<br><i>in the ", d$in_score_set, " scoring set</i>")))
+  rng <- function(v, c0) { m <- max(abs(v - c0), na.rm = TRUE) * 1.08; c(c0 - m, c0 + m) }
+  xr <- rng(d$mat_auc, cx); yr <- rng(d$met_auc, cy)
+  ln <- function(x0, x1, y0, y1) list(type = "line", x0 = x0, x1 = x1, y0 = y0, y1 = y1,
+                                      line = list(color = "grey65", width = 1))
+  corner <- function(x, y, txt, col) list(x = x, y = y, text = txt, showarrow = FALSE,
+    font = list(size = 10, color = col), xanchor = "center", yanchor = "middle", opacity = 0.75)
+  p <- plot_ly(d, x = ~mat_auc, y = ~met_auc, color = ~quadrant, colors = GM_QUAD_PAL,
+        customdata = ~gene, text = ~hover, hovertemplate = "%{text}<extra></extra>",
+        type = "scattergl", mode = "markers",
+        marker = list(size = 6, opacity = 0.5, line = list(width = 0)),
+        source = "gm_scatter") |>
+    layout(
+      xaxis = list(title = "maturation association, AUC  (← immature | mature →)",
+                   range = xr, zeroline = FALSE),
+      yaxis = list(title = "metabolic association, AUC  (← glycolytic | oxidative →)",
+                   range = yr, zeroline = FALSE),
+      legend = list(title = list(text = ""), itemsizing = "constant"),
+      shapes = list(ln(xr[1], xr[2], cy, cy), ln(cx, cx, yr[1], yr[2])),
+      annotations = list(
+        corner(mean(c(cx, xr[2])), yr[2], "mature + oxidative",    "#c62828"),
+        corner(mean(c(xr[1], cx)), yr[1], "immature + glycolytic", "#1565c0"),
+        corner(mean(c(cx, xr[2])), yr[1], "mature + glycolytic",   "#ef6c00"),
+        corner(mean(c(xr[1], cx)), yr[2], "immature + oxidative",  "#00838f")),
+      margin = list(t = 30))
+  # name the genes furthest from the centre — that ranking IS the "distance" question
+  if (!is.null(label_n) && label_n > 0) {
+    lab <- head(d[order(-d$distance), , drop = FALSE], label_n)
+    if (nrow(lab)) p <- add_annotations(p, data = lab, x = ~mat_auc, y = ~met_auc, text = ~gene,
+      showarrow = FALSE, yshift = 9, font = list(size = 9, color = "#333"), inherit = FALSE)
+  }
+  if (!is.null(highlight) && nzchar(highlight) && highlight %in% d$gene) {
+    hd <- d[match(highlight, d$gene), , drop = FALSE]
+    p <- add_trace(p, x = hd$mat_auc, y = hd$met_auc, type = "scattergl", mode = "markers",
+                   marker = list(size = 16, color = "rgba(0,0,0,0)", line = list(color = "#111", width = 3)),
+                   name = "selected", showlegend = FALSE, hoverinfo = "skip", inherit = FALSE)
+  }
+  event_register(p, "plotly_click")
+}
+# where a gene sits, in words — shown next to the table so a single gene can be read
+# off without hunting for its row
+gm_gene_note <- function(gene) {
+  if (is.null(GM) || is.null(gene) || !nzchar(gene)) return(NULL)
+  r <- GM[GM$gene == gene, , drop = FALSE]
+  if (!nrow(r)) return(div(style = "font-size:13px;color:#777",
+    paste0(gene, " is not on the gene map (it needs an association on both axes).")))
+  rk <- sum(GM$distance >= r$distance[1], na.rm = TRUE)
+  div(style = "font-size:13px;margin-bottom:6px",
+    HTML(sprintf("<b>%s</b> — %s &middot; distance %.3f (rank %d of %d)%s",
+      gene, r$quadrant[1], r$distance[1], rk, nrow(GM),
+      if (!is.na(r$in_score_set[1]))
+        paste0(" &middot; <span style='color:#c62828'>in the ", r$in_score_set[1],
+               " scoring set, so its position on that axis is partly circular</span>") else "")))
+}
+
 
 # ---------------------------------------------------------------- UI ----------
 # Wrap every plot output in a loading spinner (shown while the output computes /
@@ -1345,21 +1515,62 @@ ui <- page_navbar(
       nav_panel("Cycling vs cytokinesis", plotOutput("cyc_scatter", height = "600px"))))),
 
   nav_panel("Maturation & metabolism", layout_sidebar(
-    sidebar = sidebar(width = 300,
-      selectInput("mat_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
-      selectInput("mat_score", "Score",
-                  c("CM maturation (mature−immature)" = "sig_maturation",
-                    "Metabolic maturation (FAO−glyc)" = "sig_metabolic",
-                    "Mature-CM program" = "sig_mat_mature", "Immature-CM program" = "sig_mat_immature",
-                    "Glycolysis" = "sig_glycolysis", "Fatty-acid oxidation" = "sig_faox")),
-      hr(), helpText("P0→P7 maturation and the glycolysis→fatty-acid-oxidation metabolic switch. ",
-                     "The within-genotype P0→P7 axis is the most robust signal in this design. ",
-                     strong("KO-vs-WT descriptive only — n = 1.")),
-      accordion(open = FALSE, accordion_panel("Figure options",
-        figure_controls("mat", palette = TRUE, rename = FALSE)))),
-    navset_card_tab(
-      nav_panel("By genotype × timepoint", plotOutput("mat_violin", height = "560px")),
-      nav_panel("Maturation vs metabolism", plotOutput("mat_scatter", height = "560px")))))),
+    sidebar = sidebar(width = 320,
+      conditionalPanel("input.matt != 'genemap'",
+        selectInput("mat_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
+        radioButtons("mat_stratum", "Cells used",
+                     c("All cells" = "all", "G1 only (phase-matched)" = "G1"), selected = "all")),
+      conditionalPanel("input.matt == 'violin'",
+        selectInput("mat_score", "Score",
+                    c("CM maturation (mature−immature)" = "sig_maturation",
+                      "CM maturation, cycle-free" = "sig_maturation_nocc",
+                      "Metabolic maturation (FAO−glyc)" = "sig_metabolic",
+                      "Mature-CM program" = "sig_mat_mature", "Immature-CM program" = "sig_mat_immature",
+                      "Glycolysis" = "sig_glycolysis", "Fatty-acid oxidation" = "sig_faox"))),
+      conditionalPanel("input.matt == 'cells'",
+        checkboxInput("mat_showcells", "Show individual cells under the contours", TRUE)),
+      conditionalPanel("input.matt == 'genemap'",
+        sliderInput("gm_dist", "Minimum distance from centre", 0, 0.25, 0, 0.005),
+        checkboxGroupInput("gm_quad", "Quadrants", setNames(GM_QUADS, GM_QUADS), selected = GM_QUADS),
+        checkboxInput("gm_hidesets", "Hide genes from the scoring sets", TRUE),
+        selectInput("gm_geneset", "Restrict to gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
+        selectizeInput("gm_gene", "Find a gene", choices = NULL, options = list(maxOptions = 50L)),
+        numericInput("gm_labeln", "Label top N by distance", 20, 0, 200, 5),
+        div(downloadButton("gm_dl", "Download gene map (CSV)",
+                           class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
+      hr(),
+      conditionalPanel("input.matt == 'genemap'",
+        helpText("Each point is a ", strong("gene"), ". x = how strongly it marks mature vs ",
+                 "immature cardiomyocytes; y = oxidative vs glycolytic. Both are AUCs from a ",
+                 "tertile split run within each timepoint and averaged, so neither axis is a ",
+                 "restatement of P0-vs-P7.", br(), br(),
+                 strong("Distance"), " is how far a gene sits from the centre — the ranking of ",
+                 "how strongly it defines the joint program.", br(), br(),
+                 "Axes split at each one's ", strong("median"), ", not 0.5, because AUC carries a ",
+                 "small global offset; splitting at 0.5 would put most genes in one corner.", br(), br(),
+                 strong("Scoring-set genes are hidden by default"), " — they sit at the extremes of ",
+                 "their own axis by construction, so leaving them in would partly just recover the inputs.")),
+      conditionalPanel("input.matt != 'genemap'",
+        helpText("P0→P7 maturation and the glycolysis→fatty-acid-oxidation metabolic switch. ",
+                 "The within-genotype P0→P7 axis is the most robust signal in this design. ",
+                 strong("KO-vs-WT descriptive only — n = 1."), br(), br(),
+                 "P7 was cycling-enriched 4.5–5.2× relative to P0, so any score that tracks cycling ",
+                 "is shifted by the sort. Use the G1 stratum to hold that composition fixed.")),
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("Violin figure options", figure_controls("mat", palette = TRUE, rename = FALSE)),
+        accordion_panel("Cell-scatter figure options", figure_controls("matsc", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(id = "matt",
+      nav_panel("By four groups", value = "violin", plotOutput("mat_violin", height = "560px")),
+      nav_panel("Maturation vs metabolism (cells)", value = "cells",
+        plotOutput("mat_scatter", height = "600px")),
+      nav_panel("Gene map", value = "genemap",
+        helpText("Hover a point for the gene and its coordinates; click a point — or a table row — ",
+                 "to ring it and show its details."),
+        uiOutput("gm_note"),
+        plotlyOutput("gm_scatter", height = "560px"),
+        uiOutput("gm_pick_ui"),
+        DTOutput("gm_table"),
+        uiOutput("gm_geneinfo")))))),
 
   nav_spacer(),
   nav_menu("Help",
@@ -2165,10 +2376,58 @@ server <- function(input, output, session) {
   output$cyc_scatter <- renderPlot(ploidy_scatter(input$cyc_ct, input$cyc_basesize %||% 13))
 
   # ---- Maturation & metabolism ----
-  mat_violin_plot <- reactive(score_violin(input$mat_score, input$mat_ct, input$mat_basesize %||% 13, input$mat_palette %||% "Default"))
+  mat_violin_plot <- reactive(score_violin(input$mat_score, input$mat_ct,
+    input$mat_basesize %||% 13, input$mat_palette %||% "Default", input$mat_stratum %||% "all"))
   output$mat_violin <- renderPlot(apply_fig_opts(mat_violin_plot(), "mat", input))
   for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("mat_dl_", f)]] <- dl_ggplot("mat", mat_violin_plot, input, f) })
-  output$mat_scatter <- renderPlot(mat_scatter(input$mat_ct, input$mat_basesize %||% 13))
+  # the cell scatter previously had no export path at all — it is the one plot in the
+  # app that could not be downloaded; now wired like every other ggplot panel
+  mat_scatter_plot <- reactive(mat_scatter(input$mat_ct, input$matsc_basesize %||% 13,
+    input$mat_stratum %||% "all", input$mat_showcells %||% TRUE))
+  output$mat_scatter <- renderPlot(apply_fig_opts(mat_scatter_plot(), "matsc", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("matsc_dl_", f)]] <- dl_ggplot("matsc", mat_scatter_plot, input, f) })
+
+  # ---- Gene map (maturation axis x metabolic axis) ----
+  observe(updateSelectizeInput(session, "gm_gene",
+    choices = c("", if (!is.null(GM)) sort(GM$gene) else character(0)), server = TRUE))
+  gm_d    <- reactive(gm_df(input$gm_quad, input$gm_dist %||% 0,
+                            input$gm_hidesets %||% TRUE, input$gm_geneset %||% "__all__"))
+  gm_tab  <- reactive(gm_table(gm_d()))
+  gm_pick <- reactiveVal(NULL)
+  gm_dt_proxy <- DT::dataTableProxy("gm_table")
+  output$gm_scatter <- renderPlotly(gm_plot_ly(gm_d(), input$gm_labeln %||% 20, gm_pick()))
+  outputOptions(output, "gm_scatter", suspendWhenHidden = FALSE)  # register the click source at startup
+  output$gm_note <- renderUI({
+    d <- try(gm_d(), silent = TRUE)
+    n <- if (inherits(d, "try-error")) 0 else nrow(d)
+    tagList(
+      div(style = "font-size:13px;margin-bottom:4px",
+          sprintf("%d genes shown of %d on the map.", n, if (is.null(GM)) 0L else nrow(GM)),
+          if (isTRUE(input$gm_hidesets)) " Scoring-set genes hidden." else
+            span(style = "color:#c62828", " Scoring-set genes shown — those sit at their own axis's extreme by construction.")),
+      gm_gene_note(gm_pick()))
+  })
+  output$gm_table    <- renderDT(de_datatable(gm_tab(), scroll = "340px"))
+  output$gm_pick_ui  <- renderUI(pick_banner(gm_pick(), "gm_clear"))
+  output$gm_geneinfo <- renderUI(gene_info_card(gm_pick(), "gm_infoclose"))
+  observeEvent(event_data("plotly_click", source = "gm_scatter"),
+    gm_pick(event_data("plotly_click", source = "gm_scatter")$customdata))
+  observeEvent(input$gm_gene, if (nzchar(input$gm_gene %||% "")) gm_pick(input$gm_gene))
+  observeEvent(input$gm_table_rows_selected, {
+    r <- input$gm_table_rows_selected; g <- if (length(r)) gm_tab()$gene[r] else NULL
+    if (!identical(g, gm_pick())) gm_pick(g)
+  }, ignoreNULL = FALSE)
+  observeEvent(gm_pick(), {
+    g <- gm_pick(); rows <- if (!is.null(g)) which(gm_tab()$gene == g) else integer(0)
+    if (!identical(as.integer(rows), as.integer(input$gm_table_rows_selected)))
+      DT::selectRows(gm_dt_proxy, if (length(rows)) rows else NULL)
+  }, ignoreNULL = FALSE)
+  observeEvent(input$gm_clear, gm_pick(NULL))
+  observeEvent(input$gm_infoclose, gm_pick(NULL))
+  output$gm_dl <- downloadHandler(
+    filename = function() paste0("gene_map_maturation_metabolic_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(gm_d(), f, row.names = FALSE))
 
   # ---- Cell-cell signalling (curated L-R; build_communication.R) ----
   output$cc_heat <- renderPlotly(commun_heat(input$cc_pathway, input$cc_tp, input$cc_metric))

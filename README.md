@@ -120,6 +120,32 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
   an arm can clear the 10-cell floor overall and still be a handful of cells once restricted
   to G1 (CM2's KO-P0 arm is 31 cells, ~12 of them G1).
 
+  It also emits **`app$fourgroup$geneaxes`**, the gene map behind the *Gene map* sub-tab of
+  **Maturation & metabolism**. Every gene gets two coordinates, each an AUC from a tertile
+  split of the cells computed **within each timepoint and averaged** (so neither axis becomes
+  a restatement of P0-vs-P7, which the cycling sort confounds):
+
+  - `mat_auc` — how strongly the gene marks mature vs immature cardiomyocytes
+  - `met_auc` — how strongly it marks oxidative (FAO) vs glycolytic metabolism
+
+  plus `quadrant`, `distance` from the centre (the ranking of how strongly a gene defines
+  the joint program), and `in_score_set`. Three things are easy to get wrong here:
+
+  - **The axes split at each one's median, not at 0.5.** `wilcoxauc`'s AUC carries a small
+    global offset because the two tertile groups differ in detection rate (here mat +0.009,
+    met −0.014). Most genes sit within ~0.02 of the median, so splitting at a hard 0.5 put
+    65% of them in a single corner — an artifact, not biology. The centre is stored on the
+    table as `attr(geneaxes, "centre")`.
+  - **The axes use a looser row gate than the DE tables** (expression level only, no
+    significance requirement). The DE gate exists to keep 77 tables small; applying it to the
+    axes dropped Gapdh, Aldoa, Pgk1, Eno1, Hk1 and Cpt1a off the map entirely. A gene with no
+    association belongs at the origin, not missing.
+  - **`in_score_set` flags circularity.** Genes inside the sets that define a score sit at the
+    extremes of their own axis by construction; the app hides them by default. `Cox6a2` is in
+    both `mat_mature` and `faox`, so it is doubly circular. With set genes hidden the
+    mature↔oxidative / immature↔glycolytic diagonal still holds 57% of genes (50% would mean
+    the two axes are independent), so the coupling is not an artifact of the inputs.
+
 Re-run order after `build_app_data.R` regenerates the bundle (each is idempotent and
 safe to skip; the app guards absent slots with a "run the builder" message):
 
