@@ -1165,7 +1165,56 @@ fg_specificity_df <- function(genes, stratum, grid = "de") {
                priority_concentration = round(pri - oth, 3), stringsAsFactors = FALSE)
   }))
   d <- merge(d, agg, by = "gene", all.x = TRUE)
+  # the email's third question: is the gene associated with a less mature or more
+  # cycling state? Read off the same axes the Gene map and intersection tabs use, so
+  # a candidate's state and its KO behaviour sit on one row.
+  if (!is.null(GM)) {
+    i <- match(d$gene, GM$gene)
+    d$mat_auc <- GM$mat_auc[i]
+    d$state_maturation <- GM$mat_class[i]
+    if ("cyc_auc" %in% names(GM)) {
+      d$cyc_auc <- GM$cyc_auc[i]
+      d$state_cycling <- GM$cyc_class[i]
+    }
+  } else if (!is.null(FG$maturation)) {
+    i <- match(d$gene, FG$maturation$gene)
+    d$mat_auc <- FG$maturation$mat_auc[i]; d$state_maturation <- FG$maturation$mat_class[i]
+  }
   d[order(d$gene, factor(d$cluster, levels = FG_CLUSTERS)), , drop = FALSE]
+}
+# --- "any additional top candidates identified from the analyses above" ----------
+# The email asks for the shortlist PLUS whatever the other analyses threw up, so the
+# gene box can be populated from each of them rather than retyped by hand.
+FG_CAND_SOURCES <- c("Email shortlist" = "shortlist",
+                     "Top four-group DE — P7 KO vs WT" = "de",
+                     "Intersection hits — immature-up / mature-down" = "intersect",
+                     "Gene map extremes — by distance" = "genemap")
+fg_candidate_pool <- function(src, n = 20, grid = "de") {
+  drop_conf_genes <- function(g) setdiff(g, CONF)
+  if (is.null(src) || src == "shortlist") return(FG_SHORTLIST)
+  if (src == "de") {
+    cls <- intersect(c("AllCM", FG_PRIORITY), FG_CLUSTERS)
+    g <- unlist(lapply(cls, function(cl) {
+      d <- fg_grid(grid)[[cl]][["P7_KO_vs_WT__G1"]]
+      if (is.null(d)) d <- fg_grid(grid)[[cl]][["P7_KO_vs_WT__all"]]
+      if (is.null(d)) return(character(0))
+      d <- d[!d$confounder, , drop = FALSE]
+      head(d$gene[order(-abs(d$log2FoldChange))], n)
+    }))
+    return(drop_conf_genes(unique(g)))
+  }
+  if (src == "intersect" && !is.null(FG$intersect)) {
+    d <- FG$intersect[!FG$intersect$confounder &
+          FG$intersect$cluster %in% intersect(c("AllCM", FG_PRIORITY), FG_CLUSTERS) &
+          FG$intersect$quadrant %in% c("immature_up_in_KO", "mature_down_in_KO"), , drop = FALSE]
+    if (!nrow(d)) return(character(0))
+    return(drop_conf_genes(unique(d$gene[order(-abs(d$p7ko_log2FC))])))
+  }
+  if (src == "genemap" && !is.null(GM)) {
+    d <- GM[is.na(GM$in_score_set), , drop = FALSE]   # exclude the circular ones
+    return(drop_conf_genes(head(d$gene[order(-d$distance)], n * 2)))
+  }
+  FG_SHORTLIST
 }
 
 # ---- gene map: maturation axis x metabolic axis (FG$geneaxes) ----------------
@@ -1690,7 +1739,10 @@ ui <- page_navbar(
         div(downloadButton("mi_dl", "Download intersection (CSV)",
                            class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
       conditionalPanel("input.mi_tabs == 'candidates'",
-        selectInput("mi_geneset", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
+        selectInput("mi_source", "Candidate source", choices = FG_CAND_SOURCES, selected = "shortlist"),
+        conditionalPanel("input.mi_source != 'shortlist' && input.mi_source != 'intersect'",
+          numericInput("mi_topn", "Top N per cluster", 20, 5, 100, 5)),
+        selectInput("mi_geneset", "Restrict to gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
         selectizeInput("mi_genes", "Genes", choices = NULL, multiple = TRUE,
                        options = list(maxOptions = 50L)),
         actionLink("mi_reset_genes", "reset to the shortlist"),
@@ -1738,7 +1790,10 @@ ui <- page_navbar(
                  "Size = % of cells expressing, colour = mean expression. ",
                  "The table below reads the KO effect off the precomputed contrasts: ",
                  strong("P7_specificity"), " > 0 means the KO effect is larger at P7 than at P0, and ",
-                 strong("priority_concentration"), " > 0 means it is larger inside CM2/CM4/CM5 than outside."),
+                 strong("priority_concentration"), " > 0 means it is larger inside CM2/CM4/CM5 than outside. ",
+                 strong("state_maturation"), " and ", strong("state_cycling"),
+                 " say whether the gene marks a less mature or a more cycling state, from the same ",
+                 "axes the Gene map uses — so all three of the email's questions sit on one row."),
         plotOutput("mi_candidates", height = "480px"),
         DTOutput("mi_spec_tab")))))),
 
@@ -2368,10 +2423,18 @@ server <- function(input, output, session) {
     if (length(sc)) updateSelectInput(session, "fg_score",
                       choices = setNames(sc, labof(sc)), selected = sc[[1]])
   })
-  observe(updateSelectizeInput(session, "mi_genes", choices = genes_for_set(input$mi_geneset),
-                               selected = FG_SHORTLIST, server = TRUE))
-  observeEvent(input$mi_reset_genes,
-    updateSelectizeInput(session, "mi_genes", selected = FG_SHORTLIST, server = TRUE))
+  observe({
+    pool <- fg_candidate_pool(input$mi_source %||% "shortlist", input$mi_topn %||% 20,
+                              input$mi_spec_grid %||% "de")
+    if (!is.null(input$mi_geneset) && input$mi_geneset != "__all__")
+      pool <- intersect(pool, genes_for_set(input$mi_geneset))
+    updateSelectizeInput(session, "mi_genes", choices = genes_for_set(input$mi_geneset),
+                         selected = head(pool, 60), server = TRUE)
+  })
+  observeEvent(input$mi_reset_genes, {
+    updateSelectInput(session, "mi_source", selected = "shortlist")
+    updateSelectizeInput(session, "mi_genes", selected = FG_SHORTLIST, server = TRUE)
+  })
 
   # group sizes
   fg_counts_p <- reactive(fg_counts_plot(input$fg_count_mode %||% "prop",
@@ -2531,7 +2594,8 @@ server <- function(input, output, session) {
     class = "compact stripe hover") |>
     DT::formatSignif(intersect(c("P7_KO_vs_WT","P0_KO_vs_WT","P7_specificity",
                                  "CM2_4_5_mean_absLFC","other_clusters_mean_absLFC",
-                                 "priority_concentration"), names(mi_spec_df())), 3))
+                                 "priority_concentration","mat_auc","cyc_auc"),
+                               names(mi_spec_df())), 3))
   output$mi_cand_dl <- downloadHandler(
     filename = function() paste0("candidate_expression_", Sys.Date(), ".csv"),
     content  = function(f) write.csv(

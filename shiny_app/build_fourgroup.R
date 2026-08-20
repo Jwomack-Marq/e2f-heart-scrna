@@ -628,6 +628,11 @@ if (PROBE) {
 }
 
 # ---- assemble + write ------------------------------------------------------
+# A full rebuild replaces the whole slot, which silently drops the second DE grid that
+# --de2 adds. Warn rather than let it vanish -- the app degrades quietly if de2 is gone,
+# just showing fewer contrasts, which is exactly the kind of loss nobody notices.
+HAD_DE2 <- !is.null(app$fourgroup$de2)
+
 app$fourgroup <- list(
   built = list(
     when = as.character(Sys.time()), matrix = mx$name,
@@ -667,6 +672,12 @@ cat(sprintf("  gene map       : %s genes%s\n",
             if (is.null(geneaxes)) "   <-- EMPTY, the Gene map tab will be blank" else ""))
 cat(sprintf("  cm_subcluster  : added to meta (%d CM cells labelled)\n",
             sum(!is.na(app$meta$cm_subcluster))))
+
+if (HAD_DE2) cat(paste0(
+  "\n!! This rebuild dropped the second DE grid (app$fourgroup$de2).\n",
+  "   Re-run:  Rscript shiny_app/build_fourgroup.R --de2\n",
+  "   Without it the app loses the contrasts only the curated matrix can support,\n",
+  "   including CM2's KO P0-vs-P7 and CM4/CM9's G1 strata.\n"))
 
 cat("\nBacking up -> app_data.pre_fourgroup.bak.rds\n")
 file.copy("app_data.rds", "app_data.pre_fourgroup.bak.rds", overwrite = TRUE)
