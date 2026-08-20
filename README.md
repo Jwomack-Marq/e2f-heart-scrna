@@ -116,6 +116,17 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
     would be partly circular. `build_signature_scores.R` now also emits
     `sig_maturation_nocc` (those three dropped) and the intersection defaults to it.
 
+  It ships **two DE grids** over the same contrasts, because the two available matrices
+  trade against each other and neither wins outright. `app$fourgroup$de` uses the broad
+  matrix (~24k genes, but a downsampled ~5.8k CM cells, so CM2's KO-P0 arm falls to 9
+  cells and drops out and CM4/CM9 lose their G1 strata); `app$fourgroup$de2` uses the
+  curated panel (2,181 genes but all 21,598 CM cells, so every contrast runs). Build the
+  second with `Rscript shiny_app/build_fourgroup.R --de2` **after** the main run — it
+  recomputes only the DE grid and leaves the rest of the slot alone. The app offers both
+  as a "DE matrix" choice and, when a contrast is missing from one, says whether the
+  other has it. Across the four priority subclusters this takes coverage of the twelve
+  requested contrasts from 7/12 to 12/12.
+
   Arms too thin to support a contrast are flagged rather than silently reported — note that
   an arm can clear the 10-cell floor overall and still be a handful of cells once restricted
   to G1 (CM2's KO-P0 arm is 31 cells, ~12 of them G1).
@@ -158,6 +169,7 @@ Rscript shiny_app/build_refmap.R
 source("shiny_app/build_subcluster_enrichment.R")    # (existing) per-subcluster enrichment
 Rscript shiny_app/build_fourgroup.R --probe          # group sizes + size estimate, writes nothing
 Rscript shiny_app/build_fourgroup.R                  # then compute + save
+Rscript shiny_app/build_fourgroup.R --de2            # second DE grid on the curated panel
 # then: rsconnect::deployApp("shiny_app")
 ```
 

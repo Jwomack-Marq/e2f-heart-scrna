@@ -59,6 +59,14 @@ argval <- function(flag, default = "") {
 }
 MATRIX_PICK <- argval("--matrix", "broad")
 SEURAT_PATH <- argval("--seurat", "")
+# --de2: recompute ONLY the DE grid on the other matrix and store it alongside the
+# first as app$fourgroup$de2, leaving everything else in the slot untouched. The two
+# matrices trade against each other and neither wins outright: the broad one has
+# 24,221 genes but 8,026 cells, so CM2's KO-P0 arm falls to 9 cells and drops out
+# entirely and CM4/CM9 lose their G1 strata; the curated one keeps all 30,030 cells
+# so every contrast runs, but over 2,181 genes. Shipping both lets the question pick.
+DE2 <- "--de2" %in% ARGS
+if (DE2) MATRIX_PICK <- argval("--matrix", "curated")
 
 if (!file.exists("app_data.rds") && file.exists("shiny_app/app_data.rds")) setwd("shiny_app")
 stopifnot(file.exists("app_data.rds"))
@@ -305,6 +313,29 @@ if (!PROBE) {
   }
 }
 skipped <- if (length(skipped)) do.call(rbind, skipped) else NULL
+
+if (DE2) {
+  stopifnot(!is.null(app$fourgroup))
+  app$fourgroup$de2            <- de
+  app$fourgroup$skipped2       <- skipped
+  app$fourgroup$built$matrix2  <- mx$name
+  app$fourgroup$built$n_genes2 <- nrow(M)
+  n1 <- sum(vapply(app$fourgroup$de, length, 0L)); n2 <- sum(vapply(de, length, 0L))
+  cat(sprintf("\n== second DE grid (%s) ==\n  %d tables here vs %d in the primary grid (%s)\n",
+              mx$name, n2, n1, app$fourgroup$built$matrix))
+  gained <- setdiff(unlist(lapply(names(de), function(cl)
+              paste(cl, names(de[[cl]])))),
+            unlist(lapply(names(app$fourgroup$de), function(cl)
+              paste(cl, names(app$fourgroup$de[[cl]])))))
+  cat(sprintf("  contrasts this grid adds that the primary lacks: %d\n", length(gained)))
+  if (length(gained)) cat("   ", paste(head(gained, 30), collapse = "; "), "\n")
+  cat("\nBacking up -> app_data.pre_fourgroup.bak.rds\n")
+  file.copy("app_data.rds", "app_data.pre_fourgroup.bak.rds", overwrite = TRUE)
+  cat("Saving app_data.rds (gzip) ...\n")
+  saveRDS(app, "app_data.rds", compress = "gzip")
+  cat("Done.\n")
+  quit(save = "no")
+}
 
 # ---- 5. gene-level score axes ---------------------------------------------
 # Rank every gene along a per-cell score axis: tertile-split the cells on `score`,

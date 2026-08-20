@@ -786,6 +786,28 @@ FG_SORT_NOTE <- paste(
   "the phase-matched (G1-only) stratum for this reason.")
 
 fg_ok <- function() validate(need(!is.null(FG), FG_MSG))
+# Two DE grids over the same contrasts, trading gene coverage against cell coverage.
+# Neither dominates: the broad matrix has ~24k genes but 8k cells, so CM2's KO-P0 arm
+# falls below the floor and CM4/CM9 lose their G1 strata; the curated matrix keeps all
+# 30k cells so every contrast runs, over ~2.2k genes. The user picks per question.
+fg_grid_choices <- function() {
+  if (is.null(FG)) return(c("Gene coverage" = "de"))
+  g <- c(setNames("de", sprintf("Gene coverage — %s genes, %s CM cells",
+                   format(FG$built$n_genes, big.mark = ","),
+                   format(FG$built$n_cells_de, big.mark = ","))))
+  if (!is.null(FG$de2)) g <- c(g, setNames("de2", sprintf("Cell coverage — %s genes, all %s CM cells",
+                   format(FG$built$n_genes2 %||% 0, big.mark = ","),
+                   format(FG$built$n_cells_total %||% 0, big.mark = ","))))
+  g
+}
+fg_grid <- function(grid) if (identical(grid, "de2") && !is.null(FG$de2)) FG$de2 else FG$de
+fg_skipset <- function(grid) if (identical(grid, "de2")) FG$skipped2 else FG$skipped
+# is this contrast available in the OTHER grid? worth saying so rather than just "no"
+fg_other_has <- function(cluster, contrast, stratum, grid) {
+  other <- if (identical(grid, "de2")) FG$de else FG$de2
+  if (is.null(other)) return(FALSE)
+  !is.null(other[[cluster]][[paste0(contrast, "__", stratum)]])
+}
 # cluster dropdown: "All cardiomyocytes" + the usual "CM2 · Ventricular (2397 cells)"
 fg_cluster_choices <- function() {
   if (is.null(FG)) return(character(0))
@@ -802,21 +824,25 @@ fg_ct <- function(key) {
   if (nrow(r)) as.list(r[1, ]) else NULL
 }
 # when a table is missing, say WHY (and with what cell counts) rather than "no data"
-fg_skip_msg <- function(cluster, contrast, stratum) {
-  s <- FG$skipped
+fg_skip_msg <- function(cluster, contrast, stratum, grid = "de") {
+  hint <- if (fg_other_has(cluster, contrast, stratum, grid))
+    paste0(" This contrast IS available in the “",
+           if (identical(grid, "de2")) "Gene coverage" else "Cell coverage",
+           "” matrix — switch it in the sidebar.") else ""
+  s <- fg_skipset(grid)
   if (!is.null(s)) {
     r <- s[s$cluster == cluster & s$contrast == contrast & s$stratum == stratum, , drop = FALSE]
     if (nrow(r)) return(sprintf(
-      "Not computed — %s. Group A: %d cells, group B: %d cells (floor is %d).%s",
+      "Not computed — %s. Group A: %d cells, group B: %d cells (floor is %d).%s%s",
       r$reason[1], r$n_A[1], r$n_B[1], FG$built$min_cells,
-      if (stratum == "G1") " Try the “All cells” stratum." else ""))
+      if (stratum == "G1") " Try the “All cells” stratum." else "", hint))
   }
-  "No DE table for this selection."
+  paste0("No DE table for this selection.", hint)
 }
-fg_de <- function(cluster, contrast, stratum) {
+fg_de <- function(cluster, contrast, stratum, grid = "de") {
   fg_ok(); req(cluster, contrast, stratum)
-  d <- FG$de[[cluster]][[paste0(contrast, "__", stratum)]]
-  validate(need(!is.null(d) && nrow(d), fg_skip_msg(cluster, contrast, stratum)))
+  d <- fg_grid(grid)[[cluster]][[paste0(contrast, "__", stratum)]]
+  validate(need(!is.null(d) && nrow(d), fg_skip_msg(cluster, contrast, stratum, grid)))
   d
 }
 # one row per cluster: counts + percentages for the four groups, with the
@@ -1011,10 +1037,10 @@ fg_candidate_plot <- function(genes, clusters, stratum, bs = 13) {
 # Is a gene's KO effect P7-specific, and is it concentrated in CM2/CM4/CM5?
 # Read straight off the precomputed contrasts, so it matches the DEG tables.
 FG_PRIORITY <- c("CM2","CM4","CM5")
-fg_specificity_df <- function(genes, stratum) {
+fg_specificity_df <- function(genes, stratum, grid = "de") {
   fg_ok(); validate(need(length(genes), "Pick at least one gene."))
   pull <- function(cl, key, g) {
-    d <- FG$de[[cl]][[paste0(key, "__", stratum)]]
+    d <- fg_grid(grid)[[cl]][[paste0(key, "__", stratum)]]
     if (is.null(d)) return(NA_real_)
     d$log2FoldChange[match(g, d$gene)]
   }
@@ -1481,6 +1507,7 @@ ui <- page_navbar(
       conditionalPanel("input.fg_tabs == 'de'",
         selectInput("fg_cluster", "Subcluster", choices = NULL),
         selectInput("fg_contrast", "Comparison", choices = NULL),
+        radioButtons("fg_grid", "DE matrix", choices = fg_grid_choices(), selected = "de"),
         radioButtons("fg_stratum", "Cells used",
                      c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
                      selected = "G1"),
@@ -1502,6 +1529,13 @@ ui <- page_navbar(
                            class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px")),
       hr(),
       helpText(strong("Sort caveat. "), FG_SORT_NOTE),
+      conditionalPanel("input.fg_tabs == 'de'",
+        helpText(strong("DE matrix. "),
+                 "Two grids over the same contrasts. ", strong("Gene coverage"), " tests ~24k genes but ",
+                 "on a downsampled 8k cells, so the thinnest arms drop out — CM2's KO-P0 falls to 9 cells ",
+                 "and CM4/CM9 lose their G1 strata. ", strong("Cell coverage"), " keeps all 30k cells so ",
+                 "every contrast runs, but only over the 2,181-gene curated panel. Neither wins outright; ",
+                 "if a contrast is missing here it will say whether the other matrix has it.")),
       helpText(strong("Descriptive only — n = 1 animal per group."),
                " Wilcoxon is run cell-level, so p-values are pseudoreplicated;",
                " tables are ranked by effect size, not by p."),
@@ -1556,6 +1590,8 @@ ui <- page_navbar(
         radioButtons("mi_cand_stratum", "Cells used",
                      c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
                      selected = "all"),
+        radioButtons("mi_spec_grid", "DE matrix (specificity table)",
+                     choices = fg_grid_choices(), selected = "de"),
         div(class = "mt-2",
           downloadButton("mi_cand_dl", "Download expression grid (CSV)",
                          class = "btn-sm btn-outline-secondary"),
@@ -2235,8 +2271,8 @@ server <- function(input, output, session) {
     content  = function(f) write.csv(FG$counts, f, row.names = FALSE))
 
   # four-group DE: volcano <-> table <-> gene card (same wiring as the other DE tabs)
-  fg_d    <- reactive(drop_conf(fg_de(input$fg_cluster, input$fg_contrast, input$fg_stratum),
-                                input$fg_hideconf))
+  fg_d    <- reactive(drop_conf(fg_de(input$fg_cluster, input$fg_contrast, input$fg_stratum,
+                                      input$fg_grid %||% "de"), input$fg_hideconf))
   fg_tab  <- reactive(de_table(fg_d()))
   fg_pick <- reactiveVal(NULL)
   fg_dt_proxy <- DT::dataTableProxy("fg_detab")
@@ -2250,7 +2286,8 @@ server <- function(input, output, session) {
     div(style = "font-size:13px;margin-bottom:6px",
         HTML(paste0("<b>", ct$label, "</b> in ",
                     if (input$fg_cluster == "AllCM") "all cardiomyocytes" else input$fg_cluster,
-                    if (input$fg_stratum == "G1") ", G1 cells only" else ", all cells", txt)),
+                    if (input$fg_stratum == "G1") ", G1 cells only" else ", all cells", txt,
+                    if (identical(input$fg_grid, "de2")) " &middot; curated panel" else "")),
         # An arm can clear the 10-cell floor and still be far too thin to trust —
         # say so here rather than letting the table look like any other.
         if (bad && min(nA, nB) < thin)
@@ -2286,11 +2323,13 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
   observeEvent(input$fg_clear, fg_pick(NULL))
   observeEvent(input$fg_infoclose, fg_pick(NULL))
-  observeEvent(list(input$fg_cluster, input$fg_contrast, input$fg_stratum),
+  observeEvent(list(input$fg_cluster, input$fg_contrast, input$fg_stratum, input$fg_grid),
                fg_pick(NULL), ignoreInit = TRUE)
   output$fg_de_dl <- downloadHandler(
     filename = function() paste0("fourgroup_DE_", input$fg_cluster, "_", input$fg_contrast,
-                                 "_", input$fg_stratum, "_", Sys.Date(), ".csv"),
+                                 "_", input$fg_stratum,
+                                 if (identical(input$fg_grid, "de2")) "_curated" else "",
+                                 "_", Sys.Date(), ".csv"),
     content  = function(f) write.csv(fg_d(), f, row.names = FALSE))
 
   # G1 proportion + maturation scores
@@ -2332,7 +2371,8 @@ server <- function(input, output, session) {
   output$mi_candidates <- renderPlot(apply_fig_opts(mi_cand_p(), "micand", input))
   for (.f in c("pdf","svg","png")) local({ f <- .f;
     output[[paste0("micand_dl_", f)]] <- dl_ggplot("micand", mi_cand_p, input, f) })
-  mi_spec_df <- reactive(fg_specificity_df(input$mi_genes, input$mi_cand_stratum %||% "all"))
+  mi_spec_df <- reactive(fg_specificity_df(input$mi_genes, input$mi_cand_stratum %||% "all",
+                                           input$mi_spec_grid %||% "de"))
   output$mi_spec_tab <- renderDT(DT::datatable(mi_spec_df(), rownames = FALSE,
     options = list(pageLength = 15, scrollX = TRUE, dom = "ftip"),
     class = "compact stripe hover") |>
