@@ -127,6 +127,17 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
   other has it. Across the four priority subclusters this takes coverage of the twelve
   requested contrasts from 7/12 to 12/12.
 
+  The app's **Gene-set Venn** tab crosses any two or three of these sets — DE contrasts,
+  the maturation/metabolic/cycling axes, the intersection quadrants, or the curated panels —
+  and reports every pairwise overlap against its chance expectation, because a Venn on its
+  own hides the threshold that built each set, the direction of change, and the null. Its
+  cycling circle defaults to the **curated canonical** genes rather than the data-driven
+  axis: the axis calls 531 genes cycling-associated but only 46 are canonical, the rest
+  being largely housekeeping (`Ran`, `Nap1l1`, `Calm1`, `Ppia`) because cycling cells are
+  globally more transcriptionally active. The universe used for the hypergeometric is the
+  tested gene space (`app$deg_genes` or the curated panel), **not** the gated DE tables —
+  those exclude expressed-but-unchanging genes, which is exactly what a universe needs.
+
   Arms too thin to support a contrast are flagged rather than silently reported — note that
   an arm can clear the 10-cell floor overall and still be a handful of cells once restricted
   to G1 (CM2's KO-P0 arm is 31 cells, ~12 of them G1).

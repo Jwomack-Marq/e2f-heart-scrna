@@ -1217,6 +1217,178 @@ fg_candidate_pool <- function(src, n = 20, grid = "de") {
   FG_SHORTLIST
 }
 
+# ---- gene-set Venn -----------------------------------------------------------
+# Crosses any two or three of the sets the other tabs already produce. A Venn hides
+# the three things that decide whether an overlap means anything -- the threshold that
+# built each set, the direction of change, and the overlap expected by chance -- so
+# every region here is reported alongside its null rather than left to look definitive.
+#
+# The cycling circle defaults to the CURATED canonical genes, not the data-driven axis.
+# The axis calls 531 genes cycling-associated but only 46 are canonical; the rest include
+# Ran, Nap1l1, Calm1, Ppia and other housekeeping genes, because cycling cells are
+# globally more transcriptionally active and the AUC partly measures output. Labelled
+# "cycling genes" on a Venn that would be read as far more than it says.
+VN_CANONICAL <- unique(unlist(GENE_SETS[intersect(
+  c("Cell cycle (S)", "Cell cycle (G2/M)", "E2F targets"), names(GENE_SETS))]))
+
+vn_choices <- function() {
+  de <- if (is.null(FG_CTAB)) character(0) else setNames(
+    unlist(lapply(FG_CTAB$key, function(k) paste0("de:", k, c(":both", ":up", ":down")))),
+    unlist(lapply(seq_len(nrow(FG_CTAB)), function(i)
+      paste0(FG_CTAB$label[i], c("", " — up only", " — down only")))))
+  ax <- c("Maturation: mature-associated"   = "ax:mat:mature",
+          "Maturation: immature-associated" = "ax:mat:immature",
+          "Metabolic: oxidative"            = "ax:met:oxidative",
+          "Metabolic: glycolytic"           = "ax:met:glycolytic",
+          "Cycling (data-driven axis)"      = "ax:cyc:cycling")
+  iq <- c("Intersection: immature UP in P7 KO" = "iq:immature_up_in_KO",
+          "Intersection: mature DOWN in P7 KO" = "iq:mature_down_in_KO")
+  cur <- c(setNames("cur:__canonical__", "Canonical cell cycle (S + G2/M + E2F targets)"),
+           setNames(paste0("cur:", names(GENE_SETS)), paste0("Curated: ", names(GENE_SETS))))
+  list("Differential expression" = as.list(de), "Gene axes" = as.list(ax),
+       "Intersection quadrants"  = as.list(iq), "Curated panels" = as.list(cur))
+}
+# Resolve one set id to its genes AND its testable space. The universe matters: a
+# 52-gene curated panel crossed against a set drawn from 24k tested genes gives a
+# meaningless hypergeometric unless the universe is the space both could have come from.
+vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
+  if (is.null(id) || !nzchar(id) || identical(id, "none")) return(NULL)
+  kind <- sub(":.*$", "", id); rest <- sub("^[^:]*:", "", id)
+  ax_univ <- if (!is.null(GM)) GM$gene else ALL_GENES
+  out <- function(g, lab, univ) list(genes = setdiff(unique(g), CONF),
+                                     label = lab, universe = setdiff(unique(univ), CONF))
+  if (kind == "de") {
+    key <- sub(":.*$", "", rest); dir <- sub("^[^:]*:", "", rest)
+    d <- fg_grid(grid)[[cluster]][[paste0(key, "__", stratum)]]
+    ct <- fg_ct(key); lab <- paste0(if (is.null(ct)) key else ct$label,
+                                    switch(dir, up = " (up)", down = " (down)", ""))
+    # The testable space is every gene the matrix carries, NOT the genes in this table.
+    # The DE tables are gated on expression AND a significance-or-effect condition, so an
+    # expressed-but-unchanging gene is absent -- and those are exactly the genes a
+    # hypergeometric universe must contain. Using the table as the universe would shrink
+    # it to roughly the changing genes and inflate every expected overlap.
+    univ <- if (identical(grid, "de2")) genes else (GENES_FULL %||% genes)
+    if (is.null(d)) return(out(character(0), lab, univ))
+    keep <- !d$confounder & !is.na(d$padj) & d$padj < padj_cut & abs(d$log2FoldChange) >= lfc_cut
+    if (dir == "up")   keep <- keep & d$log2FoldChange > 0
+    if (dir == "down") keep <- keep & d$log2FoldChange < 0
+    return(out(d$gene[keep], lab, univ))
+  }
+  if (kind == "ax") {
+    validate(need(!is.null(GM), GM_MSG))
+    axis <- sub(":.*$", "", rest); side <- sub("^[^:]*:", "", rest)
+    col <- paste0(axis, "_class")
+    validate(need(col %in% names(GM), paste0("The ", axis, " axis isn't in this data build.")))
+    return(out(GM$gene[!is.na(GM[[col]]) & GM[[col]] == paste0(side, "-associated")],
+               paste0(side, "-associated"), ax_univ))
+  }
+  if (kind == "iq") {
+    validate(need(!is.null(FG$intersect), fg_int_msg))
+    d <- FG$intersect[FG$intersect$cluster == cluster & !FG$intersect$confounder, , drop = FALSE]
+    if (!nrow(d)) d <- FG$intersect[FG$intersect$cluster == "AllCM" & !FG$intersect$confounder, , drop = FALSE]
+    return(out(d$gene[d$quadrant == rest], gsub("_", " ", rest), unique(d$gene)))
+  }
+  if (kind == "cur") {
+    g <- if (identical(rest, "__canonical__")) VN_CANONICAL else GENE_SETS[[rest]]
+    lab <- if (identical(rest, "__canonical__")) "canonical cell cycle" else rest
+    return(out(intersect(g, ALL_GENES), lab, ALL_GENES))
+  }
+  NULL
+}
+# Collect the selected slots, and build the shared universe they must be judged in.
+vn_sets <- function(ids, cluster, stratum, grid, padj_cut, lfc_cut) {
+  ss <- Filter(Negate(is.null), lapply(ids, vn_set, cluster = cluster, stratum = stratum,
+                                       grid = grid, padj_cut = padj_cut, lfc_cut = lfc_cut))
+  validate(need(length(ss) >= 2, "Pick at least two gene sets."))
+  univ <- Reduce(intersect, lapply(ss, `[[`, "universe"))
+  validate(need(length(univ) > 0, "These sets have no shared testable space — the overlap statistics would be meaningless."))
+  for (i in seq_along(ss)) ss[[i]]$genes <- intersect(ss[[i]]$genes, univ)
+  list(sets = ss, universe = univ)
+}
+# Every disjoint region, keyed by which circles it belongs to ("A", "AB", "ABC", ...)
+vn_regions <- function(sets) {
+  n <- length(sets); nm <- LETTERS[seq_len(n)]
+  g <- lapply(sets, `[[`, "genes")
+  allg <- unique(unlist(g))
+  memb <- vapply(g, function(x) allg %in% x, logical(length(allg)))
+  if (is.null(dim(memb))) memb <- matrix(memb, ncol = n)
+  key <- apply(memb, 1, function(r) paste(nm[r], collapse = ""))
+  split(allg, key)
+}
+# Fixed 2- and 3-circle layouts, drawn with geom_polygon so no new package is needed.
+vn_layout <- function(n) {
+  if (n == 2) list(
+    circles = data.frame(set = c("A","B"), x = c(-0.45, 0.45), y = c(0, 0), r = c(1, 1)),
+    labels  = data.frame(key = c("A","B","AB"), x = c(-0.95, 0.95, 0), y = c(0, 0, 0)),
+    titles  = data.frame(set = c("A","B"), x = c(-1.05, 1.05), y = c(1.15, 1.15)))
+  else list(
+    circles = data.frame(set = c("A","B","C"), x = c(0, -0.5, 0.5), y = c(0.55, -0.35, -0.35), r = 1),
+    labels  = data.frame(
+      key = c("A","B","C","AB","AC","BC","ABC"),
+      x = c(0, -0.85, 0.85, -0.55, 0.55, 0, 0),
+      y = c(1.05, -0.7, -0.7, 0.15, 0.15, -0.7, -0.2)),
+    titles  = data.frame(set = c("A","B","C"), x = c(0, -1.25, 1.25), y = c(1.85, -1.35, -1.35)))
+}
+VN_PAL <- c(A = "#1565c0", B = "#c62828", C = "#f9a825")
+vn_plot <- function(vs, bs = 13, ttl = NULL) {
+  sets <- vs$sets; n <- length(sets); nm <- LETTERS[seq_len(n)]
+  lay <- vn_layout(n); reg <- vn_regions(sets)
+  th <- seq(0, 2 * pi, length.out = 181)
+  poly <- do.call(rbind, lapply(seq_len(n), function(i) data.frame(
+    set = lay$circles$set[i],
+    x = lay$circles$x[i] + lay$circles$r[i] * cos(th),
+    y = lay$circles$y[i] + lay$circles$r[i] * sin(th))))
+  lab <- lay$labels
+  # reg[[k]] errors on a missing name for lists, so index defensively — an empty
+  # region is normal (two sets can simply not overlap)
+  lab$n <- vapply(lab$key, function(k) if (k %in% names(reg)) length(reg[[k]]) else 0L, 0L)
+  tit <- lay$titles
+  tit$txt <- vapply(seq_len(n), function(i) sprintf("%s\n(%d)", sets[[i]]$label,
+                                                    length(sets[[i]]$genes)), "")
+  ggplot() +
+    geom_polygon(data = poly, aes(x, y, fill = set, group = set), alpha = .32, colour = "grey30") +
+    geom_text(data = lab, aes(x, y, label = n), size = bs / 2.4, fontface = "bold") +
+    geom_text(data = tit, aes(x, y, label = txt), size = bs / 3.4, fontface = "bold",
+              lineheight = .95) +
+    scale_fill_manual(values = VN_PAL, guide = "none") +
+    coord_equal(clip = "off") + theme_void(base_size = bs) +
+    theme(plot.margin = margin(24, 24, 24, 24)) +
+    labs(title = ttl %||% "Gene-set overlap",
+         caption = sprintf(paste("Universe: %s genes tested in common. Region sizes move with the",
+                                 "padj and log2FC cuts in the sidebar.\nDescriptive only — n = 1 animal per group."),
+                           format(length(vs$universe), big.mark = ",")))
+}
+# Observed vs expected for every pair — the null the picture cannot show on its own.
+vn_stats <- function(vs) {
+  sets <- vs$sets; N <- length(vs$universe); n <- length(sets)
+  cmb <- utils::combn(seq_len(n), 2, simplify = FALSE)
+  do.call(rbind, lapply(cmb, function(ij) {
+    a <- sets[[ij[1]]]$genes; b <- sets[[ij[2]]]$genes
+    o <- length(intersect(a, b)); e <- length(a) * length(b) / N
+    data.frame(set_A = sets[[ij[1]]]$label, set_B = sets[[ij[2]]]$label,
+               n_A = length(a), n_B = length(b), overlap = o,
+               expected = round(e, 1), fold = round(o / max(e, 1e-9), 2),
+               p_hypergeom = signif(stats::phyper(o - 1, length(b), N - length(b),
+                                                  length(a), lower.tail = FALSE), 3),
+               stringsAsFactors = FALSE)
+  }))
+}
+# Region -> gene list, for the table and the CSV
+vn_region_df <- function(vs) {
+  sets <- vs$sets; nm <- LETTERS[seq_along(sets)]
+  labs <- vapply(sets, `[[`, "", "label")
+  reg <- vn_regions(sets)
+  do.call(rbind, lapply(names(reg), function(k) {
+    inn <- strsplit(k, "")[[1]]
+    data.frame(region = k,
+               sets = paste(labs[match(inn, nm)], collapse = " & "),
+               n = length(reg[[k]]),
+               genes = paste(sort(reg[[k]]), collapse = ", "),
+               stringsAsFactors = FALSE)
+  }))[order(-vapply(reg, length, 0L)), , drop = FALSE]
+}
+
+
 # ---- gene map: maturation axis x metabolic axis (FG$geneaxes) ----------------
 # Each point is a GENE, placed by how strongly it marks mature-vs-immature CMs (x)
 # and oxidative-vs-glycolytic metabolism (y). Both coordinates are AUCs from a
@@ -1795,7 +1967,48 @@ ui <- page_navbar(
                  " say whether the gene marks a less mature or a more cycling state, from the same ",
                  "axes the Gene map uses — so all three of the email's questions sit on one row."),
         plotOutput("mi_candidates", height = "480px"),
-        DTOutput("mi_spec_tab")))))),
+        DTOutput("mi_spec_tab"))))),
+
+  nav_panel("Gene-set Venn", layout_sidebar(
+    sidebar = sidebar(width = 330,
+      selectInput("vn_a", "Set A", choices = vn_choices(), selected = "de:WT_P0_vs_P7:both"),
+      selectInput("vn_b", "Set B", choices = vn_choices(), selected = "de:KO_P0_vs_P7:both"),
+      selectInput("vn_c", "Set C (optional)",
+                  choices = c(list("(none)" = "none"), vn_choices()),
+                  selected = "cur:__canonical__"),
+      hr(),
+      selectInput("vn_cluster", "Subcluster", choices = NULL),
+      radioButtons("vn_stratum", "Cells used",
+                   c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"), selected = "G1"),
+      radioButtons("vn_grid", "DE matrix", choices = fg_grid_choices(), selected = "de"),
+      div(style = "display:flex;gap:8px",
+        numericInput("vn_padj", "padj <", 0.05, 0.001, 1, 0.01),
+        numericInput("vn_lfc", "|log2FC| >=", 0.25, 0, 5, 0.05)),
+      div(downloadButton("vn_dl", "Download regions (CSV)",
+                         class = "btn-sm btn-outline-secondary"), style = "margin-bottom:8px"),
+      hr(),
+      helpText("A Venn hides the three things that decide whether an overlap matters — the ",
+               "threshold that built each set, the direction of change, and the overlap you would ",
+               "get by chance. Every pairwise overlap here is reported against its chance ",
+               "expectation on the ", strong("Overlap statistics"), " tab; read the picture with it, ",
+               "not instead of it."),
+      uiOutput("vn_caveat"),
+      helpText(strong("Descriptive only — n = 1 animal per group.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("vn", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(id = "vn_tabs",
+      nav_panel("Venn", value = "venn",
+        uiOutput("vn_note"),
+        plotOutput("vn_plot", height = "560px")),
+      nav_panel("Overlap statistics", value = "stats",
+        helpText("Observed overlap against what independence would predict. ",
+                 "Fold near 1 with a non-significant p means the sets are unrelated — ",
+                 "which is a real result, not a failed analysis."),
+        DTOutput("vn_stats")),
+      nav_panel("Region genes", value = "regions",
+        helpText("Every disjoint region of the diagram, largest first. ",
+                 "Region A is “in set A only”, AB is “in A and B but not C”, and so on."),
+        DTOutput("vn_regions")))))),
 
   nav_menu("Dev",
   nav_panel("Cell–cell signalling", layout_sidebar(
@@ -2544,6 +2757,61 @@ server <- function(input, output, session) {
     content  = function(f) {
       validate(need(!is.null(FG$scores), "No score summary in this data build."))
       write.csv(FG$scores, f, row.names = FALSE) })
+
+  # ---- Gene-set Venn ----
+  observe({
+    cc <- fg_cluster_choices()
+    if (length(cc)) updateSelectInput(session, "vn_cluster", choices = cc, selected = "AllCM")
+  })
+  vn_v <- reactive(vn_sets(c(input$vn_a, input$vn_b, input$vn_c), input$vn_cluster %||% "AllCM",
+                           input$vn_stratum %||% "G1", input$vn_grid %||% "de",
+                           input$vn_padj %||% 0.05, input$vn_lfc %||% 0.25))
+  vn_p <- reactive(vn_plot(vn_v(), input$vn_basesize %||% 13))
+  output$vn_plot <- renderPlot(apply_fig_opts(vn_p(), "vn", input))
+  for (.f in c("pdf","svg","png")) local({ f <- .f;
+    output[[paste0("vn_dl_", f)]] <- dl_ggplot("vn", vn_p, input, f) })
+  output$vn_note <- renderUI({
+    v <- try(vn_v(), silent = TRUE)
+    if (inherits(v, "try-error")) return(NULL)
+    empt <- vapply(v$sets, function(x) length(x$genes) == 0L, TRUE)
+    tagList(
+      div(style = "font-size:13px;margin-bottom:4px",
+          sprintf("Universe: %s genes testable in common. %s",
+                  format(length(v$universe), big.mark = ","),
+                  paste(vapply(v$sets, function(x) sprintf("%s: %d", x$label, length(x$genes)), ""),
+                        collapse = " · "))),
+      if (any(empt)) div(style = "color:#c62828;font-size:13px",
+        sprintf("%s empty for this cluster/stratum — try the other DE matrix or loosen the cuts.",
+                paste(vapply(v$sets[empt], `[[`, "", "label"), collapse = ", "))))
+  })
+  # the two caveats that must not be left to the reader to reconstruct
+  output$vn_caveat <- renderUI({
+    ids <- c(input$vn_a, input$vn_b, input$vn_c)
+    tagList(
+      if (any(grepl("^ax:cyc:", ids))) helpText(style = "color:#c62828",
+        strong("Data-driven cycling set: "), "531 genes, of which only 46 are canonical. ",
+        "The rest include Ran, Nap1l1, Calm1 and Ppia — cycling cells are globally more ",
+        "transcriptionally active, so the axis partly measures output, not cell cycle. ",
+        "The curated canonical set is the safer circle to label “cycling genes”."),
+      if (sum(grepl("^de:(WT|KO)_P0_vs_P7", ids)) >= 2) helpText(style = "color:#c62828",
+        strong("WT-only vs KO-only: "), "the KO contributes more P7 cells than the WT ",
+        "(3,674 vs 2,496 in G1 pooled over cardiomyocytes), so a larger KO-only region is ",
+        "partly a power difference rather than biology."))
+  })
+  output$vn_stats <- renderDT(DT::datatable(vn_stats(vn_v()), rownames = FALSE,
+    options = list(pageLength = 10, scrollX = TRUE, dom = "t"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(c("expected","fold","p_hypergeom"), 3))
+  output$vn_regions <- renderDT(DT::datatable(vn_region_df(vn_v()), rownames = FALSE,
+    options = list(pageLength = 10, scrollX = TRUE, dom = "ftip",
+                   columnDefs = list(list(targets = 3, render = DT::JS(
+                     "function(d,t,r,m){return t==='display'&&d&&d.length>140?",
+                     "'<span title=\"'+d+'\">'+d.substr(0,140)+'…</span>':d;}")))),
+    class = "compact stripe hover", escape = FALSE))
+  output$vn_dl <- downloadHandler(
+    filename = function() paste0("venn_regions_", input$vn_cluster %||% "AllCM", "_",
+                                 input$vn_stratum %||% "G1", "_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(vn_region_df(vn_v()), f, row.names = FALSE))
 
   # ---- Maturation intersection + candidate genes ----
   mi_quad_p <- reactive(fg_quadrant_plot(input$mi_cluster, input$mi_hideconf,
