@@ -937,6 +937,104 @@ fg_score_plot <- function(scol, clusters, stratum, bs = 13) {
          title = paste0(labof(scol), " — four groups",
                         if (stratum == "G1") " (G1 cells only)" else ""))
 }
+# ---- does the KO leave P7 cardiomyocytes less mature, and more cycling? -------
+# The email's actual question. Everything needed was already stored per group; what
+# was missing was the subtraction. Per subcluster this contrasts KO against WT at each
+# timepoint on both readouts, so "the P7 gap is bigger than the P0 gap" is a number
+# rather than an impression formed from two violins.
+fg_summary_df <- function(score = "sig_maturation_nocc", stratum = "G1") {
+  fg_ok()
+  validate(need(!is.null(FG$scores), "Score summaries aren't in this build — run build_fourgroup.R."))
+  sc <- FG$scores[FG$scores$score == score & FG$scores$stratum == stratum, , drop = FALSE]
+  validate(need(nrow(sc), "No score summary for this selection."))
+  ph <- if (!is.null(FG$phase)) FG$phase[FG$phase$Phase == "G1", , drop = FALSE] else NULL
+  pick <- function(df, cl, gr, col) {
+    if (is.null(df)) return(NA_real_)
+    v <- df[[col]][df$cluster == cl & df$group == gr]
+    if (length(v)) v[1] else NA_real_
+  }
+  rows <- lapply(FG_CLUSTERS, function(cl) {
+    mn <- function(g) pick(sc, cl, g, "mean")
+    sd <- function(g) pick(sc, cl, g, "sd")
+    nn <- function(g) pick(sc, cl, g, "n")
+    # KO - WT, plus Cohen's d so a shift is readable against the spread it sits in
+    gap <- function(ko, wt) {
+      if (is.na(mn(ko)) || is.na(mn(wt))) return(c(NA_real_, NA_real_))
+      diff <- mn(ko) - mn(wt)
+      sp <- suppressWarnings(sqrt(((nn(ko) - 1) * sd(ko)^2 + (nn(wt) - 1) * sd(wt)^2) /
+                                  max(nn(ko) + nn(wt) - 2, 1)))
+      c(diff, if (is.finite(sp) && sp > 0) diff / sp else NA_real_)
+    }
+    p0 <- gap("KO-P0", "WT-P0"); p7 <- gap("KO-P7", "WT-P7")
+    g1 <- function(g) pick(ph, cl, g, "pct")
+    # how much of WT's P0->P7 maturation gain does the KO achieve?
+    wt_gain <- mn("WT-P7") - mn("WT-P0"); ko_gain <- mn("KO-P7") - mn("KO-P0")
+    data.frame(
+      cluster = cl,
+      G1_pct_WT_P7 = g1("WT-P7"), G1_pct_KO_P7 = g1("KO-P7"),
+      G1_gap_P7 = round(g1("KO-P7") - g1("WT-P7"), 1),
+      G1_gap_P0 = round(g1("KO-P0") - g1("WT-P0"), 1),
+      mat_WT_P7 = round(mn("WT-P7"), 3), mat_KO_P7 = round(mn("KO-P7"), 3),
+      mat_gap_P7 = round(p7[1], 3), d_P7 = round(p7[2], 2),
+      mat_gap_P0 = round(p0[1], 3), d_P0 = round(p0[2], 2),
+      KO_gain_pct_of_WT = if (is.na(wt_gain) || is.na(ko_gain) || wt_gain == 0) NA_real_
+                          else round(100 * ko_gain / wt_gain, 1),
+      stringsAsFactors = FALSE)
+  })
+  d <- do.call(rbind, rows)
+  # the verdict column: the hypothesis is less mature AND less G1 at P7, and more so
+  # at P7 than at P0. Anything else is spelled out rather than left to interpretation.
+  d$verdict <- with(d, ifelse(
+    is.na(mat_gap_P7) | is.na(G1_gap_P7), "insufficient data",
+    ifelse(mat_gap_P7 < 0 & G1_gap_P7 < 0 &
+             (is.na(mat_gap_P0) | abs(mat_gap_P7) > abs(mat_gap_P0)),
+           "less mature + more cycling at P7",
+    ifelse(mat_gap_P7 < 0 & G1_gap_P7 < 0, "less mature + more cycling, but not P7-specific",
+    ifelse(mat_gap_P7 < 0, "less mature, but not more cycling",
+    ifelse(G1_gap_P7 < 0, "more cycling, but not less mature", "neither"))))))
+  d
+}
+# the same thing as a picture: where each group's score sits, with the KO-WT gap drawn
+fg_summary_plot <- function(score = "sig_maturation_nocc", stratum = "G1",
+                            clusters = NULL, bs = 13) {
+  fg_ok()
+  validate(need(!is.null(FG$scores), "Score summaries aren't in this build."))
+  sc <- FG$scores[FG$scores$score == score & FG$scores$stratum == stratum, , drop = FALSE]
+  if (!is.null(clusters) && length(clusters)) sc <- sc[sc$cluster %in% clusters, , drop = FALSE]
+  validate(need(nrow(sc), "Pick at least one subcluster."))
+  sc$group <- factor(sc$group, levels = FG_GROUPS)
+  sc$cluster <- factor(sc$cluster, levels = intersect(FG_CLUSTERS, unique(sc$cluster)))
+  sc$timepoint <- sub("^.*-", "", as.character(sc$group))
+  sc$genotype  <- sub("-.*$", "", as.character(sc$group))
+  # segment joining WT to KO within each timepoint = the gap the question is about
+  seg <- do.call(rbind, lapply(split(sc, list(sc$cluster, sc$timepoint), drop = TRUE), function(x) {
+    w <- x[x$genotype == "WT", ]; k <- x[x$genotype == "KO", ]
+    if (!nrow(w) || !nrow(k)) return(NULL)
+    data.frame(cluster = x$cluster[1], timepoint = x$timepoint[1],
+               y = w$mean, yend = k$mean, gap = k$mean - w$mean, stringsAsFactors = FALSE)
+  }))
+  p <- ggplot(sc, aes(timepoint, mean, colour = group)) +
+    { if (!is.null(seg)) geom_segment(data = seg, inherit.aes = FALSE,
+        aes(x = timepoint, xend = timepoint, y = y, yend = yend),
+        colour = "grey45", linewidth = .8,
+        arrow = grid::arrow(length = grid::unit(6, "pt"), type = "closed")) } +
+    geom_errorbar(aes(ymin = mean - 1.96 * se, ymax = mean + 1.96 * se), width = .12, linewidth = .5) +
+    geom_point(size = 3) +
+    { if (!is.null(seg)) geom_text(data = seg, inherit.aes = FALSE,
+        aes(x = timepoint, y = pmin(y, yend), label = sprintf("%+.2f", gap)),
+        vjust = 1.9, size = 3, colour = "grey25") } +
+    scale_colour_manual(values = FG_PAL) +
+    facet_wrap(~ cluster, scales = "free_y") +
+    theme_minimal(base_size = bs) +
+    labs(x = NULL, y = paste0(labof(score), " (mean ± 95% CI)"), colour = NULL,
+         title = paste0(labof(score), " — KO vs WT at each age",
+                        if (stratum == "G1") " (G1 cells only)" else ""),
+         caption = paste("Arrow runs WT → KO; the number is the gap.",
+                         "\nG1-only holds cycling composition fixed, so the gap is not the FACS sort.",
+                         "\nDescriptive only — n = 1 animal per group."))
+  p
+}
+
 # ---- maturation axis x P7 KO-vs-WT -------------------------------------------
 FG_QUAD <- c(immature_up_in_KO = "#c62828", mature_down_in_KO = "#1565c0",
              immature_down_in_KO = "#cccccc", mature_up_in_KO = "#cccccc", ns = "#e8e8e8")
@@ -1566,7 +1664,17 @@ ui <- page_navbar(
                  "The question is whether P7 KO cardiomyocytes sit at a less mature score than P7 WT ",
                  "— compare within the G1 stratum to hold cycling composition fixed."),
         plotOutput("fg_phase_plot", height = "420px"),
-        plotOutput("fg_score_plot", height = "440px"))))),
+        plotOutput("fg_score_plot", height = "440px"),
+        div(class = "mt-3",
+          h5("Is the P7 KO less mature, and more cycling?"),
+          helpText("The KO−WT gap on both readouts, at each age. The question is whether the ",
+                   "P7 gap is larger than the P0 gap — i.e. whether the effect is specific to P7 ",
+                   "rather than present throughout. Read it in the G1 stratum so cycling composition ",
+                   "is held fixed and the gap cannot be the FACS enrichment."),
+          plotOutput("fg_summary_plot", height = "420px"),
+          div(downloadButton("fg_summary_dl", "Download summary (CSV)",
+                             class = "btn-sm btn-outline-secondary"), style = "margin:8px 0"),
+          DTOutput("fg_summary_tab")))))),
 
   nav_panel("Maturation ∩ P7 KO", layout_sidebar(
     sidebar = sidebar(width = 320,
@@ -2343,6 +2451,23 @@ server <- function(input, output, session) {
   output$fg_score_plot <- renderPlot(apply_fig_opts(fg_score_p(), "fgscore", input))
   for (.f in c("pdf","svg","png")) local({ f <- .f;
     output[[paste0("fgscore_dl_", f)]] <- dl_ggplot("fgscore", fg_score_p, input, f) })
+  fg_summary_p <- reactive(fg_summary_plot(input$fg_score %||% "sig_maturation_nocc",
+    input$fg_score_stratum %||% "all", input$fg_g1_clusters, input$fgscore_basesize %||% 13))
+  output$fg_summary_plot <- renderPlot(fg_summary_p())
+  output$fg_summary_tab <- renderDT({
+    d <- fg_summary_df(input$fg_score %||% "sig_maturation_nocc", input$fg_score_stratum %||% "all")
+    DT::datatable(d, rownames = FALSE,
+      options = list(pageLength = 14, scrollX = TRUE, dom = "ft"),
+      class = "compact stripe hover") |>
+      DT::formatSignif(intersect(c("mat_WT_P7","mat_KO_P7","mat_gap_P7","d_P7",
+                                   "mat_gap_P0","d_P0"), names(d)), 3)
+  })
+  output$fg_summary_dl <- downloadHandler(
+    filename = function() paste0("g1_maturation_summary_", input$fg_score_stratum %||% "all",
+                                 "_", Sys.Date(), ".csv"),
+    content  = function(f) write.csv(
+      fg_summary_df(input$fg_score %||% "sig_maturation_nocc",
+                    input$fg_score_stratum %||% "all"), f, row.names = FALSE))
   output$fg_scores_dl <- downloadHandler(
     filename = function() paste0("fourgroup_scores_", Sys.Date(), ".csv"),
     content  = function(f) {
