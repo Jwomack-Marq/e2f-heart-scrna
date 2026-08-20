@@ -168,6 +168,7 @@ if (length(sc_cols)) {
 }
 MD <- MD[, intersect(c("cell","genotype","timepoint","Phase","cm_subcluster","fourgrp",
                        sc_cols), names(MD)), drop = FALSE]
+MD$is_cycling <- as.character(MD$Phase) %in% c("S", "G2M")
 is_cm <- !is.na(MD$cm_subcluster)
 
 cat(sprintf("\nMatrix: %s  (%d genes x %d cells; %d are cardiomyocytes)\n",
@@ -347,7 +348,9 @@ if (DE2) {
 # different dynamic ranges (immature markers like Nppa swing far harder than mature
 # ones), so a symmetric |log2FC| cutoff can only ever classify one side. AUC is
 # rank-based, so one threshold means the same thing at both ends.
-axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
+# binary = TRUE splits on a logical column instead of tertiles of a score. Used for the
+# cycling axis, where the grouping is given (S/G2M vs G1) rather than something to cut.
+axis_association <- function(score, prefix, hi_lab, lo_lab, label, binary = FALSE) {
   if (!score %in% names(MD)) {
     cat("\n!! SKIPPING the ", label, " axis: '", score,
         "' is not on the DE metadata.\n   Run build_signature_scores.R first.\n", sep = "")
@@ -359,8 +362,11 @@ axis_association <- function(score, prefix, hi_lab, lo_lab, label) {
     sel <- is_cm & as.character(MD$timepoint) == tp & !is.na(MD[[score]])
     v   <- MD[[score]][sel]
     if (sum(sel) < 3 * MIN_CELLS) next
-    qs  <- stats::quantile(v, TERTILE_Q, na.rm = TRUE)
-    idxHi <- which(sel)[v >= qs[2]]; idxLo <- which(sel)[v <= qs[1]]
+    if (binary) { idxHi <- which(sel)[v]; idxLo <- which(sel)[!v] }
+    else {
+      qs  <- stats::quantile(v, TERTILE_Q, na.rm = TRUE)
+      idxHi <- which(sel)[v >= qs[2]]; idxLo <- which(sel)[v <= qs[1]]
+    }
     d <- de_one(idxHi, idxLo, gate = "pct")   # logFC > 0 => higher in the `hi_lab` cells
     if (is.null(d)) next
     per_tp[[tp]] <- data.frame(gene = d$gene, lfc = d$log2FoldChange,
@@ -419,6 +425,13 @@ maturation <- NULL; metabolic <- NULL; geneaxes <- NULL
 if (!PROBE) {
   mat_raw <- axis_association(MAT_USE, "mat", "mature", "immature", "maturation")
   met_raw <- axis_association("sig_metabolic", "met", "oxidative", "glycolytic", "metabolic")
+  # The third axis the email's stated purpose needs. "Genes linking delayed maturation
+  # with increased cell-cycle competence" cannot be answered by maturation x KO-response
+  # alone -- that pair says nothing about cycling. This ranks every gene by how strongly
+  # it marks cycling (S/G2M) over non-cycling (G1) cardiomyocytes, computed within each
+  # timepoint so the P7 FACS enrichment does not become the axis.
+  cyc_raw <- axis_association("is_cycling", "cyc", "cycling", "noncycling", "cell-cycle",
+                              binary = TRUE)
 
   # app$fourgroup$maturation keeps exactly the columns the intersection tab and the
   # existing quadrant map already read -- do not reshape it here.
@@ -459,6 +472,22 @@ if (!PROBE) {
     for (tp in tps) centres[[tp]] <- c(
       mat = stats::median(g[[paste0("mat_auc_", tp)]], na.rm = TRUE),
       met = stats::median(g[[paste0("met_auc_", tp)]], na.rm = TRUE))
+    if (!is.null(cyc_raw)) {
+      i <- match(g$gene, cyc_raw$gene)
+      g$cyc_auc <- cyc_raw$cyc_auc[i]; g$cyc_class <- cyc_raw$cyc_class[i]
+      # Raw cycling association cannot be compared against background directly: mature
+      # and cycling are anti-correlated states (r = -0.20 here), so every mature marker
+      # scores anti-cycling by construction and the comparison just rediscovers that.
+      # The residual after regressing out maturation position is the part that is NOT
+      # explained by where the gene sits on the maturation axis -- which is what
+      # "links maturation to cycling competence" would actually have to mean.
+      ok2 <- !is.na(g$cyc_auc) & !is.na(g$mat_auc)
+      if (sum(ok2) > 100) {
+        fit <- stats::lm(cyc_auc ~ mat_auc, data = g[ok2, ])
+        g$cyc_resid <- NA_real_
+        g$cyc_resid[ok2] <- round(stats::resid(fit), 4)
+      }
+    }
     g$in_score_set <- ifelse(g$gene %in% SET_MATURATION & g$gene %in% SET_METABOLIC, "both",
                       ifelse(g$gene %in% SET_MATURATION, "maturation",
                       ifelse(g$gene %in% SET_METABOLIC,  "metabolic", NA_character_)))
@@ -494,11 +523,18 @@ if (!PROBE && !is.null(maturation)) {
     m <- match(d$gene, maturation$gene)
     ok <- !is.na(m)
     if (!any(ok)) next
+    cm <- if (!is.null(cyc_raw)) match(d$gene[ok], cyc_raw$gene) else NA_integer_
     r <- data.frame(
       cluster = cl, gene = d$gene[ok], stratum = stratum,
       mat_log2FC = maturation$mat_log2FC[m[ok]],
       mat_auc    = maturation$mat_auc[m[ok]],
       mat_class  = maturation$mat_class[m[ok]],
+      # the cycling axis, so "does this gene actually track cell-cycle competence?"
+      # is answerable on the same row rather than needing a second lookup
+      cyc_auc   = if (is.null(cyc_raw)) NA_real_ else cyc_raw$cyc_auc[cm],
+      cyc_class = if (is.null(cyc_raw)) NA_character_ else cyc_raw$cyc_class[cm],
+      cyc_resid = if (is.null(geneaxes) || !"cyc_resid" %in% names(geneaxes)) NA_real_
+                  else geneaxes$cyc_resid[match(d$gene[ok], geneaxes$gene)],
       p7ko_log2FC = d$log2FoldChange[ok], p7ko_padj = d$padj[ok],
       p7ko_pct_KO = d$pct_A[ok], p7ko_pct_WT = d$pct_B[ok],
       confounder = d$confounder[ok], stringsAsFactors = FALSE)
@@ -515,6 +551,20 @@ if (!PROBE && !is.null(maturation)) {
                                          -abs(intersect_tab$p7ko_log2FC)), ]
     cat("\n== intersection ==\n")
     print(table(intersect_tab$quadrant))
+    # Report the cycling link rather than assume it. On this data it does not exist:
+    # no hypothesis-quadrant gene is cycling-associated (expected ~1.7 by chance, so the
+    # zero is uninformative on its own), and the residual test -- the one that is not
+    # confounded by maturation and cycling being anti-correlated states -- puts these
+    # genes significantly BELOW the line rather than above it.
+    hq <- intersect_tab$quadrant %in% c("immature_up_in_KO", "mature_down_in_KO") &
+          !intersect_tab$confounder
+    ncyc <- sum(hq & !is.na(intersect_tab$cyc_class) &
+                intersect_tab$cyc_class == "cycling-associated")
+    cat(sprintf("  hypothesis-quadrant rows: %d; also cycling-associated: %d\n", sum(hq), ncyc))
+    rv <- intersect_tab$cyc_resid[hq]; rv <- rv[!is.na(rv)]
+    if (length(rv) > 5) cat(sprintf(
+      "  median residual cycling association (0 = as expected for its maturation position): %+.4f\n",
+      stats::median(rv)))
   }
 }
 

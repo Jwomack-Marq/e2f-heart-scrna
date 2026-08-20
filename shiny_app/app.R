@@ -1711,6 +1711,13 @@ ui <- page_navbar(
                "within each timepoint and then averaged, so the axis is maturation and not P0-vs-P7. ",
                "It uses the ", strong("cycle-free"), " maturation score (Mki67 / Top2a / Ccnd1 removed) ",
                "— otherwise “less mature ⇒ more cycling” would be partly circular."),
+      helpText(strong("Cycling link. "),
+               "The table also carries each gene's cell-cycle association — how strongly it ",
+               "marks cycling (S/G2M) over non-cycling cardiomyocytes — and ",
+               strong("cyc_resid"), ", the part of that not already explained by its maturation ",
+               "position. The residual is the honest version: mature and cycling are ",
+               "anti-correlated states, so raw cycling association just restates the maturation ",
+               "axis. On this data the hypothesis-quadrant genes sit below the line, not above it."),
       helpText(strong("Descriptive only — n = 1 animal per group.")),
       accordion(open = FALSE, multiple = TRUE,
         accordion_panel("Quadrant figure options",
@@ -1724,6 +1731,7 @@ ui <- page_navbar(
                  "consistent with P7 KO cells being held in a less mature state."),
         plotOutput("mi_quadrant", height = "600px")),
       nav_panel("Intersection table", value = "table",
+        uiOutput("mi_cyc_note"),
         DTOutput("mi_table")),
       nav_panel("Candidate genes", value = "candidates",
         helpText("Any gene, across CM subclusters × the four groups. ",
@@ -2481,11 +2489,31 @@ server <- function(input, output, session) {
   for (.f in c("pdf","svg","png")) local({ f <- .f;
     output[[paste0("miquad_dl_", f)]] <- dl_ggplot("miquad", mi_quad_p, input, f) })
   mi_tab_df <- reactive(fg_intersect_df(input$mi_cluster, input$mi_quad, input$mi_hideconf))
+  output$mi_cyc_note <- renderUI({
+    d <- try(fg_intersect_df(input$mi_cluster, NULL, input$mi_hideconf), silent = TRUE)
+    if (inherits(d, "try-error") || !"cyc_resid" %in% names(d)) return(NULL)
+    h <- d[d$quadrant %in% c("immature_up_in_KO","mature_down_in_KO"), , drop = FALSE]
+    if (!nrow(h)) return(NULL)
+    nc <- sum(!is.na(h$cyc_class) & h$cyc_class == "cycling-associated")
+    rv <- h$cyc_resid[!is.na(h$cyc_resid)]
+    div(style = "font-size:13px;margin:6px 0;padding:8px 10px;background:#f6f8fa;border-left:4px solid #90a4ae",
+      HTML(sprintf(paste0(
+        "<b>Do these genes link maturation to cycling?</b> Of the %d genes in the two ",
+        "hypothesis quadrants here, <b>%d</b> are cycling-associated. Median residual ",
+        "cycling association is <b>%+.3f</b> — the part of a gene's cycling link not already ",
+        "explained by where it sits on the maturation axis. Zero would mean “exactly as ",
+        "expected”; %s."),
+        nrow(h), nc, if (length(rv)) stats::median(rv) else NA_real_,
+        if (length(rv) && stats::median(rv) < 0)
+          "negative means these genes are <i>less</i> cycling-linked than their maturation position predicts"
+        else "positive would mean more")))
+  })
   output$mi_table <- renderDT(DT::datatable(mi_tab_df(), rownames = FALSE,
     options = list(pageLength = 25, scrollX = TRUE, scrollY = "420px",
                    scrollCollapse = TRUE, dom = "ftip"),
     class = "compact stripe hover") |>
-    DT::formatSignif(intersect(c("mat_log2FC","mat_auc","p7ko_log2FC","p7ko_padj"), names(mi_tab_df())), 3))
+    DT::formatSignif(intersect(c("mat_log2FC","mat_auc","cyc_auc","cyc_resid",
+                                 "p7ko_log2FC","p7ko_padj"), names(mi_tab_df())), 3))
   output$mi_dl <- downloadHandler(
     filename = function() paste0("maturation_intersect_", input$mi_cluster, "_", Sys.Date(), ".csv"),
     content  = function(f) write.csv(mi_tab_df(), f, row.names = FALSE))
