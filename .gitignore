@@ -30,6 +30,10 @@ model/.venv/
 # generated report (rebuild: python3 tools/build_report_page.py)
 model/report.html
 
-# generated lab-meeting deck (rebuild: python3 tools/build_deck.py)
+# generated lab-meeting decks (rebuild: python3 model/tools/build_deck.py,
+# Rscript shiny_app/build_deck.R) — both are build artifacts, never committed
 model/deck.html
 model/deck.pdf
+shiny_app/deck.html
+shiny_app/deck.pdf
+shiny_app/deck.body.html
