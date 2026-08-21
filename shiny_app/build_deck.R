@@ -431,12 +431,66 @@ ul.tight li{margin:2px 0;font-size:13.5px;color:var(--pri)}
 .num{color:var(--mut);font-family:var(--mono);font-size:12px}
 .genes{font-size:13px;color:var(--pri);line-height:1.7;margin:0 0 12px}
 .fine{font-size:12px;color:var(--mut);margin:0 0 8px}
-</style>'
+
+/* On-screen navigation. The shared template is keyboard-only, which works when the
+   deck is a local file with document focus but leaves no way through it when it is
+   embedded in a frame, or on a touch screen. These controls drive the shared handler
+   by dispatching the keys it already listens for, so there is one navigation
+   implementation, not two. */
+.navbar{position:fixed;right:14px;bottom:12px;display:flex;align-items:center;gap:6px;
+  z-index:60;font-family:var(--sans)}
+.navbar button{width:34px;height:30px;border:1px solid var(--grd);background:var(--srf);
+  color:var(--sec);border-radius:4px;font-size:15px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;transition:border-color .12s,color .12s}
+.navbar button:hover{border-color:var(--axs);color:var(--pri)}
+.navbar button:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
+.navbar button[disabled]{opacity:.35;cursor:default}
+.navbar .count{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums;
+  min-width:44px;text-align:center}
+@media print{.navbar{display:none}}'
+
+navjs <- '<div class="navbar">
+  <button id="npv" aria-label="Previous slide">&lsaquo;</button>
+  <span class="count" id="nct">1 / 1</span>
+  <button id="nnx" aria-label="Next slide">&rsaquo;</button>
+</div>
+<script>
+(function(){
+  var slides = document.querySelectorAll(".slide");
+  var pv = document.getElementById("npv"), nx = document.getElementById("nnx"),
+      ct = document.getElementById("nct");
+  // Drive the existing keydown handler rather than reimplementing show().
+  function key(k){ document.dispatchEvent(new KeyboardEvent("keydown", {key:k, bubbles:true})); }
+  function sync(){
+    var on = 0;
+    for (var j = 0; j < slides.length; j++) if (slides[j].classList.contains("on")) { on = j; break; }
+    ct.textContent = (on + 1) + " / " + slides.length;
+    pv.disabled = on === 0; nx.disabled = on === slides.length - 1;
+  }
+  pv.addEventListener("click", function(){ key("ArrowLeft"); });
+  nx.addEventListener("click", function(){ key("ArrowRight"); });
+  new MutationObserver(sync).observe(document.body,
+    {subtree:true, attributes:true, attributeFilter:["class"]});
+  sync();
+  // Touch: horizontal swipe only, so vertical scrolling inside a slide still works.
+  var x0 = null, y0 = null;
+  document.addEventListener("touchstart", function(e){
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; }, {passive:true});
+  document.addEventListener("touchend", function(e){
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.6) key(dx < 0 ? "ArrowRight" : "ArrowLeft");
+    x0 = y0 = null; }, {passive:true});
+  // An embedded frame does not receive key events until something in it is focused.
+  try { window.focus(); } catch (err) {}
+  document.addEventListener("pointerdown", function(){ try { window.focus(); } catch (err) {} });
+})();
+</script>'
 
 html <- paste0('<!doctype html><html lang="en"><head><meta charset="utf-8">',
   '<meta name="viewport" content="width=device-width,initial-scale=1">',
   '<title>E2F7/8 heart scRNA-seq &mdash; the browser and what it shows</title>',
-  style, extra, '</head><body>\n', paste(SL, collapse = "\n"), "\n", script, "\n</body></html>")
+  style, extra, '</head><body>\n', paste(SL, collapse = "\n"), "\n", script, "\n", navjs, "\n</body></html>")
 
 writeLines(html, OUT)
 cat(sprintf("\nWrote %s  (%d slides, %.0f KB)\n", OUT, length(SL), file.size(OUT) / 1024))
@@ -447,6 +501,6 @@ cat("Open it, or print to PDF with ?print in the URL.\n")
 # rather than done by hand so a re-publish after new data is one command.
 body_only <- paste0(
   "<title>E2F7/8 scRNA Deck</title>\n", style, extra, "\n",
-  paste(SL, collapse = "\n"), "\n", script, "\n")
+  paste(SL, collapse = "\n"), "\n", script, "\n", navjs, "\n")
 writeLines(body_only, OUT_BODY)
 cat(sprintf("Wrote %s  (artifact-ready, no document wrapper)\n", OUT_BODY))
