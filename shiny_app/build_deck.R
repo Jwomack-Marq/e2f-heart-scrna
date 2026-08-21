@@ -121,7 +121,8 @@ sl <- function(mv, notes, eyebrow_n, eyebrow, head, body, foot_l, foot_r) sprint
   <div class="foot"><span>%s</span><span class="src">%s</span></div>
 </section>', mv, notes, eyebrow_n, eyebrow, head, body, foot_l, foot_r)
 
-card <- function(t, b) sprintf('<div class="card"><h4>%s</h4><p>%s</p></div>', t, b)
+# h3, not h4: the shared stylesheet styles `.card h3` and nothing else inside a card
+card <- function(t, b) sprintf('<div class="card"><h3>%s</h3><p>%s</p></div>', t, b)
 cards <- function(...) sprintf('<div class="cards">%s</div>', paste0(..., collapse = ""))
 callout <- function(x, cls = "callout") sprintf('<div class="%s">%s</div>', cls, x)
 cols <- function(a, b, w = "c-6-6") sprintf('<div class="cols %s"><div>%s</div><div>%s</div></div>', w, a, b)
@@ -208,7 +209,7 @@ SL <- c(SL, sprintf('
   </div>
   <div class="foot">
     <span>Justin Womack &middot; <code>e2f-heart-scrna/shiny_app</code></span>
-    <span class="src">press <kbd>&rarr;</kbd> to advance &middot; <kbd>N</kbd> for notes</span>
+    <span class="src">click &rsaquo; or press <kbd>&rarr;</kbd> &middot; <kbd>N</kbd> for notes</span>
   </div>
 </section>', fmt(N$cells), fmt(N$cm), N$celltypes, fmt(N$de1 + N$de2), N$built))
 
@@ -437,7 +438,7 @@ ul.tight li{margin:2px 0;font-size:13.5px;color:var(--pri)}
    embedded in a frame, or on a touch screen. These controls drive the shared handler
    by dispatching the keys it already listens for, so there is one navigation
    implementation, not two. */
-.navbar{position:fixed;right:14px;bottom:12px;display:flex;align-items:center;gap:6px;
+.navbar{position:fixed;top:.85rem;right:3rem;display:flex;align-items:center;gap:6px;
   z-index:60;font-family:var(--sans)}
 .navbar button{width:34px;height:30px;border:1px solid var(--grd);background:var(--srf);
   color:var(--sec);border-radius:4px;font-size:15px;line-height:1;cursor:pointer;
@@ -445,26 +446,50 @@ ul.tight li{margin:2px 0;font-size:13.5px;color:var(--pri)}
 .navbar button:hover{border-color:var(--axs);color:var(--pri)}
 .navbar button:focus-visible{outline:2px solid var(--s1);outline-offset:2px}
 .navbar button[disabled]{opacity:.35;cursor:default}
-.navbar .count{font-size:11.5px;color:var(--mut);font-variant-numeric:tabular-nums;
-  min-width:44px;text-align:center}
-@media print{.navbar{display:none}}'
+
+@media print{.navbar{display:none}}
+
+/* The shared .cards grid is a fixed three columns, which is right at full width but
+   cramped inside one half of a .cols split. Stack when nested. */
+.cols .cards{grid-template-columns:1fr;gap:.7rem}
+.cols .card{padding:.75rem .85rem;gap:.35rem}
+.cols .card h3{font-size:.92rem}
+.cols .card p{font-size:.82rem}
+
+/* #counter and #movement are position:fixed at bottom 1rem, and the slide foot sits at
+   the bottom of the slide grid, so the two print on top of each other. Give the slide
+   enough bottom padding to clear them. */
+.slide{padding-bottom:3.1rem}
+</style>'
+
+# The template's CSS and JS both depend on body scaffold that is NOT part of either:
+# .slide is position:absolute/inset:0 and resolves against #deck, and the script
+# reaches for #rail, #counter, #movement and #notes-body. Emitting the slides on their
+# own left the script throwing on the first null before it could mark a slide visible,
+# which renders as a blank page. Take the scaffold from the same template as the rest.
+scaffold <- local({
+  t <- tpl
+  pre  <- substr(t, regexpr('<div id="rail">', t, fixed = TRUE),
+                 regexpr('<section class="slide', t, fixed = TRUE) - 1)
+  k    <- max(gregexpr("</section>", t, fixed = TRUE)[[1]]) + nchar("</section>")
+  post <- substr(t, k, regexpr("<script>", substr(t, k, nchar(t)), fixed = TRUE) + k - 2)
+  list(pre = pre, post = post)
+})
+stopifnot(grepl('id="deck"', scaffold$pre), grepl('id="notes-body"', scaffold$post))
 
 navjs <- '<div class="navbar">
   <button id="npv" aria-label="Previous slide">&lsaquo;</button>
-  <span class="count" id="nct">1 / 1</span>
   <button id="nnx" aria-label="Next slide">&rsaquo;</button>
 </div>
 <script>
 (function(){
   var slides = document.querySelectorAll(".slide");
-  var pv = document.getElementById("npv"), nx = document.getElementById("nnx"),
-      ct = document.getElementById("nct");
+  var pv = document.getElementById("npv"), nx = document.getElementById("nnx");
   // Drive the existing keydown handler rather than reimplementing show().
   function key(k){ document.dispatchEvent(new KeyboardEvent("keydown", {key:k, bubbles:true})); }
   function sync(){
     var on = 0;
     for (var j = 0; j < slides.length; j++) if (slides[j].classList.contains("on")) { on = j; break; }
-    ct.textContent = (on + 1) + " / " + slides.length;
     pv.disabled = on === 0; nx.disabled = on === slides.length - 1;
   }
   pv.addEventListener("click", function(){ key("ArrowLeft"); });
@@ -490,7 +515,8 @@ navjs <- '<div class="navbar">
 html <- paste0('<!doctype html><html lang="en"><head><meta charset="utf-8">',
   '<meta name="viewport" content="width=device-width,initial-scale=1">',
   '<title>E2F7/8 heart scRNA-seq &mdash; the browser and what it shows</title>',
-  style, extra, '</head><body>\n', paste(SL, collapse = "\n"), "\n", script, "\n", navjs, "\n</body></html>")
+  style, extra, '</head><body>\n', scaffold$pre, "\n", paste(SL, collapse = "\n"), "\n",
+  scaffold$post, "\n", script, "\n", navjs, "\n</body></html>")
 
 writeLines(html, OUT)
 cat(sprintf("\nWrote %s  (%d slides, %.0f KB)\n", OUT, length(SL), file.size(OUT) / 1024))
@@ -501,6 +527,7 @@ cat("Open it, or print to PDF with ?print in the URL.\n")
 # rather than done by hand so a re-publish after new data is one command.
 body_only <- paste0(
   "<title>E2F7/8 scRNA Deck</title>\n", style, extra, "\n",
-  paste(SL, collapse = "\n"), "\n", script, "\n", navjs, "\n")
+  scaffold$pre, "\n", paste(SL, collapse = "\n"), "\n", scaffold$post, "\n",
+  script, "\n", navjs, "\n")
 writeLines(body_only, OUT_BODY)
 cat(sprintf("Wrote %s  (artifact-ready, no document wrapper)\n", OUT_BODY))
