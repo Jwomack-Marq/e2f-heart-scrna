@@ -125,6 +125,53 @@ testServer(APPDIR, {
     note("PASS", "fg_book workbook",
          sprintf("%d sheets, %.1f MB", length(sheets) + 1L, file.size(f3) / 1e6))
   }
+
+  cat("\n== CM deep-dive per-contrast DE ==\n")
+  # The deep-dive DE tab reads the same four-group grids the Four-group tab does.
+  # The same selection has to give the same table: if these two ever diverge, one of
+  # the tabs is quietly answering a different question than its label claims.
+  session$setInputs(cm_sub = "CM2", cm_contrast = "P7_KO_vs_WT", cm_stratum = "all",
+                    cm_grid = "de",
+                    fg_cluster = "CM2", fg_contrast = "P7_KO_vs_WT", fg_stratum = "all",
+                    fg_grid = "de", fg_hideconf = FALSE)
+  a <- tryCatch(cm_d(), error = function(e) e)
+  b <- tryCatch(fg_d(), error = function(e) e)
+  if (inherits(a, "error") || inherits(b, "error"))
+    note("FAIL", "cm_d == fg_d",
+         conditionMessage(if (inherits(a, "error")) a else b))
+  else
+    note(if (identical(a, b)) "PASS" else "FAIL", "cm_d == fg_d",
+         sprintf("%d vs %d rows", nrow(a), nrow(b)))
+  # every contrast the builder ships should resolve, or say why it cannot. FG_CTAB is a
+  # file-level object testServer cannot see, so the keys are spelled out here.
+  for (k in c("WT_P0_vs_P7", "KO_P0_vs_P7", "P7_KO_vs_WT", "P0_KO_vs_WT")) {
+    session$setInputs(cm_contrast = k)
+    d <- tryCatch(cm_d(), error = function(e) e)
+    if (inherits(d, "shiny.silent.error")) note("SKIP", paste0("cm_d ", k), conditionMessage(d))
+    else if (inherits(d, "error"))         note("FAIL", paste0("cm_d ", k), conditionMessage(d))
+    else                                   note("PASS", paste0("cm_d ", k), sprintf("%d rows", nrow(d)))
+  }
+  session$setInputs(cm_contrast = "P7_KO_vs_WT")
+  l <- tryCatch(cm_lfc_list(), error = function(e) e)
+  if (inherits(l, "error")) note("FAIL", "cm_lfc_list", conditionMessage(l))
+  else note("PASS", "cm_lfc_list", sprintf("%d/%d subclusters have a table",
+                                           sum(!vapply(l, is.null, TRUE)), length(l)))
+  # and back to pooled: the original behaviour must still be reachable
+  session$setInputs(cm_contrast = "pooled")
+  d <- tryCatch(cm_d(), error = function(e) e)
+  note(if (is.data.frame(d)) "PASS" else "FAIL", "cm_d pooled",
+       if (is.data.frame(d)) sprintf("%d rows", nrow(d)) else conditionMessage(d))
+
+  cat("\n== CM deep-dive per-contrast enrichment ==\n")
+  session$setInputs(cm_enr_sub = "CM2", cm_enr_contrast = "P7_KO_vs_WT",
+                    cm_enr_stratum = "all", cm_enr_ont = "BP")
+  for (nm in c("cm_sub_kogo_df", "cm_sub_kodn_df", "cm_sub_gsea_df")) {
+    r <- tryCatch(get(nm)(), error = function(e) e)
+    if (inherits(r, "shiny.silent.error"))
+      note(if (grepl("build_", conditionMessage(r))) "PASS" else "SKIP", nm, conditionMessage(r))
+    else if (inherits(r, "error")) note("FAIL", nm, conditionMessage(r))
+    else                           note("PASS", nm, sprintf("%d rows", nrow(r)))
+  }
 })
 
 cat(sprintf("\n%d passed, %d skipped, %d failed\n", pass, skip, fail))

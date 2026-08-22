@@ -220,6 +220,34 @@ compute over all genes × all CM cells from the upstream Seurat object (the only
 genome-wide DEG table — `deg_expr` is downsampled to ~8k cells, which thins the smaller
 subcluster arms considerably).
 
+### Where the four contrasts show up in the app
+
+They are reachable from **two** places, deliberately.
+
+**Cardiomyocytes → Cardiomyocyte deep-dive → DE (per subcluster)** is where you land when
+you are reading one subcluster. Its *Comparison* dropdown carries the pooled KO-vs-WT
+tables (`app$tables$sub_DE`, the original behaviour) plus the four timepoint-specific
+contrasts from `app$fourgroup`, and the volcano, table, gene card, the top-genes ×
+subclusters heatmap and the *Subcluster enrichment* tab all follow it. Note the
+*Split map by* control next to it facets the **map only** — the pooled `sub_DE` tables had
+their timepoint dimension collapsed at build time, so no display-time split could ever
+recover a per-timepoint contrast. That is why the comparison is its own dropdown.
+
+**Cardiomyocytes → Four-group (WT/KO × P0/P7)** remains the place for everything that is
+about the four groups rather than about one subcluster: group sizes and the underpowered-arm
+audit, the G1/maturation panels, the contrast and enrichment XLSX workbooks, and the
+Coverage audit behind an empty GO result.
+
+Both read the same `app$fourgroup$de` / `$de2` grids, so the same cluster × contrast ×
+stratum × matrix must give the same table on either tab. `tools/test_downloads.R` asserts
+that equality; if it ever fails, one of the two tabs is answering a different question than
+its label claims.
+
+Per-subcluster enrichment follows the same split. `app$enrich$sub` (pooled KO-vs-WT) and
+`app$enrich$fourgroup` (per contrast) are offered under one *Comparison* dropdown on the
+deep-dive's enrichment tab; both enrich the two directions **separately**, so that tab has
+a *GO — up* and a *GO — down* panel rather than one showing only the up direction.
+
 ## History
 
 This project previously also shipped as a [shinylive](https://posit-dev.github.io/r-shinylive/)

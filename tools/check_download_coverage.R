@@ -56,7 +56,7 @@ EXCLUDE_PLOTS <- c(
   "gm_scatter",
   # the four "all clusters" grid loops render one panel per subcluster from the
   # same _gg builders already exported singly on the tab above
-  "cm_idgo_all", "cm_kogo_all", "cm_gsea_all")
+  "cm_idgo_all", "cm_kogo_all", "cm_kodn_all", "cm_gsea_all")
 
 is_loop_plot <- function(x) grepl("_all_CM[0-9]+$", x)
 

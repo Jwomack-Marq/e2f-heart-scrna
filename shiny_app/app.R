@@ -378,7 +378,7 @@ enr_tf_top_gg <- function(ct, topn = 20) {
 enr_tf_top <- function(ct, topn = 20)
   ggplotly(enr_tf_top_gg(ct, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
 # log2FC heatmap: top genes (by max |LFC| across groups) x groups, fill = KO/WT log2FC
-lfc_heat <- function(de_list, topn = 22, ttl = NULL) {
+lfc_heat <- function(de_list, topn = 22, ttl = NULL, fill_lab = "log2FC\n(KO/WT)") {
   de_list <- de_list[!vapply(de_list, is.null, logical(1))]
   validate(need(length(de_list) >= 1, "No DE tables to compare."))
   allg <- unique(unlist(lapply(de_list, `[[`, "gene")))
@@ -392,7 +392,7 @@ lfc_heat <- function(de_list, topn = 22, ttl = NULL) {
   long$gene <- factor(long$gene, levels = rev(top))
   ggplot(long, aes(grp, gene, fill = lfc)) + geom_tile(color = "grey92") + div_scale +
     theme_minimal(base_size = 12) + theme(axis.text.x = element_text(angle = 40, hjust = 1)) +
-    labs(x = NULL, y = NULL, fill = "log2FC\n(KO/WT)", title = ttl)
+    labs(x = NULL, y = NULL, fill = fill_lab, title = ttl)
 }
 
 # ---- plotly UMAP helpers: distinct colours, hover tooltips, hover-to-highlight ----
@@ -983,6 +983,53 @@ fg_de <- function(cluster, contrast, stratum, grid = "de") {
   d <- fg_grid(grid)[[cluster]][[paste0(contrast, "__", stratum)]]
   validate(need(!is.null(d) && nrow(d), fg_skip_msg(cluster, contrast, stratum, grid)))
   d
+}
+# The three caveats a four-group contrast has to carry wherever it is shown: the cells
+# per arm, a hard warning when one arm is too thin to trust, and the sort-confound flag
+# on a raw P0-vs-P7 comparison. Shared by the Four-group tab and the CM deep-dive so the
+# two cannot drift apart -- a caveat that appears on one tab and not the other is worse
+# than no caveat, because it makes the quiet tab look safe.
+de_context_note <- function(cluster, ct, stratum, grid, d) {
+  ok <- is.data.frame(d) && nrow(d) > 0 && all(c("n_A", "n_B") %in% names(d))
+  nA <- if (ok) d$n_A[1] else NA_integer_
+  nB <- if (ok) d$n_B[1] else NA_integer_
+  ok <- ok && !is.na(nA) && !is.na(nB)
+  thin <- FG$built$thin_cells %||% 50
+  div(style = "font-size:13px;margin-bottom:6px",
+      HTML(paste0("<b>", ct$label, "</b> in ",
+                  if (identical(cluster, "AllCM")) "all cardiomyocytes" else cluster,
+                  if (identical(stratum, "G1")) ", G1 cells only" else ", all cells",
+                  if (ok) sprintf(" &mdash; %d vs %d cells, %d genes past the gate", nA, nB, nrow(d)) else "",
+                  if (identical(grid, "de2")) " &middot; curated panel" else "")),
+      if (ok && min(nA, nB) < thin)
+        div(style = "color:#c62828;font-weight:600",
+            HTML(sprintf("&#9888; Smallest group is %d cells — treat this contrast as unreliable%s.",
+              min(nA, nB),
+              if (max(nA, nB) / max(min(nA, nB), 1) >= 10)
+                sprintf(" (%.0f× imbalance)", max(nA, nB) / max(min(nA, nB), 1)) else ""))),
+      if (identical(stratum, "all") && grepl("P0_vs_P7", ct$key))
+        span(style = "color:#c62828",
+             HTML(" &middot; <b>sort-confounded</b> — P7 was FACS cycling-enriched 4.5–5.2× relative to P0; read the G1 stratum instead.")))
+}
+# One enrichment question, two precomputed sources. ENR$sub is KO-vs-WT POOLED over P0
+# and P7 (build_subcluster_enrichment.R); FGE is one timepoint-specific contrast at a
+# time (build_fourgroup_enrichment.R). They render identically, so the deep-dive picks
+# between them on the same Comparison dropdown its DE tab uses. Only the direction keys
+# differ -- KO_up/KO_down vs A_up/B_up -- so callers ask for "up"/"down" and this maps.
+enr_src_df <- function(kind, cluster, ct, stratum = "all", ont = "BP", dir = NULL) {
+  if (is.null(ct)) {
+    d <- enr_sub_df(kind, cluster)
+    if (!is.null(dir) && "direction" %in% names(d))
+      d <- d[d$direction == if (identical(dir, "up")) "KO_up" else "KO_down", , drop = FALSE]
+    return(d)
+  }
+  fg_enr_df(kind, cluster, ct$key, stratum, ont,
+            if (is.null(dir)) NULL else if (identical(dir, "up")) "A_up" else "B_up")
+}
+# direction wording + a title fragment for whichever source is selected
+enr_src_labs <- function(ct) {
+  if (is.null(ct)) list(up = "up in KO", dn = "up in WT", label = "KO vs WT (P0 + P7 pooled)")
+  else list(up = ct$pos, dn = ct$neg, label = ct$label)
 }
 # one row per cluster: counts + percentages for the four groups, with the
 # under-powered arms named explicitly rather than left to be discovered.
@@ -1864,7 +1911,29 @@ ui <- page_navbar(
     sidebar = sidebar(width = 320,
       conditionalPanel("input.cm_tabs == 'de'",
         selectInput("cm_sub", "Subcluster (for DE)", choices = NULL),
+        # The four timepoint-specific contrasts come from app$fourgroup. subDE can only
+        # ever offer the pooled one: its timepoint dimension was collapsed at build time
+        # and cannot be recovered here, which is why splitting the map could never drive
+        # this volcano.
+        selectInput("cm_contrast", "Comparison",
+                    choices = c("KO vs WT (P0 + P7 pooled)" = "pooled", fg_contrast_choices()),
+                    selected = "pooled"),
+        conditionalPanel("input.cm_contrast != 'pooled'",
+          radioButtons("cm_stratum", "Cells used",
+                       c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
+                       selected = "G1"),
+          radioButtons("cm_grid", "DE matrix", choices = fg_grid_choices(), selected = "de")),
         checkboxInput("cm_hideconf", "Hide sex/construct genes (DE)", FALSE)),
+      conditionalPanel("input.cm_tabs == 'subenr'",
+        selectInput("cm_enr_contrast", "Comparison",
+                    choices = c("KO vs WT (P0 + P7 pooled)" = "pooled", fg_contrast_choices()),
+                    selected = "pooled"),
+        conditionalPanel("input.cm_enr_contrast != 'pooled'",
+          radioButtons("cm_enr_stratum", "Cells used",
+                       c("All cells" = "all", "G1 only (phase-matched)" = "G1"), selected = "all"),
+          radioButtons("cm_enr_ont", "GO ontology",
+                       c("Biological process" = "BP", "Molecular function" = "MF",
+                         "Cellular component" = "CC"), selected = "BP", inline = TRUE))),
       selectInput("cm_mapcolor", "Map: colour by",
                   c("Subcluster" = "subcluster", "Cell-cycle phase" = "Phase", "Cycling" = "cycling",
                     "Genotype" = "genotype", "Timepoint" = "timepoint", "Gene" = "gene")),
@@ -1876,9 +1945,15 @@ ui <- page_navbar(
                     "Timepoint (P0|P7)" = "timepoint", "Genotype × Timepoint" = "both")),
       conditionalPanel("input.cm_tabs == 'bars'",
         radioButtons("cm_bar_mode", "Y axis", c("Proportion" = "prop", "Count" = "count"), inline = TRUE)),
-      hr(), helpText("True re-clustering of cardiomyocytes. Explore subgroup identity,",
-                     "KO-vs-WT differences per subgroup, and cell-cycle state.",
-                     br(), "Split the map by timepoint to see whether two cycling subclusters",
+      hr(), helpText("True re-clustering of cardiomyocytes. Explore subcluster identity,",
+                     "differential expression per subcluster, and cell-cycle state.",
+                     br(), br(),
+                     strong("Split map by"), " facets the map only. To split the ",
+                     strong("DE"), " by genotype and timepoint use the ", strong("Comparison"),
+                     " dropdown — it carries KO-vs-WT at P0 and at P7 separately, and each ",
+                     "genotype's own P0-vs-P7, per subcluster.",
+                     br(), br(),
+                     "Split the map by timepoint to see whether two cycling subclusters ",
                      "separate by P0/P7 or by S vs G2/M phase."),
       accordion(open = FALSE, multiple = TRUE,
         accordion_panel("Cell-cycle figure options",
@@ -1892,15 +1967,17 @@ ui <- page_navbar(
         plotlyOutput("cm_map", height = "600px")),
       nav_panel("Identity (marker heatmap)", dl_fig_ui("cmmarker"),
         plotlyOutput("cm_markerheat", height = "660px")),
-      nav_panel("KO-vs-WT DE (per subgroup)", value = "de",
+      nav_panel("DE (per subcluster)", value = "de",
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
+        uiOutput("cm_de_note"),
         fluidRow(
           column(6, plotlyOutput("cm_volcano", height = "440px")),
           column(6, uiOutput("cm_pick_ui"), dl_data_ui("cm_detab"), DTOutput("cm_detab"))),
         uiOutput("cm_geneinfo"),
         div(class = "mt-3",
-            h5("DE heatmap — top genes × subclusters (log2FC KO/WT)"),
-            dl_fig_ui("cmlfcheat"), plotlyOutput("cm_lfcheat", height = "560px"))),
+            h5("DE heatmap — top genes × subclusters"),
+            dl_fig_ui("cmlfcheat"), plotlyOutput("cm_lfcheat", height = "560px"),
+            uiOutput("cm_lfcheat_note"))),
       nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px")),
       nav_panel("Composition (stacked bars)", value = "bars",
         helpText("Composition of each res-0.2 subcluster, broken down four ways — genotype (WT/KO), ",
@@ -1918,8 +1995,12 @@ ui <- page_navbar(
                  "a quick read on what each subcluster is doing biologically."),
         dl_data_ui("cm_topmarkers"), DTOutput("cm_topmarkers")),
       nav_panel("Subcluster enrichment", value = "subenr",
-        helpText("Per res-0.2 subcluster: identity markers and the KO-vs-WT signal, enriched. ",
+        helpText("Per res-0.2 subcluster: identity markers and the differential signal, enriched. ",
+                 "The ", strong("Comparison"), " dropdown switches between the pooled ",
+                 "KO-vs-WT enrichment and the timepoint-specific four-group contrasts; the two ",
+                 "directions are enriched ", strong("separately"), ". ",
                  strong("Descriptive only — n = 1.")),
+        uiOutput("cm_enr_note"),
         div(class = "d-flex align-items-center gap-3 mb-2",
             radioButtons("cm_enr_mode", NULL, c("Single cluster" = "one", "All clusters" = "all"),
                          selected = "one", inline = TRUE),
@@ -1930,17 +2011,21 @@ ui <- page_navbar(
             nav_panel("Identity GO",
               dl_fig_ui("cmsubidgo"), plotlyOutput("cm_sub_idgo_plot", height = "440px"),
               dl_data_ui("cm_sub_idgo_tab"), DTOutput("cm_sub_idgo_tab", height = "320px")),
-            nav_panel("KO-vs-WT GO",
+            nav_panel("GO — up",
               dl_fig_ui("cmsubkogo"), plotlyOutput("cm_sub_kogo_plot", height = "440px"),
               dl_data_ui("cm_sub_kogo_tab"), DTOutput("cm_sub_kogo_tab", height = "320px")),
-            nav_panel("KO-vs-WT GSEA",
+            nav_panel("GO — down",
+              dl_fig_ui("cmsubkodn"), plotlyOutput("cm_sub_kodn_plot", height = "440px"),
+              dl_data_ui("cm_sub_kodn_tab"), DTOutput("cm_sub_kodn_tab", height = "320px")),
+            nav_panel("GSEA",
               dl_fig_ui("cmsubgsea"), plotlyOutput("cm_sub_gsea_plot", height = "440px"),
               dl_data_ui("cm_sub_gsea_tab"), DTOutput("cm_sub_gsea_tab", height = "320px")))),
         conditionalPanel("input.cm_enr_mode == 'all'",
           navset_card_tab(
             nav_panel("Identity GO", cm_enr_grid("idgo")),
-            nav_panel("KO-vs-WT GO", cm_enr_grid("kogo")),
-            nav_panel("KO-vs-WT GSEA", cm_enr_grid("gsea")))))))),
+            nav_panel("GO — up", cm_enr_grid("kogo")),
+            nav_panel("GO — down", cm_enr_grid("kodn")),
+            nav_panel("GSEA", cm_enr_grid("gsea")))))))),
 
   nav_panel("E2F focus", layout_sidebar(
     sidebar = sidebar(width = 320,
@@ -2366,8 +2451,12 @@ server <- function(input, output, session) {
   local({
     subs <- names(subDE[["res0.2"]])
     subs <- subs[order(as.integer(sub("CM", "", subs)))]
-    updateSelectInput(session, "cm_sub", choices = setNames(subs, vapply(subs, function(s) sub_label("0.2", s), "")),
-                      selected = subs[1])
+    ch <- setNames(subs, vapply(subs, function(s) sub_label("0.2", s), ""))
+    # "All cardiomyocytes" exists only in the four-group grids -- subDE has no pooled-CM
+    # entry. Offer it unconditionally and let cm_d() say so if it is picked while the
+    # pooled comparison is selected, rather than making the option appear and disappear.
+    if ("AllCM" %in% FG_CLUSTERS) ch <- c("All cardiomyocytes" = "AllCM", ch)
+    updateSelectInput(session, "cm_sub", choices = ch, selected = subs[1])
   })
 
   # ---- UMAP explorer ----
@@ -2527,13 +2616,44 @@ server <- function(input, output, session) {
   })
   output$cm_markerheat <- renderPlotly(ggheat(cm_markerheat_p()))
   register_fig(output, "cmmarker", cm_markerheat_p, input)
-  cm_d    <- reactive({ req(input$cm_sub); subDE[["res0.2"]][[input$cm_sub]] })
+  # Which comparison the DE panel is showing. NULL = the pooled KO-vs-WT tables (subDE);
+  # anything else is one of build_fourgroup.R's timepoint-specific contrasts, read from
+  # the same grids the Four-group tab uses so the two tabs cannot disagree.
+  cm_ct <- reactive(if (identical(input$cm_contrast %||% "pooled", "pooled")) NULL
+                    else fg_ct(input$cm_contrast))
+  cm_d    <- reactive({ req(input$cm_sub); ct <- cm_ct()
+    if (is.null(ct)) {
+      validate(need(!identical(input$cm_sub, "AllCM"),
+        paste("Pooled KO-vs-WT was not computed over all cardiomyocytes together.",
+              "Pick a subcluster, or one of the timepoint-specific comparisons.")))
+      subDE[["res0.2"]][[input$cm_sub]]
+    } else fg_de(input$cm_sub, ct$key, input$cm_stratum %||% "G1", input$cm_grid %||% "de") })
   cm_pick <- reactiveVal(NULL)
   cm_tab  <- reactive(de_table(drop_conf(cm_d(), input$cm_hideconf)))   # full table (selection never filters it)
   cm_dt_proxy <- DT::dataTableProxy("cm_detab")
-  output$cm_volcano <- renderPlotly(de_volcano_ly(drop_conf(cm_d(), input$cm_hideconf),
-                         paste0(input$cm_sub, " — ", sub_label("0.2", input$cm_sub)), "cm_volcano",
-                         highlight = cm_pick()))
+  # Same caveats the Four-group tab prints, from the same helper.
+  output$cm_de_note <- renderUI({ req(input$cm_sub); ct <- cm_ct()
+    if (is.null(ct))
+      return(div(style = "font-size:13px;margin-bottom:6px",
+                 HTML(if (identical(input$cm_sub, "AllCM"))
+                        paste0("<b>All cardiomyocytes</b> has no pooled KO-vs-WT table",
+                               " &middot; pick a timepoint-specific <i>Comparison</i>, or a subcluster.")
+                      else
+                        paste0("<b>KO vs WT</b> in ", input$cm_sub,
+                               " &middot; P0 and P7 pooled. Use <i>Comparison</i> in the sidebar",
+                               " for the timepoint-specific contrasts."))))
+    d <- try(cm_d(), silent = TRUE)
+    de_context_note(input$cm_sub, ct, input$cm_stratum %||% "G1", input$cm_grid %||% "de",
+                    if (inherits(d, "try-error")) NULL else d) })
+  output$cm_volcano <- renderPlotly({ ct <- cm_ct()
+    ttl <- if (is.null(ct)) paste0(input$cm_sub, " — ", sub_label("0.2", input$cm_sub))
+           else paste0(ct$label, " — ",
+                       if (identical(input$cm_sub, "AllCM")) "all CM" else input$cm_sub,
+                       if (identical(input$cm_stratum, "G1")) " (G1)" else "")
+    de_volcano_ly(drop_conf(cm_d(), input$cm_hideconf), ttl, "cm_volcano",
+                  pos = ct$pos %||% "up in KO", neg = ct$neg %||% "up in WT",
+                  xlab = ct$xlab %||% "log2 fold change (KO / WT)",
+                  highlight = cm_pick()) })
   outputOptions(output, "cm_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
   output$cm_detab   <- renderDT(de_datatable(cm_tab(), scroll = NULL))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
@@ -2551,10 +2671,34 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
   observeEvent(input$cm_clear, cm_pick(NULL))
   observeEvent(input$cm_infoclose, cm_pick(NULL))
-  observeEvent(input$cm_sub, cm_pick(NULL), ignoreInit = TRUE)
-  cm_lfcheat_p <- reactive(lfc_heat(subDE[["res0.2"]], 22,
-    "KO-vs-WT log2FC across CM subclusters — res 0.2"))
+  observeEvent(list(input$cm_sub, input$cm_contrast, input$cm_stratum, input$cm_grid),
+               cm_pick(NULL), ignoreInit = TRUE)
+  # The heatmap answers "this comparison across every subcluster at once", so it follows
+  # the same dropdown. lfc_heat() drops absent tables silently, which would read as
+  # "these are all the subclusters" -- cm_lfcheat_note names the ones that fell out.
+  cm_lfc_list <- reactive({ ct <- cm_ct()
+    if (is.null(ct)) return(subDE[["res0.2"]])
+    key <- paste0(ct$key, "__", input$cm_stratum %||% "G1")
+    g   <- fg_grid(input$cm_grid %||% "de")
+    cl  <- setdiff(FG_CLUSTERS, "AllCM")
+    setNames(lapply(cl, function(x) g[[x]][[key]]), cl) })
+  cm_lfcheat_p <- reactive({ ct <- cm_ct()
+    lfc_heat(cm_lfc_list(), 22,
+      if (is.null(ct)) "KO-vs-WT log2FC across CM subclusters — res 0.2"
+      else paste0(ct$label, " — log2FC across CM subclusters (",
+                  if (identical(input$cm_stratum, "G1")) "G1 cells" else "all cells", ")"),
+      fill_lab = if (is.null(ct)) "log2FC\n(KO/WT)"
+                 else paste0("log2FC\n", sub("^[^(]*", "", ct$xlab))) })
   output$cm_lfcheat <- renderPlotly(ggheat(cm_lfcheat_p()))
+  output$cm_lfcheat_note <- renderUI({ ct <- cm_ct(); if (is.null(ct)) return(NULL)
+    l <- cm_lfc_list(); gone <- names(l)[vapply(l, is.null, logical(1))]
+    if (!length(gone)) return(NULL)
+    div(style = "font-size:12px;color:#c62828;margin-top:4px",
+        HTML(sprintf("Not shown — no DE table for this comparison and stratum: <b>%s</b>. %s",
+                     paste(gone, collapse = ", "),
+                     if (identical(input$cm_stratum, "G1"))
+                       "Try the “All cells” stratum, or the other DE matrix."
+                     else "Try the other DE matrix."))) })
   register_fig(output, "cmlfcheat", cm_lfcheat_p, input)
   cm_phase_plot <- reactive({
     bs <- input$cmphase_basesize %||% 13; ch <- input$cmphase_palette %||% "Default"; rn <- cmphase_rn()
@@ -2737,54 +2881,113 @@ server <- function(input, output, session) {
       class = "compact stripe hover")
   })
 
-  # ---- CM per-subcluster enrichment (precomputed in ENR$sub; res 0.2) ----
-  local({
-    avail <- if (!is.null(ENR$sub)) sort(unique(c(ENR$sub$identity_go$subcluster,
-                                                   ENR$sub$go$subcluster, ENR$sub$gsea$subcluster))) else character(0)
+  # ---- CM per-subcluster enrichment (ENR$sub pooled, or FGE per contrast; res 0.2) ----
+  # Which enrichment source the tab is reading. NULL = the pooled KO-vs-WT tables.
+  cm_enr_ct <- reactive(if (identical(input$cm_enr_contrast %||% "pooled", "pooled")) NULL
+                        else fg_ct(input$cm_enr_contrast))
+  cm_enr_a  <- reactive({ ct <- cm_enr_ct()
+    list(ct = ct, st = if (is.null(ct)) "all" else (input$cm_enr_stratum %||% "all"),
+         ont = if (is.null(ct)) "BP" else (input$cm_enr_ont %||% "BP"),
+         lab = enr_src_labs(ct)) })
+  # Availability differs by source, so the cluster list follows the comparison. isolate()
+  # on the current value: this observer writes the input it reads.
+  observe({
+    ct <- cm_enr_ct()
+    avail <- if (is.null(ct)) {
+      if (!is.null(ENR$sub)) sort(unique(c(ENR$sub$identity_go$subcluster,
+                                           ENR$sub$go$subcluster, ENR$sub$gsea$subcluster))) else character(0)
+    } else if (!is.null(FGE$go)) unique(FGE$go$cluster[FGE$go$contrast == ct$key]) else character(0)
     subs <- cm_subs("0.2"); subs <- if (length(avail)) subs[subs %in% avail] else subs
+    if (!length(subs)) return()
+    cur  <- isolate(input$cm_enr_sub)
     updateSelectInput(session, "cm_enr_sub",
                       choices = setNames(subs, vapply(subs, function(s) sub_label("0.2", s), "")),
-                      selected = subs[1])
+                      selected = if (!is.null(cur) && cur %in% subs) cur else subs[1])
   })
+  output$cm_enr_note <- renderUI({ a <- cm_enr_a(); req(input$cm_enr_sub)
+    div(class = "alert alert-light border py-2 px-3 mb-2",
+        tags$small(strong(a$lab$label), " · ", input$cm_enr_sub,
+                   if (is.null(a$ct)) NULL else paste0(" · ", a$st, " cells · GO ", a$ont),
+                   sprintf(" · “%s” vs “%s”", a$lab$up, a$lab$dn),
+                   if (is.null(a$ct))
+                     span(" · pooled over P0 and P7 — this cannot answer what changes in the KO at P7.")
+                   else NULL)) })
+  # ---- identity GO: contrast-independent, always the pooled marker enrichment ----
   output$cm_sub_idgo_plot <- renderPlotly({ req(input$cm_enr_sub)
     go_dotplot_df(enr_sub_df("identity_go", input$cm_enr_sub), paste0("Identity GO BP — ", input$cm_enr_sub)) })
   cm_sub_idgo_df <- reactive({ req(input$cm_enr_sub)
     d <- enr_sub_df("identity_go", input$cm_enr_sub)
     d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))] })
   output$cm_sub_idgo_tab <- renderDT(enr_dt(cm_sub_idgo_df()))
-  output$cm_sub_kogo_plot <- renderPlotly({ req(input$cm_enr_sub)
-    d <- enr_sub_df("go", input$cm_enr_sub); d <- d[d$direction == "KO_up", , drop = FALSE]
-    go_dotplot_df(d, paste0("GO BP enriched in KO-up genes — ", input$cm_enr_sub)) })
-  cm_sub_kogo_df <- reactive({ req(input$cm_enr_sub)
-    d <- enr_sub_df("go", input$cm_enr_sub)
-    d[order(d$p.adjust), intersect(c("Description","direction","FoldEnrichment","p.adjust","Count","geneID"), names(d))] })
+  # ---- contrast GO, the two directions enriched separately ----
+  CM_GO_COLS <- c("ID","Description","direction","direction_label","FoldEnrichment",
+                  "p.adjust","qvalue","Count","geneID","n_input","n_universe","input_rule")
+  cm_sub_go <- function(dir) { a <- cm_enr_a(); req(input$cm_enr_sub)
+    enr_src_df("go", input$cm_enr_sub, a$ct, a$st, a$ont, dir) }
+  cm_sub_go_ttl <- function(dir) { a <- cm_enr_a()
+    sprintf("GO %s — %s, %s", a$ont, input$cm_enr_sub,
+            if (identical(dir, "up")) a$lab$up else a$lab$dn) }
+  # An empty GO table is ambiguous: "tested, nothing passed" and "list too small to test"
+  # look identical. The four-group audit knows which; say so.
+  cm_sub_go_empty <- function(dir) { a <- cm_enr_a()
+    lab <- if (identical(dir, "up")) a$lab$up else a$lab$dn
+    if (is.null(a$ct)) return(paste0("No GO BP term for the ", lab, " list in this subcluster."))
+    paste0("No GO ", a$ont, " term reached padj < 0.05 / q < 0.2 for the ", lab, " list. ",
+           fg_enr_why(input$cm_enr_sub, a$ct$key, a$st, a$ont,
+                      if (identical(dir, "up")) "A_up" else "B_up")) }
+  cm_sub_go_plot <- function(dir) { d <- cm_sub_go(dir)
+    validate(need(nrow(d), cm_sub_go_empty(dir)))
+    go_dotplot_gg(d, cm_sub_go_ttl(dir)) }
+  cm_sub_go_ly <- function(dir)                      # same body go_dotplot_df() uses
+    ggplotly(cm_sub_go_plot(dir), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+  output$cm_sub_kogo_plot <- renderPlotly(cm_sub_go_ly("up"))
+  output$cm_sub_kodn_plot <- renderPlotly(cm_sub_go_ly("down"))
+  cm_sub_kogo_df <- reactive({ d <- cm_sub_go("up")
+    d[order(d$p.adjust), intersect(CM_GO_COLS, names(d))] })
+  cm_sub_kodn_df <- reactive({ d <- cm_sub_go("down")
+    d[order(d$p.adjust), intersect(CM_GO_COLS, names(d))] })
   output$cm_sub_kogo_tab <- renderDT(enr_dt(cm_sub_kogo_df()))
-  output$cm_sub_gsea_plot <- renderPlotly({ req(input$cm_enr_sub)
-    gsea_barplot_df(enr_sub_df("gsea", input$cm_enr_sub), paste0("GSEA — ", input$cm_enr_sub)) })
-  cm_sub_gsea_df <- reactive({ req(input$cm_enr_sub)
-    d <- enr_sub_df("gsea", input$cm_enr_sub)
-    d[order(d$padj), intersect(c("pathway","NES","padj","size","leadingEdge"), names(d))] })
+  output$cm_sub_kodn_tab <- renderDT(enr_dt(cm_sub_kodn_df()))
+  # ---- GSEA: same source switch; up/down wording from the contrast ----
+  cm_sub_gsea_dat <- reactive({ a <- cm_enr_a(); req(input$cm_enr_sub)
+    enr_src_df("gsea", input$cm_enr_sub, a$ct, a$st) })
+  cm_sub_gsea_p <- reactive({ a <- cm_enr_a()
+    gsea_barplot_gg(cm_sub_gsea_dat(), paste0("GSEA — ", input$cm_enr_sub, " · ", a$lab$label),
+                    20, up_lab = a$lab$up, down_lab = a$lab$dn) })
+  output$cm_sub_gsea_plot <- renderPlotly(
+    ggplotly(cm_sub_gsea_p(), tooltip = "text") |> layout(margin = list(l = 0, t = 40)))
+  cm_sub_gsea_df <- reactive({ d <- cm_sub_gsea_dat()
+    d[order(d$padj), intersect(c("pathway","NES","padj","pval","size","leadingEdge"), names(d))] })
   output$cm_sub_gsea_tab <- renderDT(enr_dt(cm_sub_gsea_df()))
+  # filename stem for the enrichment downloads -- carries the comparison, not a fixed "pooled"
+  cm_enr_dl_base <- function(kind, suffix) { a <- cm_enr_a()
+    paste0(kind, "_",
+           if (is.null(a$ct)) "KOvsWT_pooled" else paste0(a$ct$key, "_", a$st),
+           if (identical(kind, "GO") && !is.null(a$ct)) paste0("_", a$ont) else "",
+           "_", input$cm_enr_sub, suffix) }
   register_fig(output, "cmsubidgo", reactive({ req(input$cm_enr_sub)
     go_dotplot_gg(enr_sub_df("identity_go", input$cm_enr_sub),
                   paste0("Identity GO BP — ", input$cm_enr_sub)) }), input)
-  register_fig(output, "cmsubkogo", reactive({ req(input$cm_enr_sub)
-    d <- enr_sub_df("go", input$cm_enr_sub)
-    go_dotplot_gg(d[d$direction == "KO_up", , drop = FALSE],
-                  paste0("GO BP enriched in KO-up genes — ", input$cm_enr_sub)) }), input)
-  register_fig(output, "cmsubgsea", reactive({ req(input$cm_enr_sub)
-    gsea_barplot_gg(enr_sub_df("gsea", input$cm_enr_sub),
-                    paste0("GSEA — ", input$cm_enr_sub)) }), input)
-  # "All clusters" view: one full-size plot per subcluster (two per row on screen)
+  register_fig(output, "cmsubkogo", reactive(cm_sub_go_plot("up")), input)
+  register_fig(output, "cmsubkodn", reactive(cm_sub_go_plot("down")), input)
+  register_fig(output, "cmsubgsea", cm_sub_gsea_p, input)
+  # "All clusters" view: one full-size plot per subcluster (two per row on screen).
+  # These read cm_enr_a() too, so the grid honours the comparison like the single view.
   local({
     for (.cl in cm_subs("0.2")) local({
       cl <- .cl; ttl <- sub_label("0.2", cl)
+      go_all <- function(dir) { a <- cm_enr_a()
+        d <- enr_src_df("go", cl, a$ct, a$st, a$ont, dir)
+        lab <- if (identical(dir, "up")) a$lab$up else a$lab$dn
+        validate(need(nrow(d), paste0(cl, ": no GO term for the ", lab, " list.")))
+        go_dotplot_gg(d, paste0(ttl, " — ", lab), topn = 8) }
       output[[paste0("cm_idgo_all_", cl)]] <- renderPlot(
         go_dotplot_gg(enr_sub_df("identity_go", cl), ttl, topn = 8))
-      output[[paste0("cm_kogo_all_", cl)]] <- renderPlot({
-        d <- enr_sub_df("go", cl); go_dotplot_gg(d[d$direction == "KO_up", , drop = FALSE], ttl, topn = 8) })
-      output[[paste0("cm_gsea_all_", cl)]] <- renderPlot(
-        gsea_barplot_gg(enr_sub_df("gsea", cl), ttl, topn = 10))
+      output[[paste0("cm_kogo_all_", cl)]] <- renderPlot(go_all("up"))
+      output[[paste0("cm_kodn_all_", cl)]] <- renderPlot(go_all("down"))
+      output[[paste0("cm_gsea_all_", cl)]] <- renderPlot({ a <- cm_enr_a()
+        gsea_barplot_gg(enr_src_df("gsea", cl, a$ct, a$st), ttl, topn = 10,
+                        up_lab = a$lab$up, down_lab = a$lab$dn) })
     })
   })
 
@@ -2901,28 +3104,13 @@ server <- function(input, output, session) {
   fg_tab  <- reactive(de_table(fg_d()))
   fg_pick <- reactiveVal(NULL)
   fg_dt_proxy <- DT::dataTableProxy("fg_detab")
+  # An arm can clear the 10-cell floor and still be far too thin to trust; de_context_note()
+  # says so here, and on the CM deep-dive DE tab, from a single definition.
   output$fg_de_note <- renderUI({
     ct <- fg_ct(input$fg_contrast); req(ct)
-    n <- try(fg_d(), silent = TRUE)
-    bad <- !inherits(n, "try-error")
-    nA <- if (bad) n$n_A[1] else NA; nB <- if (bad) n$n_B[1] else NA
-    txt <- if (!bad) "" else sprintf(" — %d vs %d cells, %d genes past the gate", nA, nB, nrow(n))
-    thin <- FG$built$thin_cells %||% 50
-    div(style = "font-size:13px;margin-bottom:6px",
-        HTML(paste0("<b>", ct$label, "</b> in ",
-                    if (input$fg_cluster == "AllCM") "all cardiomyocytes" else input$fg_cluster,
-                    if (input$fg_stratum == "G1") ", G1 cells only" else ", all cells", txt,
-                    if (identical(input$fg_grid, "de2")) " &middot; curated panel" else "")),
-        # An arm can clear the 10-cell floor and still be far too thin to trust —
-        # say so here rather than letting the table look like any other.
-        if (bad && min(nA, nB) < thin)
-          div(style = "color:#c62828;font-weight:600",
-              HTML(sprintf("&#9888; Smallest group is %d cells — treat this contrast as unreliable%s.",
-                min(nA, nB),
-                if (max(nA, nB) / max(min(nA, nB), 1) >= 10)
-                  sprintf(" (%.0f× imbalance)", max(nA, nB) / max(min(nA, nB), 1)) else ""))),
-        if (input$fg_stratum == "all" && grepl("P0_vs_P7", input$fg_contrast))
-          span(style = "color:#c62828", HTML(" &middot; <b>sort-confounded</b> — see the caveat in the sidebar.")))
+    d <- try(fg_d(), silent = TRUE)
+    de_context_note(input$fg_cluster, ct, input$fg_stratum, input$fg_grid,
+                    if (inherits(d, "try-error")) NULL else d)
   })
   output$fg_volcano <- renderPlotly({
     ct <- fg_ct(input$fg_contrast); req(ct)
@@ -3496,15 +3684,20 @@ server <- function(input, output, session) {
     list(id = "deg_table", base = "DEG_subset",
          df = function() drop_conf(deg_res(), input$deg_hideconf)),
     # Cardiomyocyte deep-dive
-    list(id = "cm_detab", base = function() paste0("DE_KOvsWT_pooled_", input$cm_sub),
+    list(id = "cm_detab", base = function() { ct <- cm_ct()
+           if (is.null(ct)) paste0("DE_KOvsWT_pooled_", input$cm_sub)
+           else paste0("DE_", ct$key, "_", input$cm_sub, "_", input$cm_stratum %||% "G1",
+                       if (identical(input$cm_grid, "de2")) "_curated" else "") },
          df = function() drop_conf(cm_d(), input$cm_hideconf)),
     list(id = "cm_summary", base = "cm_subcluster_summary_res0.2", df = function() cm_summary_df()),
     list(id = "cm_topmarkers", base = "cm_top_markers_res0.2", df = function() cm_topmarkers_df()),
     list(id = "cm_sub_idgo_tab", base = function() paste0("identity_GO_", input$cm_enr_sub),
          df = function() cm_sub_idgo_df()),
-    list(id = "cm_sub_kogo_tab", base = function() paste0("KOvsWT_GO_pooled_", input$cm_enr_sub),
+    list(id = "cm_sub_kogo_tab", base = function() cm_enr_dl_base("GO", "_up"),
          df = function() cm_sub_kogo_df()),
-    list(id = "cm_sub_gsea_tab", base = function() paste0("KOvsWT_GSEA_pooled_", input$cm_enr_sub),
+    list(id = "cm_sub_kodn_tab", base = function() cm_enr_dl_base("GO", "_down"),
+         df = function() cm_sub_kodn_df()),
+    list(id = "cm_sub_gsea_tab", base = function() cm_enr_dl_base("GSEA", ""),
          df = function() cm_sub_gsea_df()),
     # Four-group
     list(id = "fg_counts_tab", base = function() paste0("fourgroup_counts_res", FG$built$res),
