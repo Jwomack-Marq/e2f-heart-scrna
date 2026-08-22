@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # CRAN packages the app loads (shiny/htmlwidgets/crosstalk ship in the base image).
+# openxlsx backs the multi-sheet .xlsx downloads (shiny_app/download_helpers.R).
 RUN install2.r --error --skipinstalled \
-      bslib ggplot2 Matrix plotly DT svglite shinycssloaders remotes
+      bslib ggplot2 Matrix plotly DT svglite shinycssloaders remotes \
+      openxlsx
 
 # presto is GitHub-only; the interactive "Subset & DEGs" tab uses it for Wilcoxon DE.
 RUN R -e 'remotes::install_github("immunogenomics/presto", upgrade = "never")'
@@ -20,7 +22,8 @@ RUN R -e 'remotes::install_github("immunogenomics/presto", upgrade = "never")'
 WORKDIR /srv/shiny-app
 
 # App code + the data-prep build scripts (scripts aren't needed at runtime, kept for reference).
-COPY shiny_app/app.R ./
+# download_helpers.R IS needed at runtime -- app.R sources it.
+COPY shiny_app/app.R shiny_app/download_helpers.R ./
 COPY shiny_app/build_communication.R shiny_app/build_refmap.R \
      shiny_app/build_signature_scores.R shiny_app/build_subcluster_enrichment.R \
      shiny_app/build_fourgroup.R ./
