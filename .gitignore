@@ -37,3 +37,7 @@ model/deck.pdf
 shiny_app/deck.html
 shiny_app/deck.pdf
 shiny_app/deck.body.html
+
+# generated deliverables: Excel workbooks + figures for collaborator requests
+# (rebuild: analysis/<date>_<name>/run.sh) — large and fully regenerable
+deliverables/
