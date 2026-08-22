@@ -33,3 +33,6 @@ model/report.html
 # generated lab-meeting deck (rebuild: python3 tools/build_deck.py)
 model/deck.html
 model/deck.pdf
+
+# Generated deliverables (large xlsx/figures; regenerate with analysis/*/run.sh)
+deliverables/
