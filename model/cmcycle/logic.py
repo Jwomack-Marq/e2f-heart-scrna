@@ -114,10 +114,23 @@ class Network:
 
         The RHS is evaluated tens of thousands of times per screen, and in pure
         Python the dataclass attribute lookups in the inner loop dominated the
-        run time. Cached on the instance and invalidated when a weight changes
-        (calibration and knockdowns both mutate weights).
+        run time, so the flattened form is cached on the instance.
+
+        The cache key covers **both** the weights and the identity of every
+        reaction object. Keying on weights alone was a correctness bug: replacing a
+        reaction to change its reactants, ``n`` or ``EC50`` left the key unchanged,
+        so the edit was silently ignored and the model kept running the old
+        structure. That is exactly what programmatic spec edits do, and it produced
+        a diagnosis that had to be thrown away.
+
+        Note the contract this implies: a reaction's ``w`` may be mutated in place
+        (calibration and the perturbation sweeps do), but anything else requires
+        **replacing** the :class:`Reaction` — which is necessary anyway, since
+        ``beta`` and ``K`` are derived in ``__post_init__`` and would otherwise go
+        stale.
         """
-        key = tuple(r.w for r in self.reactions)
+        key = (tuple(r.w for r in self.reactions),
+               tuple(id(r) for r in self.reactions))
         cache = getattr(self, "_cc", None)
         if cache is not None and cache[0] == key:
             return cache[1]

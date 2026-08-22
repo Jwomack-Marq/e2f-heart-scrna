@@ -1,0 +1,842 @@
+<title>Entry Is Not Regeneration</title>
+<style>
+/* ============================================================
+   Palette inherited from model/cmcycle/svg.py (INK + SERIES),
+   validated all-pairs for CVD by model/tools/validate_palette.py.
+   Series colours carry FUCCI meaning:
+     s3 aqua   = mAG-geminin / cycling / "go"
+     s2 orange = mKO2-Cdt1 / arrested / the brake
+     s1 blue   = the model
+   ============================================================ */
+:root{
+  --srf:#fcfcfb; --pri:#0b0b0b; --sec:#52514e; --mut:#898781;
+  --grd:#e1e0d9; --axs:#c3c2b7; --bnd:#f0efec;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --neg:#c22e3a;
+  --rail:#e1e0d9;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --srf:#1a1a19; --pri:#ffffff; --sec:#c3c2b7; --mut:#898781;
+    --grd:#2c2c2a; --axs:#383835; --bnd:#262624;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --neg:#e5565f;
+    --rail:#2c2c2a;
+  }
+}
+:root[data-theme="dark"]{
+  --srf:#1a1a19; --pri:#ffffff; --sec:#c3c2b7; --mut:#898781;
+  --grd:#2c2c2a; --axs:#383835; --bnd:#262624;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --neg:#e5565f;
+  --rail:#2c2c2a;
+}
+
+*{box-sizing:border-box}
+html{font-size:clamp(10px,calc(0.42vw + 0.92vh),19px)}
+body{
+  margin:0; background:var(--srf); color:var(--pri);
+  font-family:var(--sans); line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ---------- deck chrome ---------- */
+#deck{position:relative;width:100vw;height:100vh;overflow:hidden}
+.slide{
+  position:absolute; inset:0; display:none;
+  grid-template-rows:auto 1fr auto;
+  padding:2.2rem 3rem 1.5rem;
+  animation:fade .22s ease-out;
+}
+.slide.on{display:grid}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.slide{animation:none}}
+
+.eyebrow{
+  font-size:.72rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--mut); font-weight:650; margin:0 0 .5rem;
+  display:flex; gap:.7rem; align-items:baseline;
+}
+.eyebrow .tag{color:var(--s1)}
+h2.head{
+  font-size:2.05rem; line-height:1.13; font-weight:700;
+  margin:0 0 .2rem; letter-spacing:-.018em; text-wrap:balance; max-width:34ch;
+}
+.dek{
+  font-size:1.02rem; color:var(--sec); margin:.45rem 0 0;
+  max-width:78ch; text-wrap:pretty;
+}
+.body{min-height:0; display:flex; flex-direction:column; justify-content:center; gap:1rem; padding:1.1rem 0 .3rem}
+.foot{
+  display:flex; justify-content:space-between; align-items:baseline; gap:2rem;
+  border-top:1px solid var(--grd); padding-top:.6rem;
+  font-size:.78rem; color:var(--mut);
+}
+.foot .src{font-family:var(--mono); font-size:.72rem}
+
+/* numbers are always mono + tabular: this project's numbers are code-generated */
+.n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-weight:600; color:var(--pri)}
+.n.blue{color:var(--s1)} .n.orange{color:var(--s2)} .n.aqua{color:var(--s3)} .n.neg{color:var(--neg)}
+code,kbd{font-family:var(--mono); font-size:.9em}
+em.g{font-style:italic}
+
+/* ---------- progress rail ---------- */
+#rail{
+  position:fixed; top:0; left:0; right:0; height:2px; display:flex; z-index:40;
+  background:var(--rail);
+}
+#rail i{height:100%; background:var(--grd); transition:background .2s}
+#rail i.done{background:var(--s1)}
+#counter{
+  position:fixed; bottom:1rem; left:3rem; z-index:40;
+  font-family:var(--mono); font-size:.72rem; color:var(--mut);
+  font-variant-numeric:tabular-nums;
+}
+#movement{
+  position:fixed; bottom:1rem; right:3rem; z-index:40;
+  font-size:.7rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--mut); font-weight:650;
+}
+
+/* ---------- figures ---------- */
+figure{margin:0; display:flex; flex-direction:column; gap:.5rem; min-height:0}
+figure .frame{
+  flex:1; min-height:0; display:flex; align-items:center; justify-content:center;
+  overflow:hidden;
+}
+figure svg{width:auto !important; height:auto; max-width:100%; max-height:100%; display:block}
+figcaption{font-size:.8rem; color:var(--mut); text-wrap:pretty}
+
+/* ---------- generic blocks ---------- */
+/* align-items:stretch (not center) so grid items get a DEFINITE height —
+   without it a tall SVG's max-height:100% resolves against auto and the
+   figure overflows upward into the headline. */
+.cols{display:grid; gap:1.6rem; align-items:stretch; min-height:0}
+.cols>*{min-height:0; min-width:0}
+.c-6-6{grid-template-columns:1fr 1fr}
+.c-7-5{grid-template-columns:1.35fr 1fr}
+.c-5-7{grid-template-columns:1fr 1.35fr}
+.stack{display:flex; flex-direction:column; gap:.8rem; min-width:0; justify-content:center}
+.body>.cols,.body>figure,.body>.tw,.body>.cards{flex:0 1 auto; min-height:0}
+
+ul.pts{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:.62rem}
+ul.pts li{
+  position:relative; padding-left:1rem; font-size:.95rem; color:var(--sec); text-wrap:pretty;
+}
+ul.pts li::before{
+  content:""; position:absolute; left:0; top:.62em;
+  width:.32rem; height:.32rem; border-radius:50%; background:var(--axs);
+}
+ul.pts li strong{color:var(--pri); font-weight:650}
+ul.pts li.hi::before{background:var(--s1)}
+
+.callout{
+  border-left:2px solid var(--s1); padding:.55rem 0 .55rem .9rem;
+  font-size:.92rem; color:var(--sec); text-wrap:pretty; background:transparent;
+}
+.callout.warn{border-left-color:var(--neg)}
+.callout.orange{border-left-color:var(--s2)}
+.callout .lab{
+  display:block; font-size:.68rem; letter-spacing:.13em; text-transform:uppercase;
+  color:var(--mut); font-weight:650; margin-bottom:.22rem;
+}
+.callout.warn .lab{color:var(--neg)}
+
+table.t{border-collapse:collapse; width:100%; font-size:.88rem}
+table.t th{
+  text-align:left; font-size:.68rem; letter-spacing:.11em; text-transform:uppercase;
+  color:var(--mut); font-weight:650; padding:0 .8rem .45rem 0;
+  border-bottom:1px solid var(--axs); white-space:nowrap;
+}
+table.t td{padding:.6rem .8rem .6rem 0; border-bottom:1px solid var(--grd); color:var(--sec); vertical-align:top}
+table.t tr:last-child td{border-bottom:none}
+table.t td strong{color:var(--pri); font-weight:650}
+.tw{overflow-x:auto; max-width:100%}
+
+.fate{font-weight:700; white-space:nowrap}
+.fate.div{color:var(--s3)} .fate.pol{color:var(--s2)} .fate.bin{color:var(--s1)}
+
+.cards{display:grid; grid-template-columns:repeat(3,1fr); gap:1.1rem; align-items:stretch}
+.card{
+  border:1px solid var(--grd); border-top:2px solid var(--s1);
+  padding:1rem 1.05rem; display:flex; flex-direction:column; gap:.55rem;
+}
+.card h3{margin:0; font-size:1rem; font-weight:700; letter-spacing:-.01em; text-wrap:balance}
+.card p{margin:0; font-size:.86rem; color:var(--sec); text-wrap:pretty}
+.card .kill{
+  margin-top:auto; padding-top:.55rem; border-top:1px dashed var(--grd);
+  font-size:.8rem; color:var(--neg);
+}
+.card .kill b{font-weight:650; letter-spacing:.09em; text-transform:uppercase; font-size:.68rem; display:block; margin-bottom:.15rem}
+
+.algebra{
+  font-family:var(--mono); font-size:.86rem; line-height:1.85;
+  border-left:2px solid var(--grd); padding-left:1rem; color:var(--sec);
+  white-space:pre; overflow-x:auto;
+}
+.algebra b{color:var(--pri); font-weight:650}
+
+.dials{display:grid; grid-template-columns:repeat(3,1fr); gap:.9rem}
+.dial{border:1px solid var(--grd); padding:.7rem .8rem}
+.dial .g{font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; color:var(--mut); font-weight:650}
+.dial .v{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:1.35rem; font-weight:650; margin:.15rem 0 0}
+.dial .w{font-size:.72rem; color:var(--mut); font-family:var(--mono)}
+
+.ledger{display:grid; grid-template-columns:1fr 1fr; gap:0; border:1px solid var(--grd)}
+.ledger>div{padding:.75rem .9rem}
+.ledger>div+div{border-left:1px solid var(--grd)}
+.ledger h4{
+  margin:0 0 .4rem; font-size:.68rem; letter-spacing:.13em; text-transform:uppercase; font-weight:650;
+}
+.ledger .f h4{color:var(--s2)} .ledger .p h4{color:var(--s3)}
+.ledger ul{margin:0; padding-left:1rem; font-size:.83rem; color:var(--sec)}
+.ledger li{margin-bottom:.22rem}
+
+/* title slide */
+.title-slide{grid-template-rows:1fr auto}
+.title-wrap{display:flex; flex-direction:column; justify-content:center; gap:1.1rem; position:relative; z-index:1}
+.title-wrap h1{
+  font-size:4.1rem; line-height:1.02; font-weight:700; letter-spacing:-.032em;
+  margin:0; max-width:17ch; text-wrap:balance;
+}
+.title-wrap h1 em{font-style:normal; color:var(--s3)}
+.title-wrap .sub{font-size:1.12rem; color:var(--sec); max-width:60ch; margin:0; text-wrap:pretty}
+.title-wrap .spec{
+  font-family:var(--mono); font-size:.8rem; color:var(--mut);
+  display:flex; flex-wrap:wrap; gap:.85rem;
+}
+.title-wrap .spec span{white-space:nowrap}
+.wash{position:absolute; inset:0; display:flex; align-items:center; justify-content:flex-end; opacity:.10; pointer-events:none; z-index:0}
+.wash svg{width:62%; height:auto}
+
+/* appendix marker */
+.slide[data-mv="Appendix"] .eyebrow .tag{color:var(--s2)}
+
+/* speaker notes */
+#notes{
+  position:fixed; left:0; right:0; bottom:0; z-index:50;
+  background:var(--bnd); border-top:1px solid var(--axs);
+  padding:.9rem 3rem 1.1rem; font-size:.86rem; color:var(--sec);
+  max-height:34vh; overflow-y:auto; display:none; text-wrap:pretty;
+}
+body.notes-on #notes{display:block}
+body.notes-on #counter,body.notes-on #movement{display:none}
+#notes b{color:var(--pri)}
+#notes .nlab{
+  font-size:.66rem; letter-spacing:.14em; text-transform:uppercase;
+  color:var(--mut); font-weight:650; display:block; margin-bottom:.3rem;
+}
+
+#help{
+  position:fixed; inset:0; z-index:60; background:var(--srf);
+  display:none; align-items:center; justify-content:center;
+}
+body.help-on #help{display:flex}
+#help div{max-width:32rem}
+#help h3{margin:0 0 1rem; font-size:1.3rem}
+#help dl{display:grid; grid-template-columns:auto 1fr; gap:.55rem 1.2rem; margin:0; font-size:.92rem}
+#help dt{font-family:var(--mono); color:var(--s1); font-weight:650}
+#help dd{margin:0; color:var(--sec)}
+
+:focus-visible{outline:2px solid var(--s1); outline-offset:3px}
+
+/* ---------- print / PDF ---------- */
+@media print{
+  /* 16:9 landscape pages, one slide each */
+  @page{size:297mm 167mm; margin:0}
+  html{font-size:11.6px}
+  body{background:#fff; color:#0b0b0b}
+  #rail,#counter,#movement,#help{display:none !important}
+  #deck{height:auto; overflow:visible}
+  .slide{
+    display:grid !important; position:relative; inset:auto;
+    width:297mm; height:167mm; page-break-after:always; break-after:page;
+    animation:none; overflow:hidden;
+  }
+  .slide:last-child{page-break-after:auto; break-after:auto}
+  #notes{display:none !important}
+  figure svg{max-height:100% !important}
+}
+</style>
+
+<div id="rail"></div>
+
+<div id="deck">
+
+<!-- ==================== 1 · TITLE ==================== -->
+<section class="slide title-slide on" data-mv="Background" data-notes="Fifteen minutes on a model. One sentence: cardiomyocytes don't stop <b>starting</b> the cell cycle, they stop <b>finishing</b> it &mdash; and I can name the node where. Three claims I'll defend: Ect2 is the lesion; the model gets one drug's three different outcomes 3 of 3 held out; and it says our knockout converts at P0 and barely at P7.">
+  <div class="title-wrap">
+    <div class="wash" aria-hidden="true"><!--FIG_TREE--></div>
+    <p class="eyebrow"><span class="tag">Lab meeting</span><span>Cardiomyocyte cell-cycle fate model</span></p>
+    <h1>Entry is not <em>regeneration</em></h1>
+    <p class="sub">Maturing cardiomyocytes don't lose the ability to <em class="g">start</em> the cell cycle. They lose the ability to <em class="g">finish</em> it &mdash; at a specific, measurable node.</p>
+    <p class="spec">
+      <span><b>cmfate</b></span><span>55 nodes</span><span>77 reactions</span>
+      <span>3 gates</span><span>4 fates</span><span>stdlib only</span>
+    </p>
+  </div>
+  <div class="foot">
+    <span>Justin Womack &middot; <code>e2f-heart-scrna/model</code></span>
+    <span class="src">press <kbd>&rarr;</kbd> to advance &middot; <kbd>N</kbd> for notes &middot; <kbd>?</kbd> for help</span>
+  </div>
+</section>
+
+<!-- ==================== 2 · FOUR OUTCOMES ==================== -->
+<section class="slide" data-mv="Background" data-notes="Everyone in this room reads binucleation and polyploidization as &lsquo;failed to divide.&rsquo; They are <b>two different lesions</b> with opposite marker signatures. Binucleation is a furrow failure &mdash; nuclei go up, ploidy stays flat. Polyploidization is a G2 arrest &mdash; ploidy goes up, nuclei stay flat. Murganti's polyploid cells show Cdt1 rising <b>before</b> geminin is lost, with slow decay and no sharp drop: that's the fingerprint of arrest, not a failed furrow. The whole reason to build a model is that a single entry readout cannot tell these apart &mdash; and note the shape here, because the model's fate layer is literally this tree.">
+  <div>
+    <p class="eyebrow"><span class="tag">01</span><span>The question</span></p>
+    <h2 class="head">Four outcomes, and two of them are not the same failure</h2>
+  </div>
+  <div class="body">
+    <figure>
+      <div class="frame"><!--FIG_TREE--></div>
+      <figcaption>Three sequential gates, four outcomes. Two failure modes are mechanistically distinct and must not share a branch &mdash; which is exactly why the model's fate layer has this shape.</figcaption>
+    </figure>
+  </div>
+  <div class="foot">
+    <span>Fate signatures from Murganti 2022 live-imaging traces</span>
+    <span class="src">model/RESULTS.md &sect;1</span>
+  </div>
+</section>
+
+<!-- ==================== 3 · OUR DATA ==================== -->
+<section class="slide" data-mv="Background" data-notes="This is the gap the model exists to fill. Our browser reads <b>entry</b> beautifully &mdash; cycling is up 6 points at P7 in the KO. But up into <b>which fate</b>? The data can't say. And our ploidy score is structurally incapable of answering: it's the difference of two module averages that fall in lockstep, so it reads as flat (p = 0.93) on the clearest cytokinesis signal in the data. Two honesty notes I'll say out loud: n = 1 per condition and sex-confounded, and at P7 cycling is also up in KO fibroblasts and endothelium, so this is not cardiomyocyte-specific.">
+  <div>
+    <p class="eyebrow"><span class="tag">02</span><span>Our own data</span></p>
+    <h2 class="head">Entry went up &mdash; and our own score can't say whether that helped</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-5-7">
+      <figure>
+        <div class="frame"><!--FIG_KOBARS--></div>
+        <figcaption>E2f7/E2f8 KO vs WT, cardiomyocytes. <code>tbl_cellcycle_fraction.csv</code></figcaption>
+      </figure>
+      <div class="stack">
+        <figure>
+          <div class="frame"><!--FIG2--></div>
+        </figure>
+        <div class="callout warn">
+          <span class="lab">Structurally blind</span>
+          <code>sig_ploidy = sig_prolif &minus; sig_cytokinesis</code> is the difference of exactly these two averages. They decline in lockstep &mdash; <span class="n">0.871&times;</span> and <span class="n">0.903&times;</span> &mdash; so the difference is flat: <span class="n neg">&Delta; = +0.005, p = 0.93</span>.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span><span class="n">30,030</span> cells &middot; <span class="n">21,598</span> cardiomyocytes &middot; n = 1 per condition, sex-confounded &middot; cycling also up in KO fibroblasts and endothelium at P7</span>
+    <span class="src">ko_export/ &middot; fig2</span>
+  </div>
+</section>
+
+<!-- ==================== 4 · THE TRIAD ==================== -->
+<section class="slide" data-mv="Background" data-notes="Same drug, same roughly 2.2-fold rise in entry, <b>three different outcomes.</b> This is the single best test case in the literature for our question, and it's the bar I set for the model: reproduce all three by changing a maturation coordinate, not by re-fitting. Note the free negative control in the same experiment &mdash; endothelium unaffected at p = 0.85 while smooth muscle responded at p = 0.04. So no model is allowed to predict a generic mitogenic effect.">
+  <div>
+    <p class="eyebrow"><span class="tag">03</span><span>The test case</span></p>
+    <h2 class="head">One drug, three contexts, three different outcomes</h2>
+    <p class="dek">Clonidine raises cell-cycle entry ~2.2&times; in every system. Where that flux <em class="g">lands</em> is what changes.</p>
+  </div>
+  <div class="body">
+    <div class="tw">
+      <table class="t">
+        <thead><tr><th>System</th><th>Entry</th><th>Outcome markers</th><th>Fate</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>hiPSC-CM</strong><br><span style="color:var(--mut)">least mature, in vitro</span></td>
+            <td><span class="n">9.0 &rarr; 22.0%</span><br><span style="color:var(--mut)">Ki-67</span></td>
+            <td>AurKB&#8314; midbodies <span class="n">0.83 &rarr; 1.69%</span>; ploidy and binucleation flat</td>
+            <td><span class="fate div">Division</span></td>
+          </tr>
+          <tr>
+            <td><strong>Mouse neonatal CM</strong><br><span style="color:var(--mut)">in vitro</span></td>
+            <td><span class="n">11.0 &rarr; 23.2%</span><br><span style="color:var(--mut)">Ki-67</span></td>
+            <td>Tetraploid <span class="n">26.5 &rarr; 38.9%</span>; <strong>zero</strong> midbodies in &gt;10,000 cells</td>
+            <td><span class="fate pol">Polyploidization</span></td>
+          </tr>
+          <tr>
+            <td><strong>Neonatal mouse</strong><br><span style="color:var(--mut)">in vivo</span></td>
+            <td><span class="n">25.5 &rarr; 36.2%</span><br><span style="color:var(--mut)">cumulative EdU</span></td>
+            <td>Mononucleated <span class="n">22.3 &rarr; 14.8%</span>; ploidy flat</td>
+            <td><span class="fate bin">Binucleation</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout orange">
+      <span class="lab">Free negative control, same experiment</span>
+      Endothelial cells unaffected (<span class="n">p = 0.85</span>) while smooth muscle responded (<span class="n">p = 0.04</span>) &mdash; so no model may predict a generic mitogenic effect.
+    </div>
+  </div>
+  <div class="foot">
+    <span>Murganti 2022, three systems</span>
+    <span class="src">model/RESULTS.md &sect;1</span>
+  </div>
+</section>
+
+<!-- ==================== 5 · PIPELINE ==================== -->
+<section class="slide" data-mv="Pipeline" data-notes="Three sources, and the point of the picture is that each contributes a <b>different kind of constraint</b>. Our data motivates and will eventually validate. Baniol's 285 cells set <b>topology</b> &mdash; which edges exist. The curated published measurements set <b>parameters</b>. The dashed line is the firewall, and it's the sentence that makes a three-source model defensible: no expression value ever becomes a parameter, no published rate ever becomes an edge. Caveats sit inside the lane they bound, at source &mdash; the P7 sort enrichment is exactly why lane B contributes topology only and never touches a fate number.">
+  <div>
+    <p class="eyebrow"><span class="tag">04</span><span>Data pipeline</span></p>
+    <h2 class="head">Three datasets, three different jobs</h2>
+    <p class="dek">This is not one flow, and drawing it as one would be a lie. Each source contributes a different <em class="g">type</em> of constraint.</p>
+  </div>
+  <div class="body">
+    <figure>
+      <div class="frame"><!--FIG_PIPE--></div>
+      <figcaption>Caveats sit inside the lane they bound. <strong>No expression value ever becomes a parameter; no published rate ever becomes an edge.</strong></figcaption>
+    </figure>
+  </div>
+  <div class="foot">
+    <span>Lane colours carry forward: <span class="n blue">blue</span> our data &middot; <span class="n orange">orange</span> Baniol topology &middot; <span class="n aqua">aqua</span> published parameters</span>
+    <span class="src">shiny_app/ &middot; cmcycle.baniol &middot; cmcycle.preflight</span>
+  </div>
+</section>
+
+<!-- ==================== 6 · THE MODEL ==================== -->
+<section class="slide" data-mv="Pipeline" data-notes="Say the embarrassing part first: <b>the fate layer is fitted exactly and predicts nothing.</b> Four numbers, at one context. Everything I show after this is downstream of those four. What earns the trust is the structure: the four fates are a complementary product over three gates, so they sum to exactly 1 with no normalisation step &mdash; verified to 1e-6 in every context. And because competence isn't gated on prevalence, inverting Murganti's measured fractions gives three <b>independent one-dimensional solves</b>, not a joint fit. Then the two arms: orange is abscission, closed by maturation. Blue is the mitotic-entry brake, closed by culture. Which of the two shuts first is the whole 2&times;2.">
+  <div>
+    <p class="eyebrow"><span class="tag">05</span><span>The model</span></p>
+    <h2 class="head">The fate layer is fitted exactly, and predicts nothing</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-6-6">
+      <div class="stack">
+        <div class="algebra"><b>!SPhase</b>                             =&gt; Quiescent
+<b>SPhase &amp; MitoticEntry &amp; Abscission</b>  =&gt; Division
+<b>SPhase &amp; MitoticEntry &amp; !Abscission</b> =&gt; Binucleation
+<b>SPhase &amp; !MitoticEntry</b>              =&gt; Polyploidization</div>
+        <div class="dials">
+          <div class="dial"><span class="g">SPhase</span><p class="v">0.0992</p><span class="w">w 0.4698</span></div>
+          <div class="dial"><span class="g">MitEntry</span><p class="v">0.7698</p><span class="w">w 0.7892</span></div>
+          <div class="dial"><span class="g">Abscission</span><p class="v">0.5028</p><span class="w">w 0.7075</span></div>
+        </div>
+        <div class="callout">
+          Sum to <span class="n">1</span> to <span class="n">1e&minus;6</span> in every context, with no normalization step. Gates invert in closed form from Murganti's fractions &mdash; three independent 1-D solves, not a joint fit.
+        </div>
+      </div>
+      <div class="stack">
+        <figure>
+          <div class="frame"><!--FIG_ARMS--></div>
+          <figcaption>Two arms, two closers. Which shuts first is the whole 2&times;2.</figcaption>
+        </figure>
+        <div class="ledger">
+          <div class="f">
+            <h4>Fitted &mdash; 4 numbers</h4>
+            <ul><li>3 gate weights</li><li>abscission switch position</li><li><em class="g">all at hiPSC-CM alone</em></li></ul>
+          </div>
+          <div class="p">
+            <h4>Predicted</h4>
+            <ul><li>which fate dominates per context</li><li>KO direction &amp; age-dependence</li><li>negative controls staying flat</li></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>Normalized-Hill logic ODE &middot; <code>dY/dt = (drive&middot;Ymax &minus; Y)/&tau;</code></span>
+    <span class="src">cmfate_model.toml &middot; model_results.json</span>
+  </div>
+</section>
+
+<!-- ==================== 7 · ECT2 ==================== -->
+<section class="slide" data-mv="Results" data-notes="This is the whole mechanistic bet in one figure. Ect2 falls to 0.55&times; from P0 to P7 in cycling ventricular cardiomyocytes. What makes that <b>specific</b> rather than merely significant is the genome-wide baseline: median ratio 0.887 across 417 expressed genes, and Ect2 sits at the 3rd percentile. Nothing else in either programme comes close. And the honest half &mdash; RhoA clears Bonferroni at p = 0.0004 but sits at the 29th percentile, so its low p-value comes from low variance, not a large effect. Significance is not specificity; we don't claim RhoA. The right-hand numbers matter because they remove the model's largest degree of freedom: Ect2 and E2f6 as functions of maturation are <b>measured</b>, not fitted.">
+  <div>
+    <p class="eyebrow"><span class="tag">06</span><span>Result &mdash; the lesion</span></p>
+    <h2 class="head">Ect2 is the specific lesion; RhoA only looks like one</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-7-5">
+      <figure>
+        <div class="frame"><!--FIG1--></div>
+      </figure>
+      <div class="stack">
+        <ul class="pts">
+          <li class="hi"><strong>Ect2 <span class="n orange">0.55&times;</span></strong> P0&rarr;P7 in cycling vCM &mdash; t = &minus;6.17, clears Bonferroni over 25 genes</li>
+          <li class="hi"><strong>3rd percentile</strong> against a genome-wide median of <span class="n">0.887</span> over <span class="n">417</span> genes. That is what makes it specific, not just significant</li>
+          <li><strong>RhoA is the near-miss.</strong> p = 0.0004, but <span class="n">29th</span> percentile &mdash; low variance, not a large effect. We don't claim it</li>
+        </ul>
+        <div class="callout">
+          <span class="lab">The maturation coordinate is measured, not fitted</span>
+          <code>M = z(FAO) &minus; z(glycolysis)</code>, per cell. Within cycling vCM alone (n = <span class="n">89</span>):
+          Ect2 <span class="n orange">r = &minus;0.563</span>, E2f6 <span class="n aqua">r = +0.396</span>.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>Baniol 2021, 285-cell Smart-seq2 re-analysis</span>
+    <span class="src">results.json &middot; fig1, fig4</span>
+  </div>
+</section>
+
+<!-- ==================== 8 · TRIAD RESULT ==================== -->
+<section class="slide" data-mv="Results" data-notes="Three out of three dominant fates, from one calibration and one input change per context. The mechanism is a clean 2&times;2: <b>maturation</b> picks hiPSC from mouse through the Ect2 arm, and the <b>in-vitro flag</b> picks between the two mouse contexts through ROS to DDR to Ccng1/Pkmyt1, which collapses mitotic entry from 0.531 in vivo to 0.251 in vitro and routes the flux to polyploidization instead of binucleation. Be explicit about one thing: I'm comparing the model's entry-rate proxy against a measured Ki-67 index, and those aren't the same observable &mdash; a Ki-67 index carries a dwell-time term a prevalence node can't express. The magnitudes are the next slide's problem.">
+  <div>
+    <p class="eyebrow"><span class="tag">07</span><span>Result &mdash; held out</span></p>
+    <h2 class="head">3 of 3, held out &mdash; one calibration, one input change</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-7-5">
+      <figure>
+        <div class="frame"><!--FIG9--></div>
+      </figure>
+      <div class="stack">
+        <ul class="pts">
+          <li class="hi">Calibrated at <strong>hiPSC-CM only</strong>. The two mouse contexts are held out &mdash; only <code>Maturation</code> and <code>InVitro</code> change</li>
+          <li>Maturation selects hiPSC vs mouse through the <span class="n orange">Ect2 arm</span></li>
+          <li>The in-vitro flag selects the two mouse contexts through <span class="n blue">ROS&rarr;DDR</span>, collapsing mitotic entry <span class="n">0.531 &rarr; 0.251</span></li>
+        </ul>
+        <div class="callout orange">
+          <span class="lab">Say this before someone opens the JSON</span>
+          Entry folds <span class="n">1.02 / 2.13 / 1.83</span> against observed <span class="n">2.44 / 2.12 / 1.52</span>; mean error <span class="n">26%</span>. This compares a rate proxy to a <em class="g">Ki-67 index</em> &mdash; not the same observable.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>Calibration context: <code>hipsc_cm</code>, M = 0.12</span>
+    <span class="src">model_results.json &rarr; triad &middot; fig9</span>
+  </div>
+</section>
+
+<!-- ==================== 9 · UNFITTED VALIDATION ==================== -->
+<section class="slide" data-mv="Results" data-notes="This one was hiding behind a mis-specified observable. Baniol's Figure 1D gives FUCCI <b>states</b>, so the naive cycling fraction is 32.5% at P0 &mdash; and the model couldn't reach that at any weight, which looked like a 2-fold miss. But their own Supplementary 1G says only 22.7% of the G1/S double-positives are Ki67-positive; the rest have prematurely exited, a distinction they make explicitly. Correcting with their own co-staining gives 17.7% against a model ceiling of 17.2%. Nothing was fitted to it. And the reason I trust it is the right-hand panel: the same correction shows the <b>slope</b> is 4&times; too steep, and I kept that as a failing-by-design test rather than tuning it away.">
+  <div>
+    <p class="eyebrow"><span class="tag">08</span><span>Result &mdash; unfitted</span></p>
+    <h2 class="head">The strongest number is the one nothing was fitted to</h2>
+  </div>
+  <div class="body">
+    <figure>
+      <div class="frame"><!--FIG_UNFIT--></div>
+      <figcaption>Left: the level, after correcting the observable with Baniol's own Ki-67 co-staining. Right: the residual that correction also exposed &mdash; kept as a test that fails by design.</figcaption>
+    </figure>
+  </div>
+  <div class="foot">
+    <span><code>mAG&#8314; 12.36% + 22.7% of 19.1% + mitotic 1% = 17.7%</code></span>
+    <span class="src">test_the_mouse_in_vivo_cycling_level_is_reproduced_unfitted</span>
+  </div>
+</section>
+
+<!-- ==================== 10 · THE CEILING ==================== -->
+<section class="slide" data-mv="Results" data-notes="The one place it fails is the one place I can prove it must. At hiPSC everything the drug could relieve is <b>already near maximum</b> &mdash; Rb at 0.14, p21 at 0.34, p27 at 0.02. Gain in this formalism is capped at the reaction weight, so no re-wiring can give a larger response at low maturation than at high. That's a structural ceiling, not a missing edge. I measured the two obvious fixes and both made it worse &mdash; the autophagy-p21 edge helps hiPSC but blows mNCM out to 6.7&times;, taking mean error from 26% to 121%. This is the argument for Tier 2: a model with real rates and dwell times.">
+  <div>
+    <p class="eyebrow"><span class="tag">09</span><span>Result &mdash; where it breaks</span></p>
+    <h2 class="head">Where it's wrong is a ceiling in the formalism, not a missing edge</h2>
+  </div>
+  <div class="body">
+    <div class="tw">
+      <table class="t">
+        <thead><tr><th>Symptom</th><th>Diagnosis</th><th>Verdict</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>hiPSC drug response under-predicted ~2&times;</strong><br><span class="n">1.02&times;</span> against an observed <span class="n">2.44&times;</span></td>
+            <td>At low maturation the switch is already open &mdash; Rb <span class="n">0.14</span>, p21 <span class="n">0.34</span>, p27 <span class="n">0.02</span>. Gain is capped at the reaction weight</td>
+            <td><strong>Structural ceiling.</strong> No re-wiring in this formalism can give more gain at low M than at high</td>
+          </tr>
+          <tr>
+            <td><strong>Two fixes tested</strong><br>Autophagy &#8867; p21, then gating on <code>!Maturation</code></td>
+            <td>Fix 1 helps hiPSC <span class="n">1.02&rarr;1.49&times;</span> but p21 is <em class="g">higher</em> at high M, so mNCM blows out to <span class="n neg">6.70&times;</span></td>
+            <td><strong>Both rejected.</strong> Mean error <span class="n">26% &rarr; 121%</span>, then <span class="n">55%</span>. Recorded, not hidden</td>
+          </tr>
+          <tr>
+            <td><strong>Maturation slope 4&times; too steep</strong><br>modelled <span class="n">13.1&times;</span> vs measured <span class="n">3.2&times;</span></td>
+            <td>SPhase multiplies four maturation-dependent factors; after the G1/S fix CycE travels <span class="n">~36,000&times;</span></td>
+            <td><strong>Open.</strong> One problem, not two &mdash; flattening CycE addresses both</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout">
+      <span class="lab">Why this is the argument for Tier 2</span>
+      <code>&tau;</code> in a normalized-Hill model is a <em class="g">relaxation constant, not a duration</em>. Absolute durations, duration distributions, ploidy counting and FUCCI trace shape all need the mechanistic ODE.
+    </div>
+  </div>
+  <div class="foot">
+    <span>Both rejected fixes are recorded in TODO.md with their numbers</span>
+    <span class="src">model/TODO.md &sect;1</span>
+  </div>
+</section>
+
+<!-- ==================== 11 · THE PREDICTION ==================== -->
+<section class="slide" data-mv="Results" data-notes="This is the payoff. In-silico double knockdown of E2f7 and E2f8: the pro-division effect is about <b>22&times; larger at P0 than at P7</b>. And the interesting part is that the knockdown raises Ect2 substantially at <b>both</b> ages &mdash; plus 0.45 and plus 0.26. The machinery goes up either way; only at P0 is the rest of the context permissive enough to convert it. There's real epistasis too &mdash; the double is not the sum of the singles &mdash; which matters because our data <b>is</b> a double knockout. Now pre-empt the obvious question: our observed cycling fractions go up at P7, not P0. That's not a contradiction &mdash; this is a claim about <b>conversion to division</b>, not about entry, and entry rises at both ages in the model too.">
+  <div>
+    <p class="eyebrow"><span class="tag">10</span><span>Result &mdash; the prediction</span></p>
+    <h2 class="head">Our knockout converts at P0, and barely at P7</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-7-5">
+      <figure>
+        <div class="frame"><!--FIG10--></div>
+      </figure>
+      <div class="stack">
+        <ul class="pts">
+          <li class="hi"><strong>Division <span class="n">+0.107</span> at P0 vs <span class="n">+0.005</span> at P7</strong> &mdash; a <span class="n">22&times;</span> difference</li>
+          <li><strong>Ect2 rises at both</strong> (<span class="n">+0.448 / +0.258</span>). The machinery goes up either way; only P0 converts it</li>
+          <li>Real <strong>epistasis</strong> &mdash; the double is not the sum of the singles (<span class="n">+0.18</span> on Ect2 at P0). Our data <em class="g">is</em> a double</li>
+        </ul>
+        <div class="callout warn">
+          <span class="lab">Pre-empt this</span>
+          Our observed cycling is up at <em class="g">P7</em>, not P0. Not a contradiction: this is a claim about <strong>conversion to division</strong>, not entry &mdash; and entry rises at both ages here too (<span class="n">+0.160 / +0.082</span>).
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>An entry-scored readout would call this a hit at both ages &mdash; which is the point</span>
+    <span class="src">model_results.json &rarr; ko &middot; fig10</span>
+  </div>
+</section>
+
+<!-- ==================== 12 · NEXT ==================== -->
+<section class="slide" data-mv="Next" data-notes="One bench experiment that could kill the central claim in a week, one that tests whether there's a threshold, and one data change that unblocks everything else. On the Ect2 rescue &mdash; clonidine alone gives <b>zero</b> midbodies in more than ten thousand cells. If Ect2 is genuinely rate-limiting, adding it back should produce them. If it doesn't, the block is somewhere else and I need to know that. And the third one is the cheapest: only 29 of 63 model node genes are in our curated panel, so most of the model cannot be scored on our own cells. Widening the panel is the single change that would let our KO data validate the network rather than just its E2F layer.">
+  <div>
+    <p class="eyebrow"><span class="tag">11</span><span>What would settle it</span></p>
+    <h2 class="head">Two experiments would falsify this; one panel change unblocks our own cells</h2>
+  </div>
+  <div class="body">
+    <div class="cards">
+      <div class="card">
+        <h3>Ect2 rescue</h3>
+        <p>Ect2 overexpression &plusmn; clonidine in mouse neonatal CM. Readout: AurKB&#8314; midbody count.</p>
+        <p>Clonidine alone gives <strong>zero midbodies in &gt;10,000 cells</strong>. If Ect2 is rate-limiting, this should produce them.</p>
+        <div class="kill"><b>Falsified if</b> no midbodies appear &mdash; the block is elsewhere (Anln, Cep55, or non-transcriptional).</div>
+      </div>
+      <div class="card" style="border-top-color:var(--s2)">
+        <h3>Is there a critical M*?</h3>
+        <p>Same clonidine dose in vivo at P1 vs P7. Read cardiomyocyte number, mononucleation, ploidy, midbodies.</p>
+        <p>Tests the central claim directly: above some maturation, added entry cannot add cardiomyocytes.</p>
+        <div class="kill"><b>Falsified if</b> CM number scales with entry at every maturation level.</div>
+      </div>
+      <div class="card" style="border-top-color:var(--s3)">
+        <h3>Widen the curated panel</h3>
+        <p>Only <strong>29 of 63</strong> model node genes are in the 2,181-gene panel. E2f2&ndash;E2f6, Rb1, Ccng1, Pkmyt1, Rhoa all missing.</p>
+        <p>No new experiment &mdash; a rebuild of the bundle.</p>
+        <div class="kill"><b>Unblocks</b> scoring the whole network on our own cells, not just its E2F layer.</div>
+      </div>
+    </div>
+  </div>
+  <div class="foot">
+    <span>Full ranked list &mdash; seven proposed experiments &mdash; in <code>model/TODO.md</code></span>
+    <span class="src">press <kbd>&rarr;</kbd> for appendix &middot; <kbd>N</kbd> for notes</span>
+  </div>
+</section>
+
+<!-- ==================== A1 · PREFLIGHT ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="Answer to: &lsquo;how do you know two papers in different species are even compatible?&rsquo; Four closed-form functionals of the same cycle constrain each other. Six checks, no solver, and two of them flag real tensions. The best one: clonidine's Ki-67 rose 2.12&times; but cumulative EdU rose 2.78&times;. Because EdU saturates, a rate increase <b>always</b> gives fold(EdU) below fold(Ki-67). The observation has the opposite ordering, so it cannot be a rate change at all. What survives is that Ki-67 decays in arrested cells while the EdU label persists &mdash; making that ratio positive evidence for non-productive cycling.">
+  <div>
+    <p class="eyebrow"><span class="tag">A1</span><span>Appendix &mdash; cross-paper consistency</span></p>
+    <h2 class="head">Check the papers against each other before modelling anything</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-6-6">
+      <figure><div class="frame"><!--FIG6--></div></figure>
+      <div class="stack">
+        <div class="algebra">phase fraction &asymp; rate &times; duration
+Ki-67 index    &asymp; rate &times; dwell   <b>(linear)</b>
+cumulative EdU =  1 &minus; e^(&minus;rate&middot;window) <b>(sublinear)</b>
+&Delta;EdU &asymp; &Delta;Binuc + &Delta;Poly + 2&middot;&Delta;Div</div>
+        <ul class="pts">
+          <li class="hi"><strong>Hidden arrested pool.</strong> Imaging implies <span class="n">2.20%</span> mVenus&#8314;; flow saw <span class="n">5.10%</span> &rarr; apparent S/G2/M of 38.1 h. The reported 24.5 h is a right-censored lower bound</li>
+          <li><strong>Mouse arm self-consistent, nothing fitted.</strong> Predicts <span class="n">32.8%</span> cumulative EdU vs observed <span class="n">25.54%</span> &mdash; <span class="n">1.28&times;</span></li>
+          <li><strong>Wrong sign for a rate change.</strong> Ki-67 <span class="n">2.12&times;</span> but EdU <span class="n">2.78&times;</span>. EdU saturates, so this ordering is impossible for any rate effect &mdash; evidence <em class="g">for</em> non-productive cycling</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>Six checks, two flag a real tension</span><span class="src">cmcycle.preflight &middot; fig6</span></div>
+</section>
+
+<!-- ==================== A2 · SORT ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="Have this up before anyone finishes the sentence. If you read a cycling fraction off the Baniol Smart-seq2 data you get the developmental direction <b>backwards</b>. P0 is essentially unenriched; P7 is 4.5 to 5.2-fold enriched by the sort. So the raw cycling fraction rises from P0 to P7 in the data and falls in reality. Only within-group expression contrasts are valid here &mdash; phase and cycling fractions must come from Baniol's imaging, never from these cells.">
+  <div>
+    <p class="eyebrow"><span class="tag">A2</span><span>Appendix &mdash; caveat</span></p>
+    <h2 class="head">Cycling fractions in this dataset are a sorting artefact</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-6-6">
+      <figure><div class="frame"><!--FIG7--></div></figure>
+      <div class="stack">
+        <ul class="pts">
+          <li>P0 essentially unenriched &mdash; <span class="n">32.4%</span> observed vs <span class="n">32.5%</span> expected in vivo</li>
+          <li class="hi">P7 is <strong><span class="n orange">4.5&ndash;5.2&times; enriched</span></strong> &mdash; <span class="n">45.0%</span> vs <span class="n">8.7&ndash;10.0%</span></li>
+          <li><strong>So the raw cycling fraction rises P0&rarr;P7 in the data and falls in reality.</strong></li>
+        </ul>
+        <div class="callout warn">
+          <span class="lab">What this bounds</span>
+          Only <strong>within-group expression contrasts</strong> are valid on these cells. Phase and cycling fractions must come from Baniol's imaging. This is exactly why lane B contributes topology only.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>Baniol 2021 FACS-sorted Smart-seq2</span><span class="src">results.json &rarr; sort_enrichment &middot; fig7</span></div>
+</section>
+
+<!-- ==================== A3 · CIRCULARITY ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="The guaranteed question: &lsquo;isn't Ect2 circular?&rsquo; The answer is good, so say it fast and move on. Ect2 and E2f8 <b>are</b> in the Regev/Tirosh lists behind the phase caller. But our findings live on the P0-to-P7 within-cycling axis, which is not circular in the same way &mdash; and critically the residual bias runs <b>against</b> the result: selecting cells called G2M enriches for high Ect2 in <b>both</b> groups, which compresses the difference we're reporting. The clean comparators are all outside the lists.">
+  <div>
+    <p class="eyebrow"><span class="tag">A3</span><span>Appendix &mdash; &ldquo;isn't Ect2 circular?&rdquo;</span></p>
+    <h2 class="head">Yes, partly &mdash; and the residual bias runs against our result</h2>
+  </div>
+  <div class="body">
+    <ul class="pts">
+      <li><code>Ect2</code> (G2/M) and <code>E2f8</code> (S) <strong>are</strong> in the Regev/Tirosh lists behind <code>scanpy.tl.score_genes_cell_cycle</code> &mdash; among 21 panel genes. So cycling-vs-noncycling contrasts are partly self-fulfilling for those genes</li>
+      <li class="hi"><strong>But our findings live on the P0&rarr;P7 within-cycling axis</strong>, which is not circular in the same way &mdash; and the residual bias runs <strong>against</strong> the Ect2 result: selecting cells <em class="g">called</em> G2M enriches for high Ect2 in <em class="g">both</em> groups, compressing the difference we report</li>
+      <li>The clean comparators &mdash; <code>RhoA</code>, <code>Racgap1</code>, <code>Cep55</code>, <code>Ccnb1</code>, <code>Ccna2</code> &mdash; are all <strong>outside</strong> the lists</li>
+      <li>Quantified on the KO data: E2f8 carries <span class="n">0.15&ndash;0.54%</span> of the S-set mean, changes the call for <span class="n">0.9%</span> of cells, and shifts the KO&minus;WT cycling gap by <span class="n">&le;0.5 pp</span></li>
+    </ul>
+    <div class="callout">
+      <span class="lab">Why the audit still mattered</span>
+      It was a false alarm &mdash; but the audit is what established that, and it is what tells us which comparators are safe to lean on.
+    </div>
+  </div>
+  <div class="foot"><span>Circularity audit, run before any claim was made</span><span class="src">cmcycle.baniol &rarr; circularity_audit</span></div>
+</section>
+
+<!-- ==================== A4 · E2F FAMILY ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="This independently reproduces and quantifies every E2F claim in Baniol's paper. Three roles: E2f1, 7 and 8 are cycling-restricted. E2f2 is near-absent unless cycling and rises with maturation &mdash; the endoreplication candidate. E2f6 is the <b>only</b> member expressed in noncycling cells, reaching 0.38 in 100% of noncycling P7 ventricular cells &mdash; the exit enforcer. The load-bearing detail for us: E2f7 is <b>flat</b> across maturation while E2f8 rises, so they must be separate nodes. And E2f1 correlates with both at about 0.49 and 0.46, supporting the delayed-feedback arm &mdash; which is precisely the arm our knockout removes.">
+  <div>
+    <p class="eyebrow"><span class="tag">A4</span><span>Appendix &mdash; the E2F layer</span></p>
+    <h2 class="head">The E2F family splits into three roles</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-6-6">
+      <figure><div class="frame"><!--FIG5--></div></figure>
+      <div class="stack">
+        <ul class="pts">
+          <li><strong>E2f1/7/8</strong> &mdash; cycling-restricted</li>
+          <li><strong>E2f2</strong> &mdash; near-absent unless cycling, rises with maturation (t = <span class="n">+2.18</span>). The endoreplication candidate</li>
+          <li><strong>E2f6</strong> &mdash; the only member expressed in noncycling cells, reaching 0.38 in <span class="n">100%</span> of noncycling P7 vCM (t = <span class="n">+4.12</span>). The exit enforcer</li>
+          <li class="hi"><strong>E2f7 is flat</strong> across maturation (t = <span class="n">&minus;0.20</span>) <strong>while E2f8 rises</strong> (t = <span class="n">+2.28</span>) &mdash; so they must be separate model nodes</li>
+        </ul>
+        <div class="callout">
+          <span class="lab">Edges tested before wiring them</span>
+          E2f1~E2f7 <span class="n">+0.49</span>, E2f1~E2f8 <span class="n">+0.46</span> &mdash; the delayed-feedback arm, precisely the arm our KO removes. E2f1~E2f6 <span class="n">+0.18 n.s.</span>, so E2f6 sits on its own maturation branch. E2f8~Ccna2 <span class="n">&minus;0.56</span> confirms E2F8 is G1/S-restricted.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>Spearman, cycling ventricular CM, n = 89</span><span class="src">results.json &rarr; e2f, edges &middot; fig5</span></div>
+</section>
+
+<!-- ==================== A5 · KO FUNCTIONAL ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="&lsquo;Wait &mdash; the transcripts went <b>up</b>?&rsquo; Yes, and that's the expected signature rather than evidence against the knockout. E2f7 and E2f8 mRNA are higher in KO than WT. But check the targets: 24 of 26 canonical E2F targets are significantly up at P7, median log2 fold-change plus 0.91, against a housekeeping and sarcomeric baseline of plus 0.19. The regulon activity says the same thing. The mechanism is the feedback loop itself &mdash; E2f1, 7 and 8 are all E2F1-induced, so losing the repressors' <b>protein</b> function raises E2F1 activity, which transcriptionally induces all three. So the README's &lsquo;KO not transcript-confirmed&rsquo; should be restated: not transcript-<b>null</b>, but functionally confirmed.">
+  <div>
+    <p class="eyebrow"><span class="tag">A5</span><span>Appendix &mdash; &ldquo;the transcripts went up?&rdquo;</span></p>
+    <h2 class="head">The knockout is functionally real; the elevation is the expected signature</h2>
+  </div>
+  <div class="body">
+    <ul class="pts">
+      <li>E2f7 and E2f8 mRNA are <em class="g">higher</em> in KO than WT &mdash; log2FC <span class="n">+0.82</span> and <span class="n">+1.57</span> at P7, both p &lt; 1e&minus;10. Which looks alarming until you check the targets</li>
+      <li class="hi"><strong><span class="n aqua">24 of 26</span> canonical E2F targets significantly up at P7</strong> (median log2FC <span class="n">+0.91</span>) against a housekeeping/sarcomeric baseline of <span class="n">+0.19</span>. At P0, 20 of 26 (median <span class="n">+0.50</span>) against <span class="n">&minus;0.02</span></li>
+      <li>decoupleR <code>HALLMARK_E2F_TARGETS</code> regulon activity, cardiomyocytes: KO&minus;WT = <span class="n">+1.12</span> at P0 and <span class="n">+3.15</span> at P7</li>
+    </ul>
+    <div class="callout">
+      <span class="lab">The mechanism is the feedback loop itself</span>
+      E2f1/7/8 are all E2F1-induced. Losing the repressors' <strong>protein</strong> function raises E2F1 activity, which transcriptionally induces all three &mdash; exactly the delayed-negative-feedback arm validated in the Baniol data (E2f1~E2f7 &rho; = <span class="n">+0.49</span>). So &ldquo;KO not transcript-confirmed&rdquo; should be restated: <strong>not transcript-null, and functionally confirmed.</strong>
+    </div>
+  </div>
+  <div class="foot"><span>Supersedes the caveat currently in the repo README</span><span class="src">ko_export/tbl_e2f_regulon.csv &middot; RESULTS.md &sect;8</span></div>
+</section>
+
+<!-- ==================== A6 · ENGINE ==================== -->
+<section class="slide" data-mv="Appendix" data-notes="The answer to &lsquo;how do I know this isn't overfit?&rsquo; is really a process answer. Per reaction, reactants combine by AND. Per <b>node</b>, every reaction pointing at it combines by weighted OR &mdash; and because OR can only <b>add</b> drive, no route can ever be vetoed by another. That single property produced the same class of bug <b>four separate times</b>. The worst one: an OR'd Midbody route bypassed the obligatory Ect2/RhoA arm entirely, which made it structurally <b>impossible</b> for Ect2 to be rate-limiting &mdash; the model could not have expressed its own central claim. Making RhoA obligatory widened the arm from 1.6&times; to 42&times;, and only then did it behave as designed. A passing test suite would have hidden all four.">
+  <div>
+    <p class="eyebrow"><span class="tag">A6</span><span>Appendix &mdash; the engine</span></p>
+    <h2 class="head">One property of the formalism produced the same bug four times</h2>
+  </div>
+  <div class="body">
+    <div class="cols c-6-6">
+      <figure><div class="frame"><!--FIG11--></div></figure>
+      <div class="stack">
+        <ul class="pts">
+          <li><strong>Per reaction</strong>, reactants combine by <strong>AND</strong>; the <code>(w, n, EC50)</code> triple belongs to the reaction, not the reactant</li>
+          <li class="hi"><strong>Per node</strong>, every reaction combines by <strong>weighted OR</strong> &mdash; and OR can only <em class="g">add</em> drive, so <strong>no route can be vetoed by another</strong></li>
+          <li>An inhibitor therefore has to be an <strong>AND term inside a reaction</strong>, never a separate reaction. Get that wrong and you silently create a floor</li>
+        </ul>
+        <div class="callout warn">
+          <span class="lab">The worst instance</span>
+          An OR'd Midbody route bypassed the obligatory Ect2/RhoA arm entirely &mdash; making it structurally <strong>impossible</strong> for Ect2 to be rate-limiting. The model could not express its own central claim. Making RhoA obligatory widened the arm <span class="n">1.6&times; &rarr; 42&times;</span>. A passing test suite would have hidden all four instances.
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span>Knockdown is <code>Ymax&rarr;0</code>; overexpression holds <code>Y=1</code></span><span class="src">cmcycle/logic.py &middot; fig11</span></div>
+</section>
+
+</div>
+
+<div id="counter"></div>
+<div id="movement"></div>
+<div id="notes"><span class="nlab">Speaker notes</span><p id="notes-body"></p></div>
+<div id="help"><div>
+  <h3>Deck controls</h3>
+  <dl>
+    <dt>&rarr; &darr; Space</dt><dd>Next slide</dd>
+    <dt>&larr; &uarr;</dt><dd>Previous slide</dd>
+    <dt>Home / End</dt><dd>First / last slide</dd>
+    <dt>1&ndash;9</dt><dd>Jump to slide</dd>
+    <dt>N</dt><dd>Toggle speaker notes</dd>
+    <dt>? or H</dt><dd>This help</dd>
+    <dt>Esc</dt><dd>Close</dd>
+  </dl>
+  <p style="margin-top:1.4rem;color:var(--mut);font-size:.85rem">Print to PDF for a handout &mdash; each slide becomes one page.</p>
+</div></div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var rail = document.getElementById('rail');
+  var counter = document.getElementById('counter');
+  var movement = document.getElementById('movement');
+  var notesBody = document.getElementById('notes-body');
+  var i = 0;
+
+  slides.forEach(function(){ var s=document.createElement('i'); s.style.flex='1'; rail.appendChild(s); });
+  var ticks = Array.prototype.slice.call(rail.children);
+
+  function show(n){
+    i = Math.max(0, Math.min(slides.length-1, n));
+    slides.forEach(function(s,k){ s.classList.toggle('on', k===i); });
+    ticks.forEach(function(t,k){ t.classList.toggle('done', k<=i); });
+    counter.textContent = String(i+1).padStart(2,'0') + ' / ' + slides.length;
+    movement.textContent = slides[i].dataset.mv || '';
+    notesBody.innerHTML = slides[i].dataset.notes || '<em>No notes for this slide.</em>';
+    if (location.hash !== '#'+(i+1)) history.replaceState(null,'','#'+(i+1));
+  }
+
+  document.addEventListener('keydown', function(e){
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (document.body.classList.contains('help-on') && k !== '?' && k !== 'h' && k !== 'H'){
+      if (k === 'Escape'){ document.body.classList.remove('help-on'); e.preventDefault(); }
+      return;
+    }
+    if (k === 'ArrowRight' || k === 'ArrowDown' || k === ' ' || k === 'PageDown'){ show(i+1); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp'){ show(i-1); e.preventDefault(); }
+    else if (k === 'Home'){ show(0); e.preventDefault(); }
+    else if (k === 'End'){ show(slides.length-1); e.preventDefault(); }
+    else if (k === 'n' || k === 'N'){ document.body.classList.toggle('notes-on'); e.preventDefault(); }
+    else if (k === '?' || k === 'h' || k === 'H'){ document.body.classList.toggle('help-on'); e.preventDefault(); }
+    else if (k === 'Escape'){ document.body.classList.remove('help-on'); document.body.classList.remove('notes-on'); }
+    else if (/^[1-9]$/.test(k)){ show(parseInt(k,10)-1); e.preventDefault(); }
+  });
+
+  // Printing a deck should always come out light — a dark-mode OS would
+  // otherwise render the figures' dark tokens onto white paper.
+  window.addEventListener('beforeprint', function(){
+    document.documentElement.setAttribute('data-theme','light');
+    slides.forEach(function(s){ s.classList.add('on'); });
+  });
+  window.addEventListener('afterprint', function(){
+    document.documentElement.removeAttribute('data-theme');
+    show(i);
+  });
+  if (/[?&]theme=light/.test(location.search)) document.documentElement.setAttribute('data-theme','light');
+  if (/[?&]print/.test(location.search)) slides.forEach(function(s){ s.classList.add('on'); });
+
+  var start = parseInt((location.hash||'').replace('#',''),10);
+  show(isNaN(start) ? 0 : start-1);
+  if (/[?&]print/.test(location.search)) slides.forEach(function(s){ s.classList.add('on'); });
+})();
+</script>

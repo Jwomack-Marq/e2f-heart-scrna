@@ -445,14 +445,36 @@ contexts through the **ROS → DDR → Ccng1/Pkmyt1** arm, which collapses mitot
 entry (0.293 in vitro versus 0.591 in vivo) and so routes the flux to
 polyploidization rather than binucleation.
 
-**What it gets wrong, and this is the largest quantitative miss:** the entry-response
-magnitude. 1.72× at hiPSC against an observed 2.44× is fine; **6.3× and 8.8× in the
-two mature contexts against observed 2.12× and 1.52× is not.** The cause is
-diagnosed: clonidine's leverage on entry runs through relief of the PKA brake, and
-baseline PKA scales with β-adrenergic tone, which the model raises steeply with
-maturation — so the *relative* effect of removing it is largest exactly where the
-data says it should be smallest. This is pinned by a test so a fix shows up as a
-test change rather than a silent improvement.
+**What it gets wrong, and what fixing it took.** The first version over-predicted the
+entry response badly — 6.3× and 8.8× in the mature contexts against 2.12× and 1.52×.
+Chasing that down found the real defect: **the Rb–E2F restriction point was present,
+wired, and contributing almost nothing.** E2F1 spanned 1.4× and CycE 1.2× across every
+context while entry spanned 142×, so all of the variation came from the CKI brakes inside
+one reaction, downstream of the switch. Nothing upstream reached entry — ERK and
+Autophagy 1.00×, CycD 1.10× — which is *why* clonidine's effect had to be wired directly
+onto the S-phase reaction as `!PKA`.
+
+Three changes fixed it. The three restriction-point reactions were **gate-shaped**: they
+were the only graded ones in a model whose two downstream gates are steep, so the most
+famous switch in the cell cycle was the only one built as an interpolation, and it could
+not hold a fold. An **OR'd CycE leg** (`E2F2 & Maturation => CycE`) that cancelled the
+switch's travel was removed, and E2F2 re-cast as an AND-term brake on mitotic competence
+— which is what Baniol actually propose, since E2f2 is their pro-progression factor in
+*endoreplicating* cells, and "S-phase yes, mitosis no" is exactly that. And CycD's drive
+was scaled 0.70× to put the fold inside the context range.
+
+Result: **E2F1 travel 1.4× → 25.9×**, Rb 0.14 → 0.92 across contexts, the triad still
+**3/3**, Ect2 still rate-limiting, and the mean clonidine fold error **236% → 26%** with
+the two mature contexts nearly exact (2.13× vs 2.12×,
+1.83× vs 1.52×).
+
+The failure moved to the other end: hiPSC is now 1.02× against
+an observed 2.44×. At low maturation the restriction point is already open, so relieving a
+brake cannot open it further — arguably right for a permissive immature cell, and it means
+clonidine's real effect there arrives through something other than the switch. Two other
+residuals are recorded in TODO: the five comparators drifted 28%, uniformly, tracking
+E2Fact's own 29% fall; and CycE now spans ~36,000×, which is defensible for an adult
+cardiomyocyte but suggests the fold sits near the edge of its useful range.
 
 ### 7.5 The lab's own knockout, and what else to try
 

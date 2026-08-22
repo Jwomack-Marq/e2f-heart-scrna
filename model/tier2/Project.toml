@@ -1,0 +1,49 @@
+name = "CmTier2"
+uuid = "be3b3837-815d-4cfa-b7ec-341fdad28a7b"
+authors = ["Justin Womack <justin.womack@marquette.edu>"]
+version = "0.1.0"
+
+# Inherited core: Cell_Cycle_Model (Womack, MIT). Tier 2 adds the cardiomyocyte
+# fate layer on top. See ../MODEL.md and ../TODO.md item 3.
+#
+# The source repo's Project.toml declared no name/uuid/[compat] and omitted seven
+# packages its scripts actually `using` (Plots, CSV, Optim, LsqFit, Interpolations,
+# StatsPlots, IterTools), which resolved from the author's global v1.11 environment.
+# Everything Tier 2 needs is declared here.
+
+[deps]
+ComponentArrays = "b0b7db55-cfe3-40fc-9ded-d10e2dbeff66"
+DifferentialEquations = "0c46a032-eb83-5123-abaf-570d42b7fbaa"
+FindPeaks1D = "d8961e24-b28b-4efb-8e50-1c680b9a7431"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[compat]
+# The checked-in Manifest.toml is copied from the published model's own resolved
+# environment, so the whole solver stack matches what its figures were produced with.
+# Phase 0's golden test asserts the ported model reproduces published behaviour, which
+# makes the solver stack part of the contract, not an implementation detail.
+#
+# This matters concretely: OrdinaryDiffEqCore 2.x breaks Rosenbrock23's LU factorisation
+# when the jacobian is a ComponentMatrix (`TypeError in setfield!`), and
+# AutoTsit5(Rosenbrock23()) — the integrator every published script uses — switches into
+# Rosenbrock23 on this stiff system. Resolving freely picks up 2.x and the model will not
+# run at all. Instantiate from the Manifest; do not `Pkg.update()` without re-running the
+# golden test.
+ComponentArrays = "=0.15.29"
+DifferentialEquations = "=7.16.1"
+FindPeaks1D = "0.1"
+DataFrames = "1"
+StatsBase = "0.34"
+julia = "1.11"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

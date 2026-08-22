@@ -97,6 +97,76 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
 - **`build_refmap.R`** — reference-marker annotation concordance → `app$refmap`, drives
   the **Annotation check** tab (Help menu). A marker-signature check, not Seurat anchor
   transfer.
+- **`build_fourgroup.R`** — the four-group (WT-P0 / WT-P7 / KO-P0 / KO-P7) analysis within
+  CM subclusters → `app$fourgroup`, driving the **Four-group (WT/KO × P0/P7)** and
+  **Maturation ∩ P7 KO** tabs. Per-subcluster cell counts, cell-cycle phase composition,
+  maturation-score summaries, descriptive Wilcoxon DE for four contrasts × two phase strata,
+  a gene-level maturation axis, and its intersection with the P7 KO response. Also adds a
+  `cm_subcluster` column to `app$meta`, which makes CM subcluster a filter in the
+  **Subset & DEGs** tab and a colour/split option on the UMAP.
+  Must run **after** `build_signature_scores.R` — it consumes the `sig_*` columns.
+
+  Two design points worth knowing:
+  - **P0-vs-P7 contrasts are phase-matched by default.** P7 was FACS cycling-enriched
+    4.5–5.2× and P0 essentially unenriched, so a raw P0-vs-P7 contrast reads out the sort
+    as much as development. Every contrast exists in a `G1` stratum (the app's default) and
+    an `all` stratum (raw, labelled sort-confounded in the UI).
+  - **The maturation axis is cycle-free.** `sig_maturation`'s immature program contains
+    `Mki67` / `Top2a` / `Ccnd1`, so using it to argue "less mature ⇒ more cycling-competent"
+    would be partly circular. `build_signature_scores.R` now also emits
+    `sig_maturation_nocc` (those three dropped) and the intersection defaults to it.
+
+  It ships **two DE grids** over the same contrasts, because the two available matrices
+  trade against each other and neither wins outright. `app$fourgroup$de` uses the broad
+  matrix (~24k genes, but a downsampled ~5.8k CM cells, so CM2's KO-P0 arm falls to 9
+  cells and drops out and CM4/CM9 lose their G1 strata); `app$fourgroup$de2` uses the
+  curated panel (2,181 genes but all 21,598 CM cells, so every contrast runs). Build the
+  second with `Rscript shiny_app/build_fourgroup.R --de2` **after** the main run — it
+  recomputes only the DE grid and leaves the rest of the slot alone. The app offers both
+  as a "DE matrix" choice and, when a contrast is missing from one, says whether the
+  other has it. Across the four priority subclusters this takes coverage of the twelve
+  requested contrasts from 7/12 to 12/12.
+
+  The app's **Gene-set Venn** tab crosses any two or three of these sets — DE contrasts,
+  the maturation/metabolic/cycling axes, the intersection quadrants, or the curated panels —
+  and reports every pairwise overlap against its chance expectation, because a Venn on its
+  own hides the threshold that built each set, the direction of change, and the null. Its
+  cycling circle defaults to the **curated canonical** genes rather than the data-driven
+  axis: the axis calls 531 genes cycling-associated but only 46 are canonical, the rest
+  being largely housekeeping (`Ran`, `Nap1l1`, `Calm1`, `Ppia`) because cycling cells are
+  globally more transcriptionally active. The universe used for the hypergeometric is the
+  tested gene space (`app$deg_genes` or the curated panel), **not** the gated DE tables —
+  those exclude expressed-but-unchanging genes, which is exactly what a universe needs.
+
+  Arms too thin to support a contrast are flagged rather than silently reported — note that
+  an arm can clear the 10-cell floor overall and still be a handful of cells once restricted
+  to G1 (CM2's KO-P0 arm is 31 cells, ~12 of them G1).
+
+  It also emits **`app$fourgroup$geneaxes`**, the gene map behind the *Gene map* sub-tab of
+  **Maturation & metabolism**. Every gene gets two coordinates, each an AUC from a tertile
+  split of the cells computed **within each timepoint and averaged** (so neither axis becomes
+  a restatement of P0-vs-P7, which the cycling sort confounds):
+
+  - `mat_auc` — how strongly the gene marks mature vs immature cardiomyocytes
+  - `met_auc` — how strongly it marks oxidative (FAO) vs glycolytic metabolism
+
+  plus `quadrant`, `distance` from the centre (the ranking of how strongly a gene defines
+  the joint program), and `in_score_set`. Three things are easy to get wrong here:
+
+  - **The axes split at each one's median, not at 0.5.** `wilcoxauc`'s AUC carries a small
+    global offset because the two tertile groups differ in detection rate (here mat +0.009,
+    met −0.014). Most genes sit within ~0.02 of the median, so splitting at a hard 0.5 put
+    65% of them in a single corner — an artifact, not biology. The centre is stored on the
+    table as `attr(geneaxes, "centre")`.
+  - **The axes use a looser row gate than the DE tables** (expression level only, no
+    significance requirement). The DE gate exists to keep 77 tables small; applying it to the
+    axes dropped Gapdh, Aldoa, Pgk1, Eno1, Hk1 and Cpt1a off the map entirely. A gene with no
+    association belongs at the origin, not missing.
+  - **`in_score_set` flags circularity.** Genes inside the sets that define a score sit at the
+    extremes of their own axis by construction; the app hides them by default. `Cox6a2` is in
+    both `mat_mature` and `faox`, so it is doubly circular. With set genes hidden the
+    mature↔oxidative / immature↔glycolytic diagonal still holds 57% of genes (50% would mean
+    the two axes are independent), so the coupling is not an artifact of the inputs.
 
 Re-run order after `build_app_data.R` regenerates the bundle (each is idempotent and
 safe to skip; the app guards absent slots with a "run the builder" message):
@@ -108,8 +178,17 @@ Rscript shiny_app/build_signature_scores.R           # then compute + save
 Rscript shiny_app/build_communication.R
 Rscript shiny_app/build_refmap.R
 source("shiny_app/build_subcluster_enrichment.R")    # (existing) per-subcluster enrichment
+Rscript shiny_app/build_fourgroup.R --probe          # group sizes + size estimate, writes nothing
+Rscript shiny_app/build_fourgroup.R                  # then compute + save
+Rscript shiny_app/build_fourgroup.R --de2            # second DE grid on the curated panel
 # then: rsconnect::deployApp("shiny_app")
 ```
+
+`build_fourgroup.R` runs DE on the broad `app$deg_expr` matrix by default; pass
+`--matrix=curated` to use the full-cell curated panel instead, or `--seurat=<path>` to
+compute over all genes × all CM cells from the upstream Seurat object (the only route to a
+genome-wide DEG table — `deg_expr` is downsampled to ~8k cells, which thins the smaller
+subcluster arms considerably).
 
 ## History
 

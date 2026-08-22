@@ -1,23 +1,23 @@
 {
- "fingerprint": "6d8a80ab4fe20fd6",
+ "fingerprint": "e98b3d12c864ff09",
  "calibrated": {
   "SPhase": {
    "reaction": "r063",
-   "weight": 0.552662652800791,
+   "weight": 0.46978842734824866,
    "target": 0.0992,
-   "achieved": 0.09919999999205724
+   "achieved": 0.09919999999419819
   },
   "MitoticEntry": {
    "reaction": "r069",
-   "weight": 0.787022165604867,
+   "weight": 0.7891789398854598,
    "target": 0.7698,
-   "achieved": 0.7697999999134808
+   "achieved": 0.769800000074241
   },
   "Abscission": {
    "reaction": "r080",
-   "weight": 0.7094992044148967,
+   "weight": 0.7074757491936907,
    "target": 0.5028,
-   "achieved": 0.5028000000414337
+   "achieved": 0.502800000012174
   }
  }
 }

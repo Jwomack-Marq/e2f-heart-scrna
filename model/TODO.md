@@ -19,7 +19,7 @@ a stale one is easy to spot and drop.
   up at P7 against a housekeeping baseline near zero; HALLMARK_E2F_TARGETS regulon
   activity KO−WT = +1.12 (P0) and +3.15 (P7).
 - **Built and calibrated the Tier-1 logic network** (`cmfate`): 55 nodes, 78
-  reactions, stdlib-only, 51 tests. Reproduces the fit context to 1e-5 and gets
+  reactions, stdlib-only, 53 tests. Reproduces the fit context to 1e-5 and gets
   3/3 held-out clonidine outcomes.
 - **Fixed the screen's scoring.** Two errors, both flattering the model: the hit test
   was purely relative and applied at P7 where baseline entry is 0.27%, so a
@@ -29,6 +29,27 @@ a stale one is easy to spot and drop.
   10.5% hit rate against their 6.4%, and 25% of hits also raising the division
   share against their 2 of 6 — the model now agrees with the wet screen instead of
   contradicting it.
+- **Fixed the G1/S switch.** Three changes: the three restriction-point reactions
+  (`r044`, `r045`, `r060`) were gate-shaped — they were the only graded ones in a model
+  whose two downstream gates are steep, so the most famous switch in the cell cycle was
+  the only one built as an interpolation and could not hold a fold; an OR'd CycE leg
+  (`E2F2 & Maturation => CycE`) that cancelled the switch's travel was removed, and E2F2
+  re-cast as an AND-term brake on mitotic competence, which is what Baniol actually
+  propose; and CycD's drive was scaled 0.70× to put the fold inside the context range.
+  The `!PKA` shortcut came off the S-phase reaction, so entry is now driven *through*
+  the switch. Result: **E2F1 travel 1.4× → 25.9×**, CycE 1.2× → ~36,000×, Rb 0.14 → 0.92
+  across contexts, **triad still 3/3**, Ect2 still rate-limiting, and the mean
+  clonidine fold error **236% → 26%**.
+- **Found the OR'd-floor pathology a fourth time, in my own fix.** Adding E2F2's brake as
+  its own reaction *raised* mitotic competence, because a separate reaction can only add
+  through the weighted OR. An inhibitor has to be an AND term inside a reaction. That is
+  now stated in `r068`'s evidence column, since it has bitten this model four times.
+- **Fixed a third engine bug, found mid-diagnosis.** `_compiled()` cached the
+  flattened reaction list keyed on weights alone, so replacing a reaction to change
+  its reactants, `n` or `EC50` was silently ignored and the model kept running the
+  old structure. It invalidated a diagnosis and produced a conclusion that was wrong
+  in the opposite direction. Now keyed on weights *and* reaction identity, with the
+  mutation contract documented and a regression test.
 - **Fixed the two engine bugs** the old plan listed: the `EC50**n >= 0.5` sign
   inversion now raises, and `perturbation_matrix` takes a tuple so the double
   knockout is expressible.
@@ -37,16 +58,58 @@ a stale one is easy to spot and drop.
 
 ## Blocking — the model's known misses
 
-### 1. The entry-response magnitude is wrong at high maturation
-The model predicts a 6.3× and 8.8× rise in S-phase entry under clonidine in the two
-mature contexts, against observed 2.12× and 1.52×. (hiPSC is fine: 1.72× vs 2.44×.)
-Cause is diagnosed: clonidine acts by relieving the PKA brake, baseline PKA scales
-with β-adrenergic tone, and the model raises that tone steeply with maturation — so
-the *relative* effect of removing it is largest exactly where the data says it
-should be smallest. Candidate fixes: narrow the β-AR range across contexts, or move
-part of clonidine's entry effect off the PKA axis. Pinned by
-`test_entry_response_is_over_predicted_at_high_maturation` so a fix shows up as a
-test change rather than a silent improvement.
+### 1. Residual tensions from fixing the G1/S switch
+The switch is **fixed** — see the Done list for what changed and what it bought. Three
+things it left behind, in order:
+
+**The hiPSC drug response is under-predicted ~2× across every readout, and this now
+looks like a formalism ceiling rather than a missing edge.** Entry 1.02× against 2.44×,
+abscission 1.33× against a measured midbody doubling of 2.04×, division 1.29×. The
+*direction* is right everywhere; the magnitude is about half.
+
+Two hypotheses were tested and rejected:
+
+- **Autophagy ⊣ p21** (clonidine's documented mechanism is autophagy induction, and there
+  is literature on autophagic turnover of CDK inhibitors). It helps hiPSC — 1.02× → 1.49×
+  — but p21 is *higher* at high maturation (0.68 at mNCM versus 0.34 at hiPSC), so
+  relieving it helps the wrong end: mNCM blows out to 6.70×. Mean fold error 26% → 121%.
+- **The same, plus gating the drug on `!Maturation`** (motivated: Nisch, clonidine's I1
+  receptor, falls 1.277 → 1.047 with maturation at 100% detection — measured here and
+  still unused by the model). Better, 55%, but still worse than doing nothing.
+
+The reason is structural, and worth stating as a limit rather than a to-do. At hiPSC
+everything the drug could relieve is *already* near its operating maximum — the switch is
+open (Rb 0.14) and the brakes are low (p21 0.34, p27 0.02, Ccng1 0.10) — so relieving
+anything yields little. Every brake that *does* have headroom has more of it at high
+maturation. So **no re-wiring within this formalism can give a larger response at low
+maturation than at high**: gain is capped at the reaction weight, and there is nothing
+left to release.
+
+Two things follow. First, the comparison may be against the wrong observable: 2.44× is a
+Ki-67 index, and the pre-flight already established that Ki-67 carries a dwell-time
+component which a prevalence-only `Ki67` node cannot express — a drug that converts
+arrested cells into cycling ones raises the Ki-67 index without raising the entry rate.
+Notably the model does best against the one *cumulative* measurement it is judged on
+(in-vivo EdU, 1.83× against 1.52×). Second, this is a concrete argument for Tier 2, which
+has real rates and dwell times and can represent the difference.
+
+**Current configuration is the best found** — folds 1.02 / 2.13 / 1.83, mean error 26%,
+triad 3/3. Do not "improve" the hiPSC number by relieving a brake without re-checking the
+mature contexts; that trade has been measured and it loses.
+
+**The comparators drifted 28%.** All five move 27–28% between P0 and P7, uniformly,
+tracking E2Fact's own 29% fall — i.e. it is the switch working, not five bad edges. The
+test bound was raised from 25% to 35% with that reasoning written into it, and it now
+asserts *uniformity* rather than just magnitude. The real refinement: truly flat targets
+under a travelling E2F activity would need their reactions to saturate, so a 29% fall in
+input gives a small fall in output. Worth doing, and it would let the bound come back down.
+
+**CycE spans ~36,000× and the maturation slope of entry is ~4× too steep — one problem,
+not two.** `SPhase` multiplies four maturation-dependent factors (CycE and three brakes),
+so after the switch fix CycE's enormous travel compounds into far too steep a slope.
+Measured against Baniol (see item 6): their P0→P7 fall in genuinely cycling
+cardiomyocytes is 3.2×, the model's is ~13×. Flattening CycE's range would address both,
+and is the most concrete open item on the model itself.
 
 ### 2. Widen the curated gene panel
 Only **29 of 63** model node genes are in the 2,181-gene panel. E2f2–E2f6, Rb1,
@@ -95,14 +158,32 @@ needs numpy vectorisation of the RHS or a parallel sweep before it is worth star
 
 ## Calibration and validation
 
-### 6. Fit mouse, predict human
-Currently the reverse: the model is calibrated at hiPSC-CM and asked about mouse.
-Flipping it is a stronger test, because the mouse arm has the in-vivo FUCCI
-fractions and the P0/P7/P15 trajectory to hit. Hold out every hiPSC number and
-change only the maturation coordinate plus two literature constants. Pass criteria
-in advance: predicted fate fractions inside the binomial CI, and the *significance
-structure* of the durations reproduced (division ≈ binucleation, both < polyploid)
-— a harder and more meaningful criterion than matching three means.
+### 6. Fit mouse, predict human — attempted, and it found two things
+The flip could not be completed as planned, for an instructive reason: **the mouse target
+as naively defined is unreachable at any weight**, and that turned out to be a
+comparison error rather than a model error.
+
+Baniol's Fig 1D gives FUCCI *states*, so the naive cycling fraction (1 − mKO2⁺) is 32.5%
+at P0. But their own Suppl 1G shows only **22.7%** of the G1/S double-positives are Ki67⁺
+at P0 — the rest have prematurely exited, a distinction they draw explicitly and which
+this project recorded early and then failed to apply. Correcting with their own data:
+
+    mAG⁺ 12.36% (all Ki67⁺) + 22.7% of 19.1% + mitotic 1%  =  17.7%
+
+against a model ceiling of **17.2%** — a **1.03× match, with nothing fitted to it.** That
+is the strongest unfitted validation the model has, and it was hiding behind a
+mis-specified observable. Pinned by
+`test_the_mouse_in_vivo_cycling_level_is_reproduced_unfitted`.
+
+**What remains is the slope, not the level.** Corrected the same way, P7 is 5.5% observed
+against a 1.3% ceiling — 4.2× short — so the P0→P7 fall is 3.2× measured and ~13×
+modelled. That is the CycE over-swing in item 1, measured against data for the first
+time. Pinned by `test_the_maturation_slope_of_entry_is_too_steep`.
+
+Still worth doing properly once the slope is fixed: calibrate on the corrected mouse
+level and hold out all four hiPSC fate fractions. The pass criterion stays what it was —
+predicted fractions inside the binomial CI, and the *significance structure* of the
+durations reproduced rather than three means matched.
 
 ### 7. Sensitivity on the abscission switch — half done, and reassuring
 The switch position (`r080`: n=2.0, EC50=0.090) is a fitted quantity, not an
@@ -115,9 +196,16 @@ leaving entry untouched, and the hiPSC division share is pinned at 52.7% by
 construction. The conclusions are invariant across that range because the calibrated
 weight absorbs the change — which substantially de-risks the headline claim.
 
-Left: the range **above** 0.090 is untested (the run timed out), and an earlier probe
-showed the target becomes unreachable somewhere below EC50 = 0.16, so the upper
-boundary is the remaining gap. Also worth profiling `n`, not just EC50.
+Re-checked after the G1/S switch was fixed, since that changed E2Fact by 38× and the
+abscission arm hangs off it. The arm barely moved at the fit context — E2Fact 0.405 →
+0.406, Ect2 0.1807 → 0.1810, AbsRaw 0.1396 → 0.1402, all 1.00× — and its hiPSC-to-P1
+separation actually *improved*, 42× → 64×. So the profile is not invalidated and the
+switch still sits where it was positioned.
+
+Left: the range **above** EC50 = 0.090 is untested (that run timed out), the target
+becomes unreachable somewhere below 0.16, and `n` has not been profiled at all. Worth
+finishing, but lower priority than it looked — the arm is more robust to the core change
+than expected.
 
 ### 8. Negative controls — in place, keep it that way
 Not an open task: `test_negative_controls_do_not_move_with_maturation` already asserts
@@ -172,9 +260,13 @@ Ranked by how cleanly each could be run with assays both papers already use.
 3. **Propagate per-cell atrial/ventricular labels.** `cm_subtype` is declared in
    `CAT_COLS` in [app.R](../shiny_app/app.R) but absent from the bundle, so it is
    silently dropped; aCM/vCM exists only per-subcluster.
-4. **Add the sort-enrichment caveat to the About block.** Anyone reading cycling
-   fractions off a FACS-enriched dataset will get the developmental direction
-   backwards.
+   *Partly addressed:* `build_fourgroup.R` now writes a per-cell `cm_subcluster`
+   column, so res-0.2 subcluster is a first-class filter. The aCM/vCM label itself
+   is still per-subcluster only (CM11 is the sole atrial cluster).
+4. ~~**Add the sort-enrichment caveat to the About block.**~~ **Done** — the About
+   block now carries it, and `build_fourgroup.R` acts on it rather than only warning:
+   every P0-vs-P7 contrast is computed in a phase-matched (G1-only) stratum, which the
+   app shows by default, with the raw stratum labelled sort-confounded at the point of use.
 5. **Surface the model's predictions next to the data.** Now unblocked — Tier 1
    runs, and `model.e2f78_knockdown()` returns signed shifts per fate. The
    proliferation-versus-cytokinesis quadrant is already the right plot for it. Needs
@@ -184,11 +276,7 @@ Ranked by how cleanly each could be run with assays both papers already use.
 
 ## Housekeeping
 
-### 9. Nothing is committed
-`model/` is still untracked and `.gitignore` / `README.md` are modified in the working
-tree. 13 figures, 51 tests and the calibration cache are all sitting uncommitted.
-
-### 10. The pathway map is dense in the middle columns
+### 9. The pathway map is dense in the middle columns
 93 edges in one figure is legible on screen but marginal for a slide or print. If it
 is needed at that size, the natural split is two panels — stimulus → E2F, and
 machinery → outcome — rather than dropping edges.
