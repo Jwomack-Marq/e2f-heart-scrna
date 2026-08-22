@@ -271,20 +271,24 @@ enr_dt <- function(df, scroll = "320px") {
 }
 # ---- df-based enrichment plot cores (shared by the cell-type tab and the
 # per-subcluster tab so both render identically) --------------------------------
-gsea_barplot_gg <- function(d, ttl, topn = 20) {
+# up_lab/down_lab default to the KO-vs-WT wording the existing call sites use.
+# They are parameters because the four-group contrasts include WT: P0 vs P7,
+# where a legend reading "up in KO" is not a style question -- it is wrong.
+gsea_barplot_gg <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT") {
   validate(need(!is.null(d) && nrow(d), "No GSEA results for this selection."))
   d <- head(d[order(-abs(d$NES)), ], topn)
-  d$dir <- ifelse(d$NES > 0, "up in KO", "up in WT")
+  d$dir <- ifelse(d$NES > 0, up_lab, down_lab)
   d$pathway <- factor(d$pathway, levels = d$pathway[order(d$NES)])
   ggplot(d, aes(NES, pathway, fill = dir,
         text = paste0(pathway, "<br>NES: ", NES, "<br>padj: ", padj, "<br>size: ", size))) +
     geom_col() + geom_vline(xintercept = 0, color = "grey60") +
-    scale_fill_manual(values = c("up in KO" = "#c62828", "up in WT" = "#1565c0")) +
+    scale_fill_manual(values = setNames(c("#c62828", "#1565c0"), c(up_lab, down_lab))) +
     theme_minimal(base_size = 12) +
-    labs(x = "NES (>0 enriched toward KO-up)", y = NULL, fill = NULL, title = ttl)
+    labs(x = sprintf("NES (>0 enriched toward %s)", up_lab), y = NULL, fill = NULL, title = ttl)
 }
-gsea_barplot_df <- function(d, ttl, topn = 20)
-  ggplotly(gsea_barplot_gg(d, ttl, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+gsea_barplot_df <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT")
+  ggplotly(gsea_barplot_gg(d, ttl, topn, up_lab, down_lab), tooltip = "text") |>
+    layout(margin = list(l = 0, t = 40))
 go_dotplot_gg <- function(d, ttl, topn = 20) {
   validate(need(!is.null(d) && nrow(d), "No GO BP results for this selection."))
   d <- head(d[order(d$p.adjust), ], topn)
@@ -891,6 +895,36 @@ FG_SORT_NOTE <- paste(
   "the phase-matched (G1-only) stratum for this reason.")
 
 fg_ok <- function() validate(need(!is.null(FG), FG_MSG))
+
+# ---- four-group enrichment (build_fourgroup_enrichment.R) --------------------
+# GO + GSEA for the four-group contrasts specifically. Distinct from ENR$sub,
+# which is the same KO-vs-WT question POOLED across P0 and P7 -- that pooled
+# version cannot answer "what changes in the KO at P7", which is what was asked.
+FGE     <- app$enrich$fourgroup     # may be NULL on a bundle built before this
+FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
+                 "run build_fourgroup_enrichment.R and redeploy.")
+fg_enr_ok <- function() validate(need(!is.null(FGE) && !is.null(FGE$go), FGE_MSG))
+# One cluster x contrast x stratum slice. `kind` is "go" or "gsea".
+fg_enr_df <- function(kind, cluster, contrast, stratum, ont = "BP", direction = NULL) {
+  fg_enr_ok()
+  d <- FGE[[kind]]
+  validate(need(!is.null(d), FGE_MSG))
+  d <- d[d$cluster == cluster & d$contrast == contrast & d$stratum == stratum, , drop = FALSE]
+  if (kind == "go" && "ontology" %in% names(d)) d <- d[d$ontology == ont, , drop = FALSE]
+  if (!is.null(direction) && "direction" %in% names(d)) d <- d[d$direction == direction, , drop = FALSE]
+  d
+}
+# The audit row behind an empty result: an empty GO table means either "tested,
+# nothing passed" or "list too small to test", and those are different answers.
+fg_enr_why <- function(cluster, contrast, stratum, ont, direction) {
+  if (is.null(FGE) || is.null(FGE$audit)) return("")
+  a <- FGE$audit
+  a <- a[a$cluster == cluster & a$contrast == contrast & a$stratum == stratum &
+         a$ontology == ont & a$direction == direction, , drop = FALSE]
+  if (!nrow(a)) return("")
+  sprintf("%d genes in, %d-gene universe, selected by [%s].",
+          a$n_input[1], a$n_universe[1], a$input_rule[1])
+}
 # Two DE grids over the same contrasts, trading gene coverage against cell coverage.
 # Neither dominates: the broad matrix has ~24k genes but 8k cells, so CM2's KO-P0 arm
 # falls below the floor and CM4/CM9 lose their G1 strata; the curated matrix keeps all
@@ -1947,6 +1981,20 @@ ui <- page_navbar(
       conditionalPanel("input.fg_tabs == 'counts'",
         radioButtons("fg_count_mode", "Y axis",
                      c("% of subcluster" = "prop", "Cell count" = "count"), inline = TRUE)),
+      conditionalPanel("input.fg_tabs == 'enr'",
+        selectInput("fg_enr_cluster", "Subcluster", choices = NULL),
+        selectInput("fg_enr_contrast", "Comparison", choices = NULL),
+        radioButtons("fg_enr_stratum", "Cells used",
+                     c("All cells" = "all", "G1 only (phase-matched)" = "G1"), selected = "all"),
+        radioButtons("fg_enr_ont", "GO ontology",
+                     c("Biological process" = "BP", "Molecular function" = "MF",
+                       "Cellular component" = "CC"), selected = "BP", inline = TRUE),
+        numericInput("fg_enr_topn", "Terms to plot", 20, 5, 60, 5),
+        hr(),
+        div(downloadButton("fg_enr_book", "Download enrichment workbook (XLSX)",
+                           class = "btn-sm btn-outline-primary"), style = "margin-bottom:4px"),
+        helpText(tags$small("Every subcluster for this comparison: GO up, GO down, GSEA and the ",
+                            "coverage audit, one sheet each."))),
       conditionalPanel("input.fg_tabs == 'g1'",
         selectizeInput("fg_g1_clusters", "Subclusters", choices = NULL, multiple = TRUE),
         selectInput("fg_score", "Maturation / state score", choices = NULL),
@@ -2001,7 +2049,31 @@ ui <- page_navbar(
                    "rather than present throughout. Read it in the G1 stratum so cycling composition ",
                    "is held fixed and the gap cannot be the FACS enrichment."),
           dl_fig_ui("fgsumm"), plotOutput("fg_summary_plot", height = "420px"),
-          dl_data_ui("fg_summary_tab"), DTOutput("fg_summary_tab")))))),
+          dl_data_ui("fg_summary_tab"), DTOutput("fg_summary_tab"))),
+      nav_panel("Enrichment", value = "enr",
+        helpText("GO and pathway enrichment for the contrast selected in the sidebar, with the ",
+                 "two directions enriched ", strong("separately"), ". ",
+                 "This is not the same as the ", strong("Subcluster enrichment"), " tab under the ",
+                 "cardiomyocyte deep-dive, which pools P0 and P7 together — these are the ",
+                 "timepoint-specific contrasts.",
+                 br(), strong("Descriptive only — n = 1.")),
+        uiOutput("fg_enr_note"),
+        navset_card_tab(
+          nav_panel("GO — up",
+            dl_fig_ui("fgenrup"), plotlyOutput("fg_enr_up_plot", height = "440px"),
+            dl_data_ui("fg_enr_up_tab"), DTOutput("fg_enr_up_tab", height = "320px")),
+          nav_panel("GO — down",
+            dl_fig_ui("fgenrdn"), plotlyOutput("fg_enr_dn_plot", height = "440px"),
+            dl_data_ui("fg_enr_dn_tab"), DTOutput("fg_enr_dn_tab", height = "320px")),
+          nav_panel("GSEA",
+            dl_fig_ui("fgenrgsea"), plotlyOutput("fg_enr_gsea_plot", height = "440px"),
+            dl_data_ui("fg_enr_gsea_tab"), DTOutput("fg_enr_gsea_tab", height = "320px")),
+          nav_panel("Coverage audit",
+            helpText("One row per cluster × direction × ontology: how many genes went in, how big ",
+                     "the universe was, how many terms came out, and which selection rule fired. ",
+                     "Read this before concluding a direction is uninformative — an empty result ",
+                     "can mean the list was too small to test."),
+            dl_data_ui("fg_enr_audit_tab"), DTOutput("fg_enr_audit_tab", height = "420px"))))))),
 
   nav_panel("Maturation ∩ P7 KO", layout_sidebar(
     sidebar = sidebar(width = 320,
@@ -2942,6 +3014,122 @@ server <- function(input, output, session) {
       "'G1' sheets are phase-matched between the arms; 'all' sheets use every cell.")
   )
 
+  # ---- Four-group enrichment (precomputed by build_fourgroup_enrichment.R) ----
+  # Its own cluster/contrast selectors rather than reusing the DE tab's: you
+  # routinely want to read the DE table for one subcluster while comparing
+  # enrichment across another, and sharing the inputs would couple them.
+  observe({
+    cc <- fg_cluster_choices()
+    if (!length(cc)) return()                       # un-rebuilt bundle: leave empty
+    avail <- if (!is.null(FGE$go)) unique(FGE$go$cluster) else character(0)
+    sel   <- if (length(avail)) cc[cc %in% avail] else cc
+    updateSelectInput(session, "fg_enr_cluster", choices = sel,
+                      selected = if ("CM2" %in% sel) "CM2" else sel[1])
+    updateSelectInput(session, "fg_enr_contrast", choices = fg_contrast_choices(),
+                      selected = "P7_KO_vs_WT")
+  })
+  fg_enr_args <- reactive({
+    req(input$fg_enr_cluster, input$fg_enr_contrast, input$fg_enr_stratum)
+    ct <- fg_ct(input$fg_enr_contrast)
+    list(cl = input$fg_enr_cluster, ck = input$fg_enr_contrast, st = input$fg_enr_stratum,
+         ont = input$fg_enr_ont %||% "BP", topn = input$fg_enr_topn %||% 20,
+         up = ct$pos %||% "up in A", dn = ct$neg %||% "up in B", label = ct$label %||% input$fg_enr_contrast)
+  })
+  fg_enr_go_df <- function(direction) {
+    a <- fg_enr_args()
+    d <- fg_enr_df("go", a$cl, a$ck, a$st, a$ont, direction)
+    d[order(d$p.adjust), intersect(c("ID","Description","direction_label","FoldEnrichment",
+                                     "p.adjust","qvalue","Count","geneID","n_input","n_universe",
+                                     "n_mt_input","input_rule"), names(d))]
+  }
+  fg_enr_up_df    <- reactive(fg_enr_go_df("A_up"))
+  fg_enr_dn_df    <- reactive(fg_enr_go_df("B_up"))
+  fg_enr_gsea_dat <- reactive({ a <- fg_enr_args()
+    d <- fg_enr_df("gsea", a$cl, a$ck, a$st)
+    d[order(d$padj), intersect(c("pathway","NES","padj","pval","size","leadingEdge"), names(d))] })
+  fg_enr_audit_dat <- reactive({ fg_enr_ok(); a <- fg_enr_args()
+    d <- FGE$audit
+    d[d$contrast == a$ck & d$stratum == a$st, , drop = FALSE] })
+
+  # An empty GO table is ambiguous -- "tested, nothing passed" and "list too
+  # small to test" look identical. Say which.
+  fg_enr_empty <- function(direction) {
+    a <- fg_enr_args()
+    paste0("No GO ", a$ont, " term reached padj < 0.05 / q < 0.2 for the ", 
+           if (direction == "A_up") a$up else a$dn, " list. ",
+           fg_enr_why(a$cl, a$ck, a$st, a$ont, direction))
+  }
+  fg_enr_go_plot <- function(direction) {
+    a <- fg_enr_args()
+    d <- fg_enr_df("go", a$cl, a$ck, a$st, a$ont, direction)
+    validate(need(nrow(d), fg_enr_empty(direction)))
+    go_dotplot_df(d, sprintf("GO %s — %s, %s (%s cells)", a$ont, a$cl,
+                             if (direction == "A_up") a$up else a$dn, a$st), a$topn)
+  }
+  output$fg_enr_up_plot <- renderPlotly(fg_enr_go_plot("A_up"))
+  output$fg_enr_dn_plot <- renderPlotly(fg_enr_go_plot("B_up"))
+  output$fg_enr_up_tab  <- renderDT(enr_dt(fg_enr_up_df()))
+  output$fg_enr_dn_tab  <- renderDT(enr_dt(fg_enr_dn_df()))
+  output$fg_enr_gsea_plot <- renderPlotly({ a <- fg_enr_args()
+    # up_lab/down_lab from the contrast table: "up in KO" is wrong for WT: P0 vs P7.
+    gsea_barplot_df(fg_enr_df("gsea", a$cl, a$ck, a$st),
+                    sprintf("GSEA (Hallmark + KEGG) — %s, %s", a$cl, a$label),
+                    a$topn, up_lab = a$up, down_lab = a$dn) })
+  output$fg_enr_gsea_tab  <- renderDT(enr_dt(fg_enr_gsea_dat()))
+  output$fg_enr_audit_tab <- renderDT(enr_dt(fg_enr_audit_dat(), scroll = "420px"))
+  output$fg_enr_note <- renderUI({ a <- fg_enr_args()
+    n <- if (is.null(FGE$go)) 0 else sum(FGE$go$cluster == a$cl & FGE$go$contrast == a$ck &
+                                         FGE$go$stratum == a$st & FGE$go$ontology == a$ont)
+    div(class = "alert alert-light border py-2 px-3 mb-2",
+        tags$small(strong(a$label), " · ", a$cl, " · ", a$st, " cells · ",
+                   sprintf("%d GO %s terms · ", n, a$ont),
+                   sprintf("“%s” vs “%s”", a$up, a$dn)))
+  })
+  register_fig(output, "fgenrup", reactive({ a <- fg_enr_args()
+    d <- fg_enr_df("go", a$cl, a$ck, a$st, a$ont, "A_up")
+    validate(need(nrow(d), fg_enr_empty("A_up")))
+    go_dotplot_gg(d, sprintf("GO %s — %s, %s", a$ont, a$cl, a$up), a$topn) }), input)
+  register_fig(output, "fgenrdn", reactive({ a <- fg_enr_args()
+    d <- fg_enr_df("go", a$cl, a$ck, a$st, a$ont, "B_up")
+    validate(need(nrow(d), fg_enr_empty("B_up")))
+    go_dotplot_gg(d, sprintf("GO %s — %s, %s", a$ont, a$cl, a$dn), a$topn) }), input)
+  register_fig(output, "fgenrgsea", reactive({ a <- fg_enr_args()
+    gsea_barplot_gg(fg_enr_df("gsea", a$cl, a$ck, a$st),
+                    sprintf("GSEA — %s, %s", a$cl, a$label), a$topn,
+                    up_lab = a$up, down_lab = a$dn) }), input)
+
+  # Whole-contrast enrichment workbook: every subcluster, both directions.
+  fg_enr_book_sheets <- function(contrast, stratum, ont) {
+    fg_enr_ok()
+    g <- FGE$go[FGE$go$contrast == contrast & FGE$go$stratum == stratum &
+                FGE$go$ontology == ont, , drop = FALSE]
+    s <- if (!is.null(FGE$gsea)) FGE$gsea[FGE$gsea$contrast == contrast &
+                                          FGE$gsea$stratum == stratum, , drop = FALSE] else NULL
+    a <- FGE$audit[FGE$audit$contrast == contrast & FGE$audit$stratum == stratum, , drop = FALSE]
+    out <- list()
+    for (cl in unique(g$cluster)) {
+      x <- g[g$cluster == cl, , drop = FALSE]
+      out[[paste0("GO_", cl)]] <- x[order(x$direction, x$p.adjust), ]
+    }
+    if (!is.null(s) && nrow(s)) out$GSEA <- s[order(s$cluster, s$padj), ]
+    out$Coverage_audit <- a
+    out
+  }
+  output$fg_enr_book <- dl_book(
+    basename = function() paste0("fourgroup_enrichment_", input$fg_enr_contrast %||% "DE",
+                                 "_", input$fg_enr_stratum %||% "all",
+                                 "_", input$fg_enr_ont %||% "BP"),
+    sheets_fn = function() fg_enr_book_sheets(input$fg_enr_contrast, input$fg_enr_stratum,
+                                              input$fg_enr_ont %||% "BP"),
+    title = function() { a <- fg_enr_args()
+      paste0("GO/GSEA enrichment - ", a$label, " (", a$st, " cells, ", a$ont, ")") },
+    notes = c(
+      "One sheet per CM subcluster. The two directions are enriched SEPARATELY and are distinguished by the 'direction_label' column.",
+      "Universe = genes detected in >= 5% of one arm in that cluster, recomputed from the expression matrix rather than taken from the (row-gated) DE table.",
+      "'n_mt_input' counts mitochondrially-encoded genes in the input list. Where it is non-zero on an up-in-KO list, treat oxidative-phosphorylation and electron-transport terms with care - see the README caveats.",
+      "The Coverage_audit sheet says how many genes went into each test and which selection rule fired, so an empty result can be told apart from an untested one.")
+  )
+
   # ---- Gene-set Venn ----
   observe({
     cc <- fg_cluster_choices()
@@ -3318,6 +3506,18 @@ server <- function(input, output, session) {
                                                          input$fg_score_stratum %||% "all"),
          df = function() fg_summary_df(input$fg_score %||% "sig_maturation_nocc",
                                        input$fg_score_stratum %||% "all")),
+    # Four-group enrichment (build_fourgroup_enrichment.R)
+    list(id = "fg_enr_up_tab", base = function() paste0("GO_", input$fg_enr_ont %||% "BP", "_",
+                                                        input$fg_enr_contrast, "_", input$fg_enr_cluster, "_up"),
+         df = function() fg_enr_up_df()),
+    list(id = "fg_enr_dn_tab", base = function() paste0("GO_", input$fg_enr_ont %||% "BP", "_",
+                                                        input$fg_enr_contrast, "_", input$fg_enr_cluster, "_down"),
+         df = function() fg_enr_dn_df()),
+    list(id = "fg_enr_gsea_tab", base = function() paste0("GSEA_", input$fg_enr_contrast, "_",
+                                                          input$fg_enr_cluster, "_", input$fg_enr_stratum),
+         df = function() fg_enr_gsea_dat()),
+    list(id = "fg_enr_audit_tab", base = function() paste0("enrichment_audit_", input$fg_enr_contrast),
+         df = function() fg_enr_audit_dat()),
     # Maturation n P7 KO
     list(id = "mi_table", base = function() paste0("maturation_intersect_", input$mi_cluster),
          df = function() mi_tab_df()),

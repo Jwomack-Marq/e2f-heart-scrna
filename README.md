@@ -168,6 +168,31 @@ place. All are **descriptive / hypothesis-generating only** (n = 1, sex-confound
     mature↔oxidative / immature↔glycolytic diagonal still holds 57% of genes (50% would mean
     the two axes are independent), so the coupling is not an artifact of the inputs.
 
+- **`build_fourgroup_enrichment.R`** — GO (BP/MF/CC) and Hallmark+KEGG GSEA for the
+  **four-group contrasts** → `app$enrich$fourgroup`, driving the **Enrichment** panel of the
+  Four-group tab. Covers all four contrasts × both strata × every subcluster (77 tables,
+  154 direction-tests), enriching each direction **separately**.
+
+  This is not the same question as `build_subcluster_enrichment.R`, and that is the point:
+  `app$enrich$sub` is KO-vs-WT **pooled across P0 and P7**, which cannot answer "what changes
+  in the KO *at P7*". The DE for the timepoint-specific contrasts has existed in
+  `app$fourgroup$de` since `build_fourgroup.R`; GO had simply never been run on it.
+
+  One thing to know before reading its output: **the universe is recomputed from the
+  expression matrix, not taken from the DE table.** `app$fourgroup$de` is row-gated (expressed
+  in ≥ 5 % of one arm AND (padj < 0.05 OR |log2FC| ≥ 0.5)), so most expressed-but-unchanging
+  genes — exactly the background a hypergeometric test needs — are already missing from it.
+  Using it as the universe would inflate every fold enrichment. The builder instead takes
+  genes detected in ≥ 5 % of the cells of one arm of that specific contrast, cluster and
+  stratum: ~11,000 genes rather than the ~3,000 the gated table would have supplied.
+
+  Direction labels come from `FG$built$contrasts$pos`/`$neg`, so a `WT: P0 vs P7` panel reads
+  "up at P7" / "up at P0" rather than the KO-vs-WT wording. `gsea_barplot_gg()` takes
+  `up_lab`/`down_lab` for the same reason.
+
+  `--probe` reports input and universe sizes and exits; `--ont=BP` restricts the ontologies;
+  `--contrast=<key>` restricts to one contrast; `--grid=de2` uses the curated-panel DE grid.
+
 Re-run order after `build_app_data.R` regenerates the bundle (each is idempotent and
 safe to skip; the app guards absent slots with a "run the builder" message):
 
@@ -181,8 +206,13 @@ source("shiny_app/build_subcluster_enrichment.R")    # (existing) per-subcluster
 Rscript shiny_app/build_fourgroup.R --probe          # group sizes + size estimate, writes nothing
 Rscript shiny_app/build_fourgroup.R                  # then compute + save
 Rscript shiny_app/build_fourgroup.R --de2            # second DE grid on the curated panel
+Rscript shiny_app/build_fourgroup_enrichment.R --probe   # input/universe sizes, writes nothing
+Rscript shiny_app/build_fourgroup_enrichment.R           # GO + GSEA for the four-group contrasts
 # then: rsconnect::deployApp("shiny_app")
 ```
+
+`build_fourgroup_enrichment.R` is the slow one (~460 `enrichGO` calls over 77 DE tables,
+a couple of hours). Everything else finishes in minutes.
 
 `build_fourgroup.R` runs DE on the broad `app$deg_expr` matrix by default; pass
 `--matrix=curated` to use the full-cell curated panel instead, or `--seurat=<path>` to
