@@ -2297,7 +2297,12 @@ ui <- page_navbar(
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
     uiOutput("qcfigs"),
     h5("Doublet rate by lane (numbers)"),
-    dl_data_ui("doublet_tab"), div(style = "overflow:auto", tableOutput("doublet_tab")))),
+    dl_data_ui("doublet_tab"), div(style = "overflow:auto", tableOutput("doublet_tab")),
+    h5("Module-score definitions and coverage", class = "mt-4"),
+    helpText("What went into each sig_* score: which curated gene sets, which matrix it was ",
+             "scored on, how many of the set's genes were actually present, and how many cells ",
+             "were scored. Written by build_signature_scores.R."),
+    dl_data_ui("score_meta_tab"), DTOutput("score_meta_tab", height = "320px"))),
 
   nav_panel("Annotation check", div(style = "max-width:1000px;padding:8px 4px",
     helpText("Each cell is scored against published-style developmental mouse-heart marker panels; ",
@@ -3334,6 +3339,12 @@ server <- function(input, output, session) {
         "UMAP coloured by library before and after Harmony integration. Before, cells split by sample (a technical batch effect); after, libraries intermix while biological structure is preserved, so clusters reflect cell type.")
     )
   })
+  score_meta_df <- reactive({
+    validate(need(!is.null(SCOREMETA),
+      "Module-score definitions aren't in this data build — run build_signature_scores.R and redeploy."))
+    SCOREMETA
+  })
+  output$score_meta_tab <- renderDT(enr_dt(score_meta_df()))
   output$doublet_tab <- renderTable({ validate(need(!is.null(tabs$doublet), "No doublet table.")); tabs$doublet },
                                     striped = TRUE, hover = TRUE)
 
@@ -3539,7 +3550,8 @@ server <- function(input, output, session) {
     list(id = "cc_tab", base = function() paste0("cell_communication_", input$cc_tp),
          df = function() commun_table_df(input$cc_pathway, input$cc_tp)),
     list(id = "ann_tab", base = "annotation_check", df = function() refmap_table_df()),
-    list(id = "doublet_tab", base = "qc_doublets", df = function() tabs$doublet)
+    list(id = "doublet_tab", base = "qc_doublets", df = function() tabs$doublet),
+    list(id = "score_meta_tab", base = "module_score_definitions", df = function() score_meta_df())
   )
   for (.t in TABLE_DL) local({
     t <- .t

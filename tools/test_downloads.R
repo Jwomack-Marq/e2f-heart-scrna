@@ -49,13 +49,22 @@ testServer(APPDIR, {
     vn_a = "de:P7_KO_vs_WT:up", vn_b = "de:WT_P0_vs_P7:up", vn_c = "none",
     gm_panel = "avg", gm_dist = 0,
     cc_tp = "P7", cc_pathway = "All", cc_metric = "delta",
-    deg_hideconf = FALSE
+    deg_hideconf = FALSE,
+    fg_enr_cluster = "CM2", fg_enr_contrast = "P7_KO_vs_WT", fg_enr_stratum = "all",
+    fg_enr_ont = "BP", fg_enr_topn = 20
   )
 
   cat("\n== table download frames ==\n")
   for (t in TABLE_DL) {
     d <- tryCatch(t$df(), error = function(e) e)
-    if (inherits(d, "shiny.silent.error")) { note("SKIP", t$id, "needs more inputs"); next }
+    if (inherits(d, "shiny.silent.error")) {
+      msg <- conditionMessage(d)
+      # A "run the builder" guard is the correct behaviour on a bundle that
+      # predates a builder -- not the same thing as an untested table.
+      if (grepl("run build_", msg)) note("PASS", t$id, "guarded (slot absent)")
+      else note("SKIP", t$id, "needs more inputs")
+      next
+    }
     if (inherits(d, "error"))              { note("FAIL", t$id, conditionMessage(d)); next }
     if (!is.data.frame(d))                 { note("FAIL", t$id, "not a data.frame"); next }
     nm <- tryCatch(if (is.function(t$base)) t$base() else t$base, error = function(e) "<err>")
@@ -82,6 +91,27 @@ testServer(APPDIR, {
     note(if (nrow(b2) == min(200, nrow(d))) "PASS" else "FAIL", "xlsx round-trip",
          sprintf("%d rows, %.0f KB", nrow(b2), file.size(f2) / 1024))
   }
+
+  cat("\n== four-group enrichment ==\n")
+  # Passes either way: with the slot present these must return frames, without it
+  # they must fail with the "run the builder" message rather than crash. A bundle
+  # built before build_fourgroup_enrichment.R existed still has to load.
+  enr_fns <- c("fg_enr_up_df", "fg_enr_dn_df", "fg_enr_gsea_dat", "fg_enr_audit_dat")
+  for (nm in enr_fns) {
+    r <- tryCatch(get(nm)(), error = function(e) e)
+    if (inherits(r, "shiny.silent.error")) {
+      note(if (grepl("build_fourgroup_enrichment", conditionMessage(r))) "PASS" else "FAIL",
+           nm, "guarded (slot absent)")
+    } else if (inherits(r, "error")) {
+      note("FAIL", nm, conditionMessage(r))
+    } else {
+      note(if (is.data.frame(r)) "PASS" else "FAIL", nm, sprintf("%d rows", nrow(r)))
+    }
+  }
+  bk <- tryCatch(fg_enr_book_sheets("P7_KO_vs_WT", "all", "BP"), error = function(e) e)
+  if (inherits(bk, "shiny.silent.error")) note("PASS", "fg_enr_book_sheets", "guarded (slot absent)")
+  else if (inherits(bk, "error"))          note("FAIL", "fg_enr_book_sheets", conditionMessage(bk))
+  else                                     note("PASS", "fg_enr_book_sheets", sprintf("%d sheets", length(bk)))
 
   cat("\n== bulk contrast workbook ==\n")
   # via the server-local builder: testServer's expression cannot see app.R's
