@@ -49,11 +49,11 @@ EXCLUDE_TABLES <- c(
   "umap_renametab", "vln_renametab", "dot_renametab",
   "comp_renametab", "cmphase_renametab", "e2f_renametab")
 EXCLUDE_PLOTS <- c(
-  # plotly-native scatter/UMAP views: no ggplot underneath to hand to ggsave.
-  # Their modebar camera exports PNG, and the underlying data IS downloadable
-  # from the table beside them.
-  "umap", "cm_map", "ct_volcano", "cm_volcano", "fg_volcano", "deg_volcano",
-  "gm_scatter",
+  # (the plotly-native scatter/UMAP/volcano views used to sit here with no
+  # vector export at all; each now has a static ggplot twin registered under
+  # its own prefix -- umapgg, cmmap, ctvolc, cmvolc, fgvolc, degvolc, gmsc --
+  # so they are covered like every other figure and are no longer excluded)
+  #
   # the four "all clusters" grid loops render one panel per subcluster from the
   # same _gg builders already exported singly on the tab above
   "cm_idgo_all", "cm_kogo_all", "cm_kodn_all", "cm_gsea_all")

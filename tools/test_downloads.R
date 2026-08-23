@@ -241,11 +241,44 @@ testServer(APPDIR, {
        "volcano cut does not filter", sprintf("%d rows either way", n_tab))
   session$setInputs(cm_vlfc = 1)
 
+  cat("\n== score definitions: purpose, maths, and the actual genes ==\n")
+  # The gene lists are NOT in app_data.rds -- app.R parses them out of
+  # build_signature_scores.R so there is no second copy to drift. If that parse ever
+  # silently fails the app would document nothing, so check it against the literal.
+  flat <- function(x) paste(as.character(x), collapse = "")   # tag lists render to >1 string
+  SS <- gf("SCORE_SETS"); sdu <- gf("score_def_ui")
+  note(if (!is.null(SS)) "PASS" else "FAIL", "gene lists parsed from the builder",
+       if (is.null(SS)) "NULL - is build_signature_scores.R next to app.R?"
+       else sprintf("%d sets: %s", length(SS), paste(names(SS), collapse = ", ")))
+  lit <- local({ got <- NULL
+    # testServer runs with the app dir as cwd, which is how app.R finds it too
+    for (x in parse("build_signature_scores.R"))
+      if (is.null(got) && is.call(x) && identical(as.character(x[[1]]), "<-") &&
+          identical(as.character(x[[2]]), "SETS")) got <- eval(x[[3]])
+    got })
+  note(if (identical(lapply(lit, function(g) setdiff(g, gf("CONF"))), SS)) "PASS" else "FAIL",
+       "parsed lists == the builder literal", "no drift between doc and what was scored")
+  h <- flat(sdu("sig_maturation")); h2 <- flat(sdu("sig_metabolic"))
+  note(if (grepl("Myh6, Tnni3, Pln, Atp2a2", h, fixed = TRUE) &&
+           grepl("Myh7, Tnni1, Nppa, Nppb", h, fixed = TRUE)) "PASS" else "FAIL",
+       "sig_maturation names both poles' genes")
+  note(if (grepl("Slc2a1, Hk1, Hk2", h2, fixed = TRUE) &&
+           grepl("Cpt1a, Cpt1b, Cpt2", h2, fixed = TRUE)) "PASS" else "FAIL",
+       "sig_metabolic names both poles' genes")
+  note(if (grepl("fetal-to-adult", h, fixed = TRUE)) "PASS" else "FAIL",
+       "says what the score is FOR, not just how")
+  # a set gene absent from the scoring matrix contributed nothing; that must be visible
+  note(if (grepl("did not contribute", flat(sdu("sig_cytokinesis")), fixed = TRUE)) "PASS" else "FAIL",
+       "names set genes missing from the matrix", "sig_cytokinesis found 13 of 14")
+  d <- tryCatch(gf("score_sets_df")(), error = function(e) e)
+  note(if (is.data.frame(d) && nrow(d) == length(SS) && all(nzchar(d$genes))) "PASS" else "FAIL",
+       "score_sets_df", if (is.data.frame(d)) sprintf("%d sets, all with genes", nrow(d))
+                        else conditionMessage(d))
+
   cat("\n== method notes under the figures ==\n")
   # The bodies are free functions precisely so this is testable: testServer snapshots
   # output$ values, so a note that silently stopped following its dropdown would still
   # look correct through output$.
-  flat <- function(x) paste(as.character(x), collapse = "")
   for (o in c("mat_violin_method","mat_scatter_method","gm_method","xc_venn_method")) {
     h <- tryCatch(flat(output[[o]]), error = function(e) paste("ERROR:", conditionMessage(e)))
     note(if (!startsWith(h, "ERROR") && nchar(h) > 500) "PASS" else "FAIL", o,

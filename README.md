@@ -441,6 +441,22 @@ sentence is the one to write.
 
 ### Reading it in the app
 
+**Every `sig_*` score documents itself.** Under the violin on **Maturation & metabolism**,
+and under the score distributions on **Cell-cycle exit & ploidy**, a collapsed block gives
+*what the score is for* (the question it exists to answer), *how it is built* (which two
+sets, which matrix, how many genes were actually found), and *the genes themselves* —
+naming any set gene absent from the scoring matrix, since those contributed nothing.
+**Help → QC & normalization** carries the same lists as one downloadable reference table.
+
+The app does not keep its own copy of those lists. `app_data.rds` never stored them, so
+`SCORE_SETS` parses the `SETS <- list(...)` literal straight out of
+`build_signature_scores.R` at startup — the same trick
+`analysis/2026-08-21_email/01_de.R` uses — and a test asserts the parsed lists equal that
+literal. A second hardcoded copy in `app.R` would drift the first time either was edited,
+and the app would then confidently document genes it had not scored.
+
+
+
 Every figure on **Maturation & metabolism**, and the four Venns on **WT programs ∩ KO
 clusters**, carries a collapsed **"How this plot was made"** block underneath it —
 what a point is, how the coordinate was computed, what the annotations mean, and the

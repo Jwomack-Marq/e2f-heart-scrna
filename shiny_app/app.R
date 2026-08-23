@@ -23,6 +23,11 @@ library(openxlsx)        # multi-sheet .xlsx export (shared with the offline ana
 # collaborator gets by email and the one they get by clicking Download match.
 source("download_helpers.R", local = TRUE)
 
+# "Figure Studio" handoff: sends a built ggplot to the companion editor app for
+# publication styling. Inert (no UI, no observers) unless FIGURE_STUDIO_BASE and
+# HANDOFF_DIR are set -- see studio_helpers.R for the contract.
+source("studio_helpers.R", local = TRUE)
+
 app   <- readRDS("app_data.rds")
 meta  <- app$meta; expr <- app$expr; genes <- app$genes
 cmm   <- app$cm$meta; RES <- setdiff(app$cm$res, c("0.1", "0.3"))  # only expose res 0.2 in the app
@@ -147,15 +152,27 @@ de_annot <- function(d, pos = "up in KO", neg = "up in WT", lfc_cut = DE_LFC_CUT
   d$class <- factor(d$class, levels = c(pos, neg, "n.s.", "sex/construct"))
   d
 }
-# DE volcano from a trimmed DE data frame (static ggplot — kept for reference)
-de_volcano <- function(d, ttl) {
+# DE volcano, static ggplot twin of de_volcano_ly: same annotation, colours and
+# threshold lines, no hover/click. The interactive volcano stays on screen; this
+# is what the vector downloads and the Figure Studio handoff export.
+de_volcano <- function(d, ttl, pos = "up in KO", neg = "up in WT",
+                       xlab = "log2 fold change (KO / WT)", lfc_cut = DE_LFC_CUT,
+                       highlight = NULL) {
   validate(need(!is.null(d) && nrow(d), "No DE results for this selection (cluster too small / unbalanced)."))
-  d <- de_annot(d)
-  ggplot(d, aes(log2FoldChange, neglogp, color = class)) +
-    geom_point(size = 1.1, alpha = .6) + scale_color_manual(values = VOLC_PAL) +
-    geom_vline(xintercept = c(-1, 1), linetype = "dotted", color = "grey60") +
+  d <- de_annot(d, pos, neg, lfc_cut)
+  p <- ggplot(d, aes(log2FoldChange, neglogp, color = class)) +
+    geom_point(size = 1.1, alpha = .6, shape = 16) +
+    scale_color_manual(values = volc_pal(pos, neg), drop = FALSE) +
+    geom_vline(xintercept = c(-lfc_cut, lfc_cut), linetype = "dotted", color = "grey60") +
     theme_minimal(base_size = 13) +
-    labs(x = "log2 fold change (KO / WT)", y = "-log10 p (ranking only, n=1)", color = NULL, title = ttl)
+    labs(x = xlab, y = "-log10 p (ranking only, n=1)", color = NULL, title = ttl)
+  if (!is.null(highlight) && nzchar(highlight) && highlight %in% d$gene) {
+    hd <- d[match(highlight, d$gene), , drop = FALSE]
+    p <- p + geom_point(data = hd, shape = 21, size = 4.5, stroke = 1.1, fill = NA, color = "#111") +
+      geom_text(data = hd, aes(label = gene), color = "#111", fontface = "bold",
+                size = 3.2, vjust = -1.2)
+  }
+  p
 }
 # interactive plotly volcano: hover shows gene/stats, click emits the gene via
 # customdata (captured by event_data(source = source_id)) to drive the DE table.
@@ -513,6 +530,44 @@ umap_split <- function(df, colvar, splitvar, gene = NULL, continuous = FALSE, ps
   subplot(plts, nrows = nrows, shareX = TRUE, shareY = TRUE, titleX = FALSE, titleY = FALSE) |>
     layout(margin = .umap_mar, showlegend = legend, legend = list(itemsizing = "constant"), annotations = anns)
 }
+# Static ggplot twin of the umap_cat / umap_cont / umap_split plotly views: same
+# palettes, centroid labels and split layout, drawn with geom_point so the UMAP
+# has a vector (PDF/SVG) export and a Figure Studio handoff. No hover/highlight.
+umap_gg <- function(df, colvar, splitvar = NULL, gene = NULL, continuous = FALSE,
+                    ttl = NULL, psize = 4.5, labels = TRUE, labsize = 12, legend = TRUE,
+                    pal_choice = "Default", map = list(), nrows = 1) {
+  pt <- psize / 3.4                       # plotly px -> ggplot mm, matched by eye
+  if (continuous) {
+    df$val <- if (!is.null(gene)) as.numeric(expr_vec(gene, df$cell)) else as.numeric(df[[colvar]])
+    df <- df[order(df$val, na.last = FALSE), ]
+  } else {
+    df$val <- factor(df[[colvar]])
+    if (length(map)) levels(df$val) <- relab(levels(df$val), map)
+  }
+  if (!is.null(splitvar)) {
+    levs_sp <- if (is.factor(df[[splitvar]])) levels(droplevels(factor(df[[splitvar]])))
+               else sort(unique(as.character(df[[splitvar]])))
+    df$panel <- factor(paste0(labof(splitvar), ": ", as.character(df[[splitvar]])),
+                       levels = paste0(labof(splitvar), ": ", levs_sp))
+  }
+  p <- ggplot(df, aes(UMAP1, UMAP2, color = val)) + geom_point(size = pt, shape = 16) +
+    theme_umap + labs(title = ttl, color = NULL)
+  p <- if (continuous)
+    p + scale_color_gradientn(colours = vapply(.exprsc, `[[`, "", 2),
+                              values = as.numeric(vapply(.exprsc, `[[`, "", 1)),
+                              na.value = "grey92", name = NULL)
+  else
+    p + scale_color_manual(values = disc_pal(levels(df$val), pal_choice), drop = FALSE) +
+      guides(color = guide_legend(override.aes = list(size = 3)))
+  if (!continuous && labels && is.null(splitvar)) {
+    a <- aggregate(cbind(UMAP1, UMAP2) ~ val, df, median)
+    p <- p + geom_label(data = a, aes(label = val), color = "#111", size = labsize / 2.845,
+                        fill = scales::alpha("white", 0.55), label.size = 0, label.padding = unit(0.1, "lines"))
+  }
+  if (!is.null(splitvar)) p <- p + facet_wrap(~panel, nrow = nrows)
+  if (!legend) p <- p + theme(legend.position = "none")
+  p
+}
 
 # ---- publication "Figure options": reusable control block + export wiring -------
 # emits a namespaced (prefix_*) control set; `export` picks the download UI (vector
@@ -536,10 +591,11 @@ figure_controls <- function(prefix, export = c("ggplot","umap"), base = TRUE, pa
     # it could not export figures at all. Only the size/DPI inputs are optional --
     # they have sensible defaults and most people never touch them.
     if (export == "ggplot")
-      div(style = "display:flex;gap:6px;margin-bottom:6px",
+      div(style = "display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap",
         downloadButton(p("dl_pdf"), "PDF", class = "btn-sm btn-outline-secondary"),
         downloadButton(p("dl_svg"), "SVG", class = "btn-sm btn-outline-secondary"),
-        downloadButton(p("dl_png"), "PNG", class = "btn-sm btn-outline-secondary")),
+        downloadButton(p("dl_png"), "PNG", class = "btn-sm btn-outline-secondary"),
+        studio_btn(prefix)),
     checkboxInput(p("export_on"), "Custom export size", FALSE),
     conditionalPanel(sprintf("input.%s_export_on", prefix),
       if (export == "ggplot") tagList(
@@ -587,11 +643,14 @@ dl_ggplot <- function(prefix, plot_reactive, input, fmt, opts_prefix = prefix) {
     })
 }
 # Register all three formats for one figure, so a plot is one line to export.
+# Also wires the Figure Studio handoff for the same prefix (a no-op when the
+# studio isn't configured), so every exportable figure gets both for free.
 register_fig <- function(output, prefix, plot_reactive, input, opts_prefix = prefix) {
   for (.f in c("pdf", "svg", "png")) local({
     f <- .f
     output[[paste0(prefix, "_dl_", f)]] <- dl_ggplot(prefix, plot_reactive, input, f, opts_prefix)
   })
+  register_studio(prefix, plot_reactive, input, opts_prefix)
   invisible(NULL)
 }
 # Figure download buttons for a plot that has no sidebar accordion of its own
@@ -599,8 +658,9 @@ register_fig <- function(output, prefix, plot_reactive, input, opts_prefix = pre
 dl_fig_ui <- function(prefix, label = "Download figure") {
   btn <- function(f) downloadButton(paste0(prefix, "_dl_", f), toupper(f),
                                     class = "btn-sm btn-outline-secondary")
-  div(class = "d-flex align-items-center gap-2 mb-2",
-      tags$small(class = "text-muted", label), lapply(c("pdf", "svg", "png"), btn))
+  div(class = "d-flex align-items-center gap-2 mb-2 flex-wrap",
+      tags$small(class = "text-muted", label), lapply(c("pdf", "svg", "png"), btn),
+      studio_btn(prefix))
 }
 
 # ---- data downloads: the table-side counterpart to dl_ggplot ----------------
@@ -1426,6 +1486,115 @@ fg_candidate_pool <- function(src, n = 20, grid = "de") {
   FG_SHORTLIST
 }
 
+# ---- the curated gene lists behind every sig_* score --------------------------
+# They live as a literal in build_signature_scores.R and are NOT written into
+# app_data.rds, so rather than keep a second copy here -- which would drift the first
+# time one is edited -- the app parses that one expression out of the source. Same trick
+# analysis/2026-08-21_email/01_de.R already uses, for the same reason. The builder ships
+# next to app.R in every deploy path (rsconnect, both Dockerfiles); if it is ever missing,
+# the score panels say so rather than showing a stale copy.
+SCORE_SETS <- local({
+  path <- Filter(file.exists, c("build_signature_scores.R",
+                                file.path("shiny_app", "build_signature_scores.R")))
+  s <- if (!length(path)) NULL else tryCatch({
+    got <- NULL
+    for (x in parse(path[1]))
+      if (is.null(got) && is.call(x) && identical(as.character(x[[1]]), "<-") &&
+          identical(as.character(x[[2]]), "SETS")) got <- eval(x[[3]])
+    got
+  }, error = function(e) NULL)
+  if (is.null(s)) NULL else lapply(s, function(g) setdiff(g, CONF))
+})
+# What each score is FOR -- the question it exists to answer. The maths is shared; the
+# purpose is not, and it is the part that is impossible to reconstruct from the code.
+SCORE_PURPOSE <- c(
+  sig_maturation = paste(
+    "How far a cardiomyocyte has moved along the fetal-to-adult transition. Positive means the",
+    "mature program dominates. This is the axis the P0-vs-P7 comparison is about, and the one",
+    "the headline KO question asks about: do P7 knockout cardiomyocytes sit at a lower",
+    "maturation score than P7 wild-type?"),
+  sig_maturation_nocc = paste(
+    "The same maturation axis with the three cell-cycle genes dropped from the immature pole.",
+    "Use this one whenever the argument involves cycling. sig_maturation's immature program",
+    "contains Mki67, Top2a and Ccnd1, so arguing 'less mature, therefore more cycling-competent'",
+    "from it would be partly circular. The gene map and the intersection tab default to this."),
+  sig_metabolic = paste(
+    "Which fuel the cell is set up to burn. Positive means fatty-acid oxidation and oxidative",
+    "phosphorylation; negative means glycolysis. Cardiomyocytes switch from glycolysis to fatty",
+    "acids over the first postnatal week, so this is the metabolic half of maturation and should",
+    "track sig_maturation if both are measuring the same transition. Note the OXPHOS genes",
+    "(Ppargc1a, Cox6a2, Ndufa4, Sdha, Etfa) sit inside the FAO set, so this score cannot",
+    "separate fatty-acid oxidation from oxidative phosphorylation."),
+  sig_mat_mature   = "The mature pole of the maturation axis on its own, before the subtraction.",
+  sig_mat_immature = "The immature pole on its own, cell-cycle genes included.",
+  sig_mat_immature_nocc = "The immature pole with the three cell-cycle genes removed.",
+  sig_faox         = "The fatty-acid-oxidation pole of the metabolic axis on its own.",
+  sig_glycolysis   = "The glycolytic pole of the metabolic axis on its own.",
+  sig_prolif       = "The G2/M proliferation program: is this cell cycling at all?",
+  sig_cytokinesis  = "The cytokinesis machinery specifically: can this cell finish a division?",
+  sig_ploidy = paste(
+    "Proliferation minus cytokinesis. Cycling WITHOUT the machinery to complete division is the",
+    "route to binucleation and endoreduplication, so a high score flags cells likely to become",
+    "polyploid. A heuristic built from two module scores, not a ploidy measurement."),
+  sig_ccexit = "The cell-cycle exit / arrest program (CDK inhibitors, Rb1, Meis1, Btg2, Gadd45a).")
+
+# What a sig_* score is for, how it is built, and the actual genes -- the gene lists being
+# the one thing app_data.rds does not carry and the thing people actually ask for.
+score_def_ui <- function(scol) {
+  r <- if (!is.null(SCOREMETA)) SCOREMETA[SCOREMETA$score == scol, , drop = FALSE] else NULL
+  purpose <- if (scol %in% names(SCORE_PURPOSE)) SCORE_PURPOSE[[scol]] else NULL
+  parts <- if (!is.null(r) && nrow(r))
+    trimws(strsplit(r$sets[1], " - ", fixed = TRUE)[[1]]) else character(0)
+  sgn <- if (length(parts) == 2) c("+", "−") else rep("+", length(parts))
+  mat <- if (!is.null(r) && nrow(r)) r$matrix[1] else NA_character_
+  # a set gene absent from the matrix the score was computed on simply did not contribute
+  present <- if (identical(mat, "curated")) genes
+             else if (identical(mat, "broad")) (GENES_FULL %||% genes) else ALL_GENES
+  gene_line <- function(nm, s) {
+    g <- if (is.null(SCORE_SETS)) NULL else SCORE_SETS[[nm]]
+    if (is.null(g)) return(tags$li(HTML(sprintf("<b>%s %s</b> &mdash; gene list unavailable", s, nm))))
+    miss <- setdiff(g, present)
+    tags$li(HTML(sprintf("<b>%s %s</b> (%d genes)<br><code>%s</code>%s", s, nm, length(g),
+      paste(g, collapse = ", "),
+      if (length(miss)) sprintf(paste0("<br><span style='color:#c62828'>not present in the %s ",
+        "matrix, so it did not contribute: %s</span>"), mat, paste(miss, collapse = ", ")) else "")))
+  }
+  tagList(
+    if (!is.null(purpose)) tags$p(HTML(sprintf("<b>What it is for.</b> %s", purpose))),
+    tags$p(HTML(paste0("<b>How it is built.</b> ",
+      if (length(parts) == 2) sprintf(paste0("A difference of two module scores, ",
+        "<code>%s</code> minus <code>%s</code> &mdash; a difference, not a ratio. Each is "),
+        parts[1], parts[2]) else "A single module score: ",
+      "an <code>AddModuleScore</code> equivalent, the mean log-normalised expression of the set ",
+      "minus the mean of 100 control genes drawn from the same expression bin (24 quantile bins, ",
+      "<code>seed = 1</code>). Zero therefore means &ldquo;no higher than a random set of ",
+      "equally-expressed genes&rdquo;. Raw values &mdash; no z-scoring or rescaling. ",
+      if (!is.null(r) && nrow(r)) sprintf(paste0("Scored on the <b>%s</b> matrix; %s of %s set ",
+        "genes found; %s cells scored."), mat, r$n_genes_used[1], r$n_genes_set[1],
+        format(r$n_cells_scored[1], big.mark = ",")) else ""))),
+    if (length(parts)) tags$div(tags$b("The genes."), tags$ul(style = "margin-top:4px",
+      lapply(seq_along(parts), function(i) gene_line(parts[i], sgn[i])))),
+    tags$p(style = "color:#555", HTML(paste0("These are <b>hand-curated canonical markers</b>, ",
+      "not a database term &mdash; no MSigDB, no GO. There is no recorded source for the ",
+      "specific choices; see the README section &ldquo;Module scores&rdquo; before citing them."))),
+    if (is.null(SCORE_SETS)) div(style = "color:#c62828", paste(
+      "Gene lists unavailable in this deploy — build_signature_scores.R is not next to app.R.")))
+}
+# every set, once, for the reference table under Help
+score_sets_df <- function() {
+  validate(need(!is.null(SCORE_SETS), paste(
+    "Gene lists unavailable — build_signature_scores.R is not next to app.R in this deploy.")))
+  used <- vapply(names(SCORE_SETS), function(nm) {
+    if (is.null(SCOREMETA)) return("")
+    paste(SCOREMETA$score[vapply(strsplit(SCOREMETA$sets, " - ", fixed = TRUE),
+                                 function(p) nm %in% trimws(p), TRUE)], collapse = ", ")
+  }, "")
+  data.frame(set = names(SCORE_SETS), n_genes = unname(lengths(SCORE_SETS)),
+             used_by = unname(used),
+             genes = unname(vapply(SCORE_SETS, paste, "", collapse = ", ")),
+             row.names = NULL, stringsAsFactors = FALSE)
+}
+
 # ---- gene-set Venn -----------------------------------------------------------
 # Crosses any two or three of the sets the other tabs already produce. A Venn hides
 # the three things that decide whether an overlap means anything -- the threshold that
@@ -2039,6 +2208,50 @@ gm_plot_ly <- function(d, label_n = 20, highlight = NULL, panel = "avg") {
   }
   event_register(p, "plotly_click")
 }
+# Static ggplot twin of gm_plot_ly: same quadrant colours, centre lines, corner
+# labels, confidence rings and top-N gene labels, no hover/click. This is what
+# the vector downloads and the Figure Studio handoff export for the gene map.
+gm_plot_gg <- function(d, label_n = 20, highlight = NULL, panel = "avg") {
+  validate(need(nrow(d), "No genes to plot."))
+  ctr <- gm_centre(panel); cx <- unname(ctr[["mat"]]); cy <- unname(ctr[["met"]])
+  d$quadrant <- factor(d$quadrant, levels = GM_QUADS)
+  rng <- function(v, c0) { m <- max(abs(v - c0), na.rm = TRUE) * 1.08; c(c0 - m, c0 + m) }
+  xr <- rng(d$x, cx); yr <- rng(d$y, cy)
+  corner <- data.frame(
+    x = c(mean(c(cx, xr[2])), mean(c(xr[1], cx)), mean(c(cx, xr[2])), mean(c(xr[1], cx))),
+    y = c(yr[2], yr[1], yr[1], yr[2]),
+    lab = c("mature + oxidative", "immature + glycolytic",
+            "mature + glycolytic", "immature + oxidative"),
+    col = c("#c62828", "#1565c0", "#ef6c00", "#00838f"))
+  p <- ggplot(d, aes(x, y, color = quadrant)) +
+    geom_hline(yintercept = cy, color = "grey65", linewidth = .4) +
+    geom_vline(xintercept = cx, color = "grey65", linewidth = .4) +
+    geom_point(size = 1.4, alpha = .5, shape = 16) +
+    scale_color_manual(values = GM_QUAD_PAL, drop = FALSE) +
+    annotate("text", x = corner$x, y = corner$y, label = corner$lab,
+             color = corner$col, size = 3, alpha = .75) +
+    coord_cartesian(xlim = xr, ylim = yr) +
+    theme_minimal(base_size = 13) +
+    labs(title = paste0("Gene map — ",
+           if (identical(panel, "avg")) "timepoints averaged" else paste0(panel, " only")),
+         x = "maturation association, AUC  (← immature | mature →)",
+         y = "metabolic association, AUC  (← glycolytic | oxidative →)", color = NULL)
+  cf <- d[!is.na(d$confidence) & d$confidence != "neither", , drop = FALSE]
+  if (nrow(cf)) p <- p + geom_point(data = cf, shape = 21, size = 2.2, stroke = .4,
+                                    fill = NA, color = "#222")
+  if (!is.null(label_n) && label_n > 0) {
+    lab <- head(d[order(-d$distance), , drop = FALSE], label_n)
+    if (nrow(lab)) p <- p + geom_text(data = lab, aes(label = gene), color = "#333",
+                                      size = 2.6, vjust = -0.9)
+  }
+  if (!is.null(highlight) && nzchar(highlight) && highlight %in% d$gene) {
+    hd <- d[match(highlight, d$gene), , drop = FALSE]
+    p <- p + geom_point(data = hd, shape = 21, size = 4.5, stroke = 1.1, fill = NA, color = "#111") +
+      geom_text(data = hd, aes(label = gene), color = "#111", fontface = "bold",
+                size = 3.2, vjust = -1.2)
+  }
+  p
+}
 # where a gene sits, in words — shown next to the table so a single gene can be read
 # off without hunting for its row
 gm_gene_note <- function(gene, panel = "avg") {
@@ -2107,6 +2320,7 @@ plotlyOutput <- function(...) .spin(plotly::plotlyOutput(...))
 
 ui <- page_navbar(
   title = "E2F7/8 heart scRNA-seq", theme = bs_theme(version = 5, bootswatch = "flatly"),
+  header = if (STUDIO_ON) studio_js(),
 
   nav_panel("UMAP explorer", layout_sidebar(
     sidebar = sidebar(width = 300,
@@ -2125,7 +2339,9 @@ ui <- page_navbar(
                      "single-click to toggle. Colour by a gene, then split by Genotype to compare KO vs WT."),
       accordion(open = FALSE, accordion_panel("Figure options",
         figure_controls("umap", export = "umap", base = FALSE, labels = TRUE)))),
-    card(full_screen = TRUE, card_header(textOutput("umap_title")), plotlyOutput("umap", height = "640px")))),
+    card(full_screen = TRUE, card_header(textOutput("umap_title")),
+         dl_fig_ui("umapgg", "Download figure (static)"),
+         plotlyOutput("umap", height = "640px")))),
 
   nav_panel("Gene detail", layout_sidebar(
     sidebar = sidebar(width = 300,
@@ -2170,7 +2386,8 @@ ui <- page_navbar(
       nav_panel("Volcano + table",
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
         layout_columns(col_widths = c(6, 6),
-          plotlyOutput("ct_volcano", height = "470px"),
+          div(dl_fig_ui("ctvolc", "Download figure (static)"),
+              plotlyOutput("ct_volcano", height = "470px")),
           div(uiOutput("ct_pick_ui"), dl_data_ui("ct_table"), DTOutput("ct_table", height = "440px"))),
         uiOutput("ct_geneinfo")),
       nav_panel("Heatmap (top genes × cell types)", dl_fig_ui("ctheat"),
@@ -2197,7 +2414,8 @@ ui <- page_navbar(
     div(textOutput("deg_n"), style = "font-size:13px;margin-bottom:4px"),
     helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
     layout_columns(col_widths = c(6, 6),
-      plotlyOutput("deg_volcano", height = "470px"),
+      div(dl_fig_ui("degvolc", "Download figure (static)"),
+          plotlyOutput("deg_volcano", height = "470px")),
       div(uiOutput("deg_pick_ui"), dl_data_ui("deg_table"), DTOutput("deg_table", height = "440px"))),
     uiOutput("deg_geneinfo"))),
 
@@ -2279,6 +2497,7 @@ ui <- page_navbar(
       nav_panel("Subcluster map",
         helpText("Hover any cell to highlight all cells of its subcluster; move off to restore the full map.",
                  br(), "When split (res 0.2) is on, panels are coloured by subcluster and “colour by” is ignored."),
+        dl_fig_ui("cmmap", "Download figure (static)"),
         plotlyOutput("cm_map", height = "600px")),
       nav_panel("Identity (marker heatmap)", dl_fig_ui("cmmarker"),
         plotlyOutput("cm_markerheat", height = "660px")),
@@ -2286,7 +2505,8 @@ ui <- page_navbar(
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
         uiOutput("cm_de_note"),
         fluidRow(
-          column(6, plotlyOutput("cm_volcano", height = "440px")),
+          column(6, dl_fig_ui("cmvolc", "Download figure (static)"),
+                    plotlyOutput("cm_volcano", height = "440px")),
           column(6, uiOutput("cm_pick_ui"), dl_data_ui("cm_detab"), DTOutput("cm_detab"))),
         uiOutput("cm_geneinfo"),
         div(class = "mt-3",
@@ -2433,7 +2653,8 @@ ui <- page_navbar(
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it."),
         uiOutput("fg_de_note"),
         fluidRow(
-          column(6, plotlyOutput("fg_volcano", height = "440px")),
+          column(6, dl_fig_ui("fgvolc", "Download figure (static)"),
+                    plotlyOutput("fg_volcano", height = "440px")),
           column(6, uiOutput("fg_pick_ui"), dl_data_ui("fg_detab"), DTOutput("fg_detab"))),
         uiOutput("fg_geneinfo")),
       nav_panel("G1 & maturation", value = "g1",
@@ -2704,7 +2925,8 @@ ui <- page_navbar(
       nav_panel("Score distributions",
         helpText("Proliferation, cytokinesis, cell-cycle-exit and polyploidization-proxy scores ",
                  "across genotype (WT vs KO), faceted by timepoint."),
-        plotOutput("cyc_violins", height = "600px")),
+        plotOutput("cyc_violins", height = "600px"),
+        uiOutput("cyc_score_def")),
       nav_panel("Cycling vs cytokinesis", dl_fig_ui("cycsc"),
         plotOutput("cyc_scatter", height = "600px"))))),
 
@@ -2774,6 +2996,7 @@ ui <- page_navbar(
     navset_card_tab(id = "matt",
       nav_panel("By four groups", value = "violin",
         plotOutput("mat_violin", height = "560px"),
+        uiOutput("mat_score_def"),
         uiOutput("mat_violin_method")),
       nav_panel("Maturation vs metabolism (cells)", value = "cells",
         plotOutput("mat_scatter", height = "600px"),
@@ -2782,6 +3005,7 @@ ui <- page_navbar(
         helpText("Hover a point for the gene and its coordinates; click a point — or a table row — ",
                  "to ring it and show its details."),
         uiOutput("gm_note"),
+        dl_fig_ui("gmsc", "Download figure (static)"),
         plotlyOutput("gm_scatter", height = "560px"),
         uiOutput("gm_pick_ui"),
         dl_data_ui("gm_table"), DTOutput("gm_table"),
@@ -2798,7 +3022,14 @@ ui <- page_navbar(
     helpText("What went into each sig_* score: which curated gene sets, which matrix it was ",
              "scored on, how many of the set's genes were actually present, and how many cells ",
              "were scored. Written by build_signature_scores.R."),
-    dl_data_ui("score_meta_tab"), DTOutput("score_meta_tab", height = "320px"))),
+    dl_data_ui("score_meta_tab"), DTOutput("score_meta_tab", height = "320px"),
+    h5("The curated gene sets themselves", class = "mt-4"),
+    helpText("Every list behind those scores, in full. These are hand-curated canonical ",
+             "markers — not MSigDB, not GO — and there is no recorded source for the specific ",
+             "choices; see the README section “Module scores” before citing them. Read out of ",
+             "build_signature_scores.R at startup rather than copied, so this table cannot ",
+             "drift from what was actually scored."),
+    dl_data_ui("score_sets_tab"), DTOutput("score_sets_tab", height = "320px"))),
 
   nav_panel("Annotation check", div(style = "max-width:1000px;padding:8px 4px",
     helpText("Each cell is scored against published-style developmental mouse-heart marker panels; ",
@@ -2957,6 +3188,16 @@ xc_venn_method_note <- function(p) {
 
 # -------------------------------------------------------------- SERVER --------
 server <- function(input, output, session) {
+  # Figure Studio: when the browser blocks the window.open from studio_js(),
+  # offer the same URL as a plain link the user clicks themselves.
+  if (STUDIO_ON) observeEvent(input$studio_popup_blocked, {
+    showModal(modalDialog(title = "Figure Studio", easyClose = TRUE,
+      p("Your browser blocked the pop-up. Open the figure here instead:"),
+      tags$a(href = input$studio_popup_blocked, target = "_blank",
+             class = "btn btn-primary", "Open in Figure Studio"),
+      footer = modalButton("Close")))
+  })
+
   for (id in c("gene","g2","cm_gene")) {
     sel <- if ("Gabbr2" %in% ALL_GENES) "Gabbr2" else ALL_GENES[1]
     updateSelectizeInput(session, id, choices = ALL_GENES, selected = sel, server = TRUE)
@@ -3038,6 +3279,23 @@ server <- function(input, output, session) {
                width = input$umap_w %||% 1200, height = input$umap_h %||% 900, scale = input$umap_scale %||% 2))
     else config(p, displaylogo = FALSE)   # default camera download behaviour
   })
+  # static ggplot twin of the plotly UMAP (same dispatch), for vector export + studio
+  umap_gg_p <- reactive({
+    cb <- input$color_by; cont <- cb %in% c("gene", CONT_COLS); ps <- input$ptsize
+    leg <- input$umap_legend %||% TRUE; pal <- input$umap_palette %||% "Default"; mp <- umap_rn()
+    deflab <- if (cb == "gene") input$gene else labof(cb)
+    ttl <- if (!is.null(input$umap_title) && nzchar(input$umap_title)) input$umap_title
+           else if (cont) deflab else NULL
+    if (input$split == "none")
+      umap_gg(meta, cb, gene = if (cb == "gene") input$gene else NULL, continuous = cont,
+              ttl = ttl, psize = ps, labels = input$umap_labels %||% TRUE,
+              labsize = input$umap_labelsize %||% 12, legend = leg, pal_choice = pal, map = mp)
+    else
+      umap_gg(meta, cb, splitvar = input$split, gene = if (cb == "gene") input$gene else NULL,
+              continuous = cont, ttl = ttl, psize = max(2, ps - 1), legend = leg,
+              pal_choice = pal, map = mp)
+  })
+  register_fig(output, "umapgg", umap_gg_p, input)
 
   # ---- Gene detail ----
   vln_plot <- reactive({
@@ -3059,7 +3317,7 @@ server <- function(input, output, session) {
     p
   })
   output$vln <- renderPlot(apply_fig_opts(vln_plot(), "vln", input))
-  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("vln_dl_", f)]] <- dl_ggplot("vln", vln_plot, input, f) })
+  register_fig(output, "vln", vln_plot, input)
 
   dot_plot <- reactive({
     bs <- input$dot_basesize %||% 13
@@ -3076,7 +3334,7 @@ server <- function(input, output, session) {
       labs(x = labof(input$grp), y = if (sp != "none") labof(sp) else "", size = "% expr", color = "mean", title = input$g2)
   })
   output$dot <- renderPlot(apply_fig_opts(dot_plot(), "dot", input))
-  for (.f in c("pdf","svg","png")) local({ f <- .f; output[[paste0("dot_dl_", f)]] <- dl_ggplot("dot", dot_plot, input, f) })
+  register_fig(output, "dot", dot_plot, input)
   output$g2_cells <- renderUI({
     g <- input$g2; req(g)
     n <- sum(!is.na(expr_vec(g, meta$cell)))
@@ -3111,6 +3369,11 @@ server <- function(input, output, session) {
                          paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano",
                          highlight = ct_pick(), lfc_cut = input$ct_vlfc %||% DE_LFC_CUT))
   outputOptions(output, "ct_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
+  # static twin for vector export + studio (same data, title and colour cut)
+  ct_volcano_gg <- reactive(de_volcano(drop_conf(ct_d(), input$ct_hideconf),
+    paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)),
+    lfc_cut = input$ct_vlfc %||% DE_LFC_CUT, highlight = ct_pick()))
+  register_fig(output, "ctvolc", ct_volcano_gg, input)
   output$ct_table   <- renderDT(de_datatable(ct_tab()))
   output$ct_pick_ui  <- renderUI(pick_banner(ct_pick(), "ct_clear"))
   output$ct_geneinfo <- renderUI(gene_info_card(ct_pick(), "ct_infoclose"))
@@ -3157,6 +3420,28 @@ server <- function(input, output, session) {
     umap_cat(df, "mapval", ttl = paste0(labof(cb), if (cb == "subcluster") " — res 0.2" else ""),
              psize = 5, labels = (cb == "subcluster"))
   })
+  # static ggplot twin of the CM map (same dispatch), for vector export + studio
+  cm_map_gg_p <- reactive({
+    req(input$cm_mapcolor); cb <- input$cm_mapcolor; df <- cmm
+    sp <- input$cm_map_split %||% "none"
+    if (sp != "none") {
+      df$mapval <- factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
+      if (sp == "both") {
+        gl <- levels(factor(df$genotype)); tl <- levels(factor(df$timepoint))
+        df$splitgrp <- factor(paste(df$genotype, df$timepoint, sep = " · "),
+                              levels = as.vector(t(outer(gl, tl, paste, sep = " · "))))
+        return(umap_gg(df, "mapval", splitvar = "splitgrp", psize = 4, nrows = 2))
+      }
+      return(umap_gg(df, "mapval", splitvar = sp, psize = 4))
+    }
+    if (cb == "gene") return(umap_gg(df, NULL, gene = input$cm_gene, continuous = TRUE,
+                                     ttl = input$cm_gene, psize = 5))
+    df$mapval <- if (cb == "subcluster")
+      factor(paste0("CM", df[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2")) else factor(df[[cb]])
+    umap_gg(df, "mapval", ttl = paste0(labof(cb), if (cb == "subcluster") " — res 0.2" else ""),
+            psize = 5, labels = (cb == "subcluster"))
+  })
+  register_fig(output, "cmmap", cm_map_gg_p, input)
   cm_markerheat_p <- reactive({
     h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
     long <- h$long; long$gene <- factor(long$gene, levels = rev(h$genes)); long$cluster <- factor(long$cluster, levels = h$clusters)
@@ -3209,6 +3494,17 @@ server <- function(input, output, session) {
                   xlab = ct$xlab %||% "log2 fold change (KO / WT)",
                   highlight = cm_pick(), lfc_cut = input$cm_vlfc %||% DE_LFC_CUT) })
   outputOptions(output, "cm_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
+  # static twin for vector export + studio (same contrast, title and colour cut)
+  cm_volcano_gg <- reactive({ ct <- cm_ct()
+    ttl <- if (is.null(ct)) paste0(input$cm_sub, " — ", sub_label("0.2", input$cm_sub))
+           else paste0(ct$label, " — ",
+                       if (identical(input$cm_sub, "AllCM")) "all CM" else input$cm_sub,
+                       if (identical(input$cm_stratum, "G1")) " (G1)" else "")
+    de_volcano(drop_conf(cm_d(), input$cm_hideconf), ttl,
+               pos = ct$pos %||% "up in KO", neg = ct$neg %||% "up in WT",
+               xlab = ct$xlab %||% "log2 fold change (KO / WT)",
+               lfc_cut = input$cm_vlfc %||% DE_LFC_CUT, highlight = cm_pick()) })
+  register_fig(output, "cmvolc", cm_volcano_gg, input)
   output$cm_detab   <- renderDT(de_datatable(cm_tab(), scroll = NULL))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
   output$cm_geneinfo <- renderUI(gene_info_card(cm_pick(), "cm_infoclose"))
@@ -3675,6 +3971,14 @@ server <- function(input, output, session) {
       lfc_cut = input$fg_vlfc %||% DE_LFC_CUT)
   })
   outputOptions(output, "fg_volcano", suspendWhenHidden = FALSE)  # register the click source at startup
+  # static twin for vector export + studio (same contrast, title and colour cut)
+  fg_volcano_gg <- reactive({ ct <- fg_ct(input$fg_contrast); req(ct)
+    de_volcano(fg_d(),
+      paste0(ct$label, " — ", if (input$fg_cluster == "AllCM") "all CM" else input$fg_cluster,
+             if (input$fg_stratum == "G1") " (G1)" else ""),
+      pos = ct$pos, neg = ct$neg, xlab = ct$xlab,
+      lfc_cut = input$fg_vlfc %||% DE_LFC_CUT, highlight = fg_pick()) })
+  register_fig(output, "fgvolc", fg_volcano_gg, input)
   output$fg_detab    <- renderDT(de_datatable(fg_tab(), scroll = NULL))
   output$fg_pick_ui  <- renderUI(pick_banner(fg_pick(), "fg_clear"))
   output$fg_geneinfo <- renderUI(gene_info_card(fg_pick(), "fg_infoclose"))
@@ -4140,6 +4444,16 @@ server <- function(input, output, session) {
   )
 
   # ---- "how this plot was made" blocks (bodies are free functions, see above) ----
+  output$mat_score_def <- renderUI({ sc <- input$mat_score %||% "sig_maturation"
+    method_note(score_def_ui(sc),
+                title = paste0("What ", sc, " is, and which genes are in it")) })
+  # the ploidy tab shows four scores at once, so it documents all four
+  output$cyc_score_def <- renderUI(method_note(
+    tagList(lapply(intersect(c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy"),
+                             if (is.null(SCOREMETA)) character(0) else SCOREMETA$score),
+      function(sc) tagList(tags$h6(labof(sc), style = "margin-top:10px;font-weight:700"),
+                           score_def_ui(sc)))),
+    title = "What these scores are, and which genes are in them"))
   output$mat_violin_method  <- renderUI(mat_violin_method_note(input$mat_score %||% "sig_maturation"))
   output$mat_scatter_method <- renderUI(mat_scatter_method_note())
   output$gm_method          <- renderUI(gm_method_note(input$gm_panel %||% "avg"))
@@ -4289,6 +4603,15 @@ server <- function(input, output, session) {
                   lfc_cut = input$deg_vlfc %||% DE_LFC_CUT)
   })
   outputOptions(output, "deg_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
+  # static twin for vector export + studio (same groups, labels and colour cut)
+  deg_volcano_gg <- reactive({
+    d <- drop_conf(deg_res(), input$deg_hideconf)
+    de_volcano(d, paste0(deg_lab(isolate(input$deg_a)), "  vs  ", deg_lab(isolate(input$deg_b))),
+               pos = paste0("up in ", deg_lab(isolate(input$deg_a))),
+               neg = paste0("up in ", deg_lab(isolate(input$deg_b))),
+               xlab = "logFC  (A / B)", lfc_cut = input$deg_vlfc %||% DE_LFC_CUT,
+               highlight = deg_pick()) })
+  register_fig(output, "degvolc", deg_volcano_gg, input)
   output$deg_table   <- renderDT(de_datatable(deg_tab()))
   output$deg_pick_ui <- renderUI(pick_banner(deg_pick(), "deg_clear"))
   output$deg_geneinfo <- renderUI(gene_info_card(deg_pick(), "deg_infoclose"))
@@ -4358,6 +4681,7 @@ server <- function(input, output, session) {
     SCOREMETA
   })
   output$score_meta_tab <- renderDT(enr_dt(score_meta_df()))
+  output$score_sets_tab <- renderDT(enr_dt(score_sets_df()))
   output$doublet_tab <- renderTable({ validate(need(!is.null(tabs$doublet), "No doublet table.")); tabs$doublet },
                                     striped = TRUE, hover = TRUE)
 
@@ -4456,6 +4780,10 @@ server <- function(input, output, session) {
   output$gm_scatter <- renderPlotly(gm_plot_ly(gm_d(), input$gm_labeln %||% 20, gm_pick(),
                                                 input$gm_panel %||% "avg"))
   outputOptions(output, "gm_scatter", suspendWhenHidden = FALSE)  # register the click source at startup
+  # static twin for vector export + studio (same panel, filters and labels)
+  gm_scatter_gg <- reactive(gm_plot_gg(gm_d(), input$gm_labeln %||% 20, gm_pick(),
+                                       input$gm_panel %||% "avg"))
+  register_fig(output, "gmsc", gm_scatter_gg, input)
   output$gm_note <- renderUI({
     d <- try(gm_d(), silent = TRUE)
     n <- if (inherits(d, "try-error")) 0 else nrow(d)
@@ -4587,7 +4915,8 @@ server <- function(input, output, session) {
          df = function() commun_table_df(input$cc_pathway, input$cc_tp)),
     list(id = "ann_tab", base = "annotation_check", df = function() refmap_table_df()),
     list(id = "doublet_tab", base = "qc_doublets", df = function() tabs$doublet),
-    list(id = "score_meta_tab", base = "module_score_definitions", df = function() score_meta_df())
+    list(id = "score_meta_tab", base = "module_score_definitions", df = function() score_meta_df()),
+    list(id = "score_sets_tab", base = "module_score_gene_sets", df = function() score_sets_df())
   )
   for (.t in TABLE_DL) local({
     t <- .t
