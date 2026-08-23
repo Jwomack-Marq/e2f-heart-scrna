@@ -58,7 +58,8 @@ testServer(APPDIR, {
     xc_grid = "de", xc_padj = 0.05, xc_measure = "auc", xc_auc = 0.60, xc_lfc = 0.25,
     xc_hidemt = TRUE, xc_gene_cmp = "__all__",
     ct_vlfc = 1, cm_vlfc = 1, fg_vlfc = 1, deg_vlfc = 1,
-    vn_measure = "lfc", vn_auc = 0.60
+    vn_measure = "lfc", vn_auc = 0.60,
+    mat_ct = "Cardiomyocyte", mat_score = "sig_maturation", mat_stratum = "all"
   )
 
   cat("\n== table download frames ==\n")
@@ -239,6 +240,27 @@ testServer(APPDIR, {
   note(if (identical(nrow(cm_tab()), n_tab)) "PASS" else "FAIL",
        "volcano cut does not filter", sprintf("%d rows either way", n_tab))
   session$setInputs(cm_vlfc = 1)
+
+  cat("\n== method notes under the figures ==\n")
+  # The bodies are free functions precisely so this is testable: testServer snapshots
+  # output$ values, so a note that silently stopped following its dropdown would still
+  # look correct through output$.
+  flat <- function(x) paste(as.character(x), collapse = "")
+  for (o in c("mat_violin_method","mat_scatter_method","gm_method","xc_venn_method")) {
+    h <- tryCatch(flat(output[[o]]), error = function(e) paste("ERROR:", conditionMessage(e)))
+    note(if (!startsWith(h, "ERROR") && nchar(h) > 500) "PASS" else "FAIL", o,
+         if (startsWith(h, "ERROR")) h else sprintf("%d chars", nchar(h)))
+  }
+  gmn <- gf("gm_method_note"); vmn <- gf("mat_violin_method_note")
+  note(if (grepl("0.509", flat(gmn("avg")), fixed = TRUE) &&
+           grepl("0.519", flat(gmn("P7")),  fixed = TRUE) &&
+           grepl("0.498", flat(gmn("P0")),  fixed = TRUE)) "PASS" else "FAIL",
+       "gene map note tracks the panel", "avg/P7/P0 centres 0.509/0.519/0.498")
+  note(if (grepl("mat_mature - mat_immature", flat(vmn("sig_maturation")), fixed = TRUE) &&
+           grepl("faox - glycolysis", flat(vmn("sig_metabolic")), fixed = TRUE)) "PASS" else "FAIL",
+       "violin note tracks the score", "names the gene sets behind it")
+  note(if (grepl("Xist", flat(gmn("avg")), fixed = TRUE)) "PASS" else "FAIL",
+       "gene map note flags its own gaps", "Xist / mt- not filtered there")
 
   cat("\n== CM deep-dive per-contrast enrichment ==\n")
   session$setInputs(cm_enr_sub = "CM2", cm_enr_contrast = "P7_KO_vs_WT",

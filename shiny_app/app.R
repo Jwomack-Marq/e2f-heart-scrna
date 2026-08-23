@@ -644,6 +644,20 @@ dl_book <- function(basename, sheets_fn, title = NULL, notes = NULL) {
     })
 }
 
+# A "how this was made" block, placed directly under its figure. A <details> element, so
+# it costs one line of screen until someone opens it, and it sits beside the plot rather
+# than in a document that drifts out of date. `code` names FUNCTIONS AND FILES, never line
+# numbers -- those rot the first time anything above them is edited.
+method_note <- function(..., code = NULL, title = "How this plot was made") {
+  tags$details(
+    style = paste0("font-size:12.5px;margin-top:12px;border:1px solid #e6e6e6;",
+                   "border-radius:6px;padding:6px 12px;background:#fafafa"),
+    tags$summary(style = "cursor:pointer;font-weight:600;color:#2c3e50", title),
+    div(style = "padding-top:8px;line-height:1.55", ...),
+    if (!is.null(code)) div(style = "margin-top:8px;color:#555",
+      HTML(paste0("<b>Code:</b> ",
+                  paste(sprintf("<code>%s</code>", code), collapse = " &nbsp;·&nbsp; ")))))
+}
 # The button pair. Placed in the content pane directly above its table, which is
 # where a reader looks for it and which works inside navset_card_tab panels that
 # the sidebar cannot cleanly address.
@@ -2642,7 +2656,8 @@ ui <- page_navbar(
           column(6, dl_fig_ui("xcvenn2"), plotOutput("xc_venn2", height = "380px"))),
         fluidRow(
           column(6, dl_fig_ui("xcvenn3"), plotOutput("xc_venn3", height = "380px")),
-          column(6, dl_fig_ui("xcvenn4"), plotOutput("xc_venn4", height = "380px")))),
+          column(6, dl_fig_ui("xcvenn4"), plotOutput("xc_venn4", height = "380px"))),
+        uiOutput("xc_venn_method")),
       nav_panel("Overlap statistics", value = "stats",
         helpText("Observed overlap against the hypergeometric expectation over the shared ",
                  "testable gene space. Fold near 1 with a non-significant p means the two ",
@@ -2757,9 +2772,12 @@ ui <- page_navbar(
         accordion_panel("Violin figure options", figure_controls("mat", palette = TRUE, rename = FALSE)),
         accordion_panel("Cell-scatter figure options", figure_controls("matsc", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "matt",
-      nav_panel("By four groups", value = "violin", plotOutput("mat_violin", height = "560px")),
+      nav_panel("By four groups", value = "violin",
+        plotOutput("mat_violin", height = "560px"),
+        uiOutput("mat_violin_method")),
       nav_panel("Maturation vs metabolism (cells)", value = "cells",
-        plotOutput("mat_scatter", height = "600px")),
+        plotOutput("mat_scatter", height = "600px"),
+        uiOutput("mat_scatter_method")),
       nav_panel("Gene map", value = "genemap",
         helpText("Hover a point for the gene and its coordinates; click a point — or a table row — ",
                  "to ring it and show its details."),
@@ -2767,7 +2785,8 @@ ui <- page_navbar(
         plotlyOutput("gm_scatter", height = "560px"),
         uiOutput("gm_pick_ui"),
         dl_data_ui("gm_table"), DTOutput("gm_table"),
-        uiOutput("gm_geneinfo")))))),
+        uiOutput("gm_geneinfo"),
+        uiOutput("gm_method")))))),
 
   nav_spacer(),
   nav_menu("Help",
@@ -2792,6 +2811,149 @@ ui <- page_navbar(
 
   nav_panel("About / caveats", div(style = "max-width:820px;padding:8px 4px", htmlOutput("about"))))
 )
+
+
+  # ---- "how this plot was made" blocks -------------------------------------------
+# Free functions, not renderUI bodies: each takes the selection as an argument so a test
+# can call it with a panel or a score directly. testServer snapshots output$ values, so a
+# note written inline in renderUI is effectively untestable -- it would look correct
+# forever even after it stopped following its dropdown.
+mat_violin_method_note <- function(sc) {
+    r  <- if (!is.null(SCOREMETA)) SCOREMETA[SCOREMETA$score == sc, , drop = FALSE] else NULL
+    method_note(
+      tags$p(HTML(sprintf(paste0("Each violin is <b>one point per cell</b>, grouped genotype ",
+        "&times; timepoint. The y value is the per-cell module score <code>%s</code>%s."), sc,
+        if (!is.null(r) && nrow(r)) sprintf(paste0(", built from the curated set(s) <b>%s</b>",
+          " (%d of %d genes found, on the %s matrix; %s cells scored)"),
+          r$sets[1], r$n_genes_used[1], r$n_genes_set[1], r$matrix[1],
+          format(r$n_cells_scored[1], big.mark = ",")) else ""))),
+      tags$ul(
+        tags$li(HTML(paste0("<b>The score is a hand-curated gene list, not a database term.</b> ",
+          "It is an <code>AddModuleScore</code> equivalent: mean log-normalised expression of ",
+          "the set minus the mean of 100 control genes drawn from the same expression bin ",
+          "(24 quantile bins, <code>seed = 1</code>). Raw values &mdash; no z-scoring, no ",
+          "rescaling. See the README section &ldquo;Module scores&rdquo; for every list."))),
+        tags$li(HTML(paste0("<b>Composites are differences, not ratios.</b> ",
+          "<code>sig_maturation</code> = mature &minus; immature; <code>sig_metabolic</code> = ",
+          "FAO &minus; glycolysis, so positive means more oxidative."))),
+        tags$li(HTML(paste0("<b>On the plot:</b> violins use <code>scale = &quot;width&quot;</code>, ",
+          "so every group is drawn the same width and shape is comparable but area is <i>not</i> ",
+          "proportional to n. The box is the IQR, the white diamond is the <b>mean</b>, and the ",
+          "<code>n=</code> label under each group is its cell count."))),
+        tags$li(HTML(paste0("<b>Caveat.</b> P7 was FACS cycling-enriched 4.5&ndash;5.2&times; ",
+          "relative to P0, so any score that tracks the cell cycle is shifted by the sort. The ",
+          "G1 stratum in the sidebar holds that composition fixed.")))),
+      code = c("score_violin() &mdash; shiny_app/app.R",
+               "shiny_app/build_signature_scores.R"))
+}
+
+mat_scatter_method_note <- function() {
+    method_note(
+      tags$p(HTML(paste0("Each point is <b>one cell</b>, placed by two module scores: ",
+        "x = <code>sig_maturation</code> (mature &minus; immature program), ",
+        "y = <code>sig_metabolic</code> (FAO &minus; glycolysis, so up = more oxidative)."))),
+      tags$ul(
+        tags$li(HTML(paste0("<b>Three layers, and only two of them use all the cells.</b> The ",
+          "faint dots are a random thin to 6,000 cells, for texture only &mdash; 30k points is ",
+          "an unreadable blob. The contours (<code>stat_density_2d</code>, 5 bins) and the ",
+          "centroids are computed on <b>every</b> cell in the group. Read the contours, not the ",
+          "dot density."))),
+        tags$li(HTML(paste0("<b>Large ringed circles are centroids</b> &mdash; the plain ",
+          "arithmetic mean of x and y over that group's cells. The grey arrow is the WT&rarr;KO ",
+          "displacement within each timepoint, which is the comparison the tab exists for."))),
+        tags$li(HTML(paste0("<b>The subtitle</b> gives that arrow's length (Euclidean distance ",
+          "between the two centroids) and, in brackets, its maturation component alone. When the ",
+          "two are nearly equal the shift is almost entirely along the maturation axis, with ",
+          "little metabolic movement."))),
+        tags$li(HTML(paste0("<b>The quadrant percentages</b> in the caption are the share of each ",
+          "group's cells with <i>both</i> scores &gt; 0. Note this splits at <b>0</b>, whereas the ",
+          "<i>Gene map</i> tab splits at the median AUC &mdash; the same words describe different ",
+          "geometry on the two tabs, so those percentages are not comparable across them."))),
+        tags$li(HTML(paste0("<b>Caveat.</b> The panels share axes, and P7 was FACS ",
+          "cycling-enriched 4.5&ndash;5.2&times; relative to P0. Use the G1 stratum to hold ",
+          "cycling composition fixed.")))),
+      code = c("mat_scatter() &mdash; shiny_app/app.R",
+               "shiny_app/build_signature_scores.R"))
+}
+
+gm_method_note <- function(panel) {
+    ctr <- gm_centre(panel)
+    nc  <- if (!is.null(GM_NCELL) && !is.null(GM_NCELL$mat))
+             paste(sprintf("%s: %s", names(GM_NCELL$mat),
+                           format(GM_NCELL$mat, big.mark = ",")), collapse = ", ") else NULL
+    method_note(
+      tags$p(HTML(sprintf(paste0("Each point is a <b>gene</b>, not a cell &mdash; this inverts ",
+        "the cell scatter. Coordinates are precomputed into ",
+        "<code>app$fourgroup$geneaxes</code> (%s genes) and only filtered here."),
+        format(if (is.null(GM)) 0L else nrow(GM), big.mark = ",")))),
+      tags$ul(
+        tags$li(HTML(paste0("<b>How a coordinate is made.</b> Within <i>each timepoint ",
+          "separately</i>, CM cells are split into tertiles of the per-cell score and ",
+          "<code>presto::wilcoxauc</code> compares the top third against the bottom third; the ",
+          "gene's AUC is its coordinate. The two timepoints are then averaged. Splitting within ",
+          "timepoint and averaging afterwards is what stops the axis becoming a P0-vs-P7 axis, ",
+          "which the FACS sort confounds.", if (is.null(nc)) "" else
+            sprintf(" Tertile split used %s cells.", nc)))),
+        tags$li(HTML(paste0("<b>x</b> = maturation AUC, from <code>sig_maturation_nocc</code> ",
+          "(the cycle-free variant, so the axis is not partly a cell-cycle score). ",
+          "<b>y</b> = metabolic AUC, from <code>sig_metabolic</code>."))),
+        tags$li(HTML(sprintf(paste0("<b>The crosshair sits at each axis's median, not at 0.5</b> ",
+          "&mdash; for this panel, maturation <b>%.3f</b> and metabolic <b>%.3f</b>. ",
+          "<code>wilcoxauc</code>'s AUC carries a small global offset because the two tertile ",
+          "groups differ in detection rate, and most genes sit within ~0.02 of the median, so a ",
+          "hard 0.5 split put 65%% of them in one corner. Quadrant and distance are recomputed ",
+          "against whichever panel you select."), ctr[["mat"]], ctr[["met"]]))),
+        tags$li(HTML(sprintf(paste0("<b>Ringed points are &ldquo;confidently labelled&rdquo;</b>: ",
+          "at least %.2f clear of this panel's centre <i>and</i> padj &lt; 0.05 on that axis. Very ",
+          "few genes clear it, which is the point. Everything else still gets a side so it can be ",
+          "ranked, but treat an unringed point as a position, not a claim."), GM_CONF_MARGIN))),
+        tags$li(HTML(paste0("<b>Labels</b> name the top N by <code>distance</code> from the centre. ",
+          "That ranking <i>is</i> the &ldquo;how strongly does this gene define the joint ",
+          "program&rdquo; question."))),
+        tags$li(HTML(paste0("<b>Scoring-set genes are hidden by default.</b> The 39 genes that ",
+          "define the two scores sit at their own axis's extreme by construction, so leaving them ",
+          "in would partly just recover the inputs."))),
+        tags$li(HTML(paste0("<b>Two things this map does not filter, and the DE tabs do.</b> ",
+          "Sex/construct confounders are still here &mdash; <code>Xist</code> is currently one of ",
+          "the confidently-labelled genes, which is the sex difference between the two animals ",
+          "being read as maturation. And 36 mitochondrially-encoded genes are on the map, 8 of ",
+          "them confidently labelled, reflecting the library read-fraction difference between the ",
+          "samples rather than metabolism. Treat both as artifacts of the design.")))),
+      code = c("gm_df() / gm_plot_ly() &mdash; shiny_app/app.R",
+               "axis_association() &mdash; shiny_app/build_fourgroup.R"))
+}
+
+xc_venn_method_note <- function(p) {
+    method_note(
+      tags$p(HTML(paste0("Each diagram crosses <b>two gene lists</b>, built from the same ",
+        "four-group DE grid the other cardiomyocyte tabs read (<code>app$fourgroup$de</code>)."))),
+      tags$ul(
+        tags$li(HTML(sprintf(paste0("<b>Set A (blue)</b> is WT P0&rarr;P7 in <b>%s</b>, filtered ",
+          "to one curated gene category. <b>Set B (red)</b> is P7 KO-vs-WT, unioned across the ",
+          "named subclusters &mdash; every DE gene there, <i>not</i> filtered by category. ",
+          "Filtering both sides by category would intersect the maturation set with the ",
+          "cell-cycle set, and those two share only Mki67 and Top2a, so the first two diagrams ",
+          "would read empty by construction rather than by biology."), p$wt_cluster))),
+        tags$li(HTML(sprintf(paste0("<b>Membership rule.</b> padj &lt; %s and %s, in the direction ",
+          "named in the title. A gene joins set B if it passes in at least %d of the named ",
+          "subclusters."), p$padj, xc_eff_label(p), p$minc))),
+        tags$li(HTML(paste0("<b>Why AUC is the default effect size.</b> <code>presto</code>'s ",
+          "log2FC is a difference of mean log-normalised expression, so it scales with expression ",
+          "level: from WT P0 to P7 <i>Mcm3</i> quadruples its detection rate (6.6% &rarr; 27.2%) ",
+          "for a log2FC of 0.16, while <i>Myh7</i> moves 2.5. A symmetric |log2FC| cut classifies ",
+          "maturation genes and can never classify a sparse cell-cycle one. AUC is rank-based and ",
+          "means the same thing on both."))),
+        tags$li(HTML(paste0("<b>Circle areas are not to scale</b> and the two sets are lopsided ",
+          "by design &mdash; one curated category (a few genes) against a whole cluster group ",
+          "(hundreds). The numbers carry the counts, and the <i>Overlap statistics</i> tab carries ",
+          "the null: an overlap only means something against what independence would predict."))),
+        tags$li(HTML(paste0("<b>Geometry.</b> Two equal-radius circles drawn with ",
+          "<code>geom_polygon</code> over sampled circle points &mdash; no Venn package. Region ",
+          "counts come from set membership, not from the drawing.")))),
+      code = c("xc_comparison() / xc_wt_set() / xc_ko_set() &mdash; shiny_app/app.R",
+               "vn_plot() / vn_stats() &mdash; shiny_app/app.R",
+               "shiny_app/build_fourgroup.R"))
+}
 
 # -------------------------------------------------------------- SERVER --------
 server <- function(input, output, session) {
@@ -3976,6 +4138,13 @@ server <- function(input, output, session) {
       "Mitochondrially-encoded (mt-) genes are up in the KO in every subcluster and down in none - a library read-fraction difference, not biology. They are excluded unless the sidebar box was unticked.",
       "n = 1 animal per genotype x timepoint, sexes differ between genotypes, and the KO is not transcript-confirmed. Cell-level Wilcoxon p-values are pseudoreplicated. Descriptive and hypothesis-generating only.")
   )
+
+  # ---- "how this plot was made" blocks (bodies are free functions, see above) ----
+  output$mat_violin_method  <- renderUI(mat_violin_method_note(input$mat_score %||% "sig_maturation"))
+  output$mat_scatter_method <- renderUI(mat_scatter_method_note())
+  output$gm_method          <- renderUI(gm_method_note(input$gm_panel %||% "avg"))
+  output$xc_venn_method     <- renderUI({ p <- try(xc_p(), silent = TRUE)
+    if (inherits(p, "try-error")) NULL else xc_venn_method_note(p) })
 
   # ---- Gene-set Venn ----
   observe({

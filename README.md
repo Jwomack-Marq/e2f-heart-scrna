@@ -439,6 +439,20 @@ in this repo. The defensible description is *canonical markers curated by the an
 not "derived from *(reference)*". If these lists are going into a figure legend, that
 sentence is the one to write.
 
+### Reading it in the app
+
+Every figure on **Maturation & metabolism**, and the four Venns on **WT programs ∩ KO
+clusters**, carries a collapsed **"How this plot was made"** block underneath it —
+what a point is, how the coordinate was computed, what the annotations mean, and the
+functions that build it. The blocks are live: the gene map's quotes the selected panel's
+actual axis centre, and the violin's names the gene sets behind whichever score is chosen.
+
+They are written as free functions (`gm_method_note()`, `mat_violin_method_note()`,
+`mat_scatter_method_note()`, `xc_venn_method_note()`) rather than inline `renderUI` bodies,
+so the tests can call them with a panel or a score and check they still follow it —
+`testServer` snapshots `output$` values, so a note that quietly stopped tracking its
+dropdown would look correct forever.
+
 ### The lists
 
 | set | n | genes |
