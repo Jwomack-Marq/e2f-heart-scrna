@@ -42,7 +42,9 @@ fat_plot <- local({
   ggplot(df, aes(x, y, color = g)) + geom_point() + facet_wrap(~g)
 })
 sz_raw <- length(serialize(fat_plot, NULL))
-stripped <- strip_plot_env(fat_plot)
+st <- strip_plot_env(fat_plot)
+note(if (isTRUE(st$ok)) "PASS" else "FAIL", "strip reports success", st$why %||% "")
+stripped <- st$plot
 sz_strip <- length(serialize(stripped, NULL))
 note(if (sz_raw > 10e6) "PASS" else "FAIL", "unstripped plot is fat",
      sprintf("%.1f MB captured", sz_raw / 1e6))
@@ -61,10 +63,46 @@ note(if (any(grepl("BUILD_OK", out))) "PASS" else "FAIL",
      "fresh-session round-trip", paste(tail(out, 1), collapse = " "))
 
 # stripping must be idempotent -- the studio may strip an already-stripped plot
-twice <- strip_plot_env(stripped)
+twice <- strip_plot_env(stripped)$plot
 note(if (!inherits(tryCatch(ggplot_build(twice), error = identity), "error") &&
          length(serialize(twice, NULL)) < 2e6) "PASS" else "FAIL",
      "stripping is idempotent")
+
+# REGRESSION (the cell-cell heatmap, which killed the user's session): a
+# plotly-only `text` aesthetic whose expression closes over a local -- here a
+# function argument -- while a huge object sits in the same frame. Rebinding
+# that quosure to globalenv used to break the verification build, fall back to
+# the attached plot, and hand 1.26 GB to saveRDS.
+tooltip_plot <- (function(metric) {
+  ballast <- rnorm(2e6)
+  d <- data.frame(sender = rep(c("CM", "EC"), 4), receiver = rep(c("FB", "MP"), each = 4),
+                  val = runif(8))
+  ggplot(d, aes(receiver, sender, fill = val,
+                text = paste0(sender, " -> ", receiver, "<br>", metric, ": ", round(val, 3)))) +
+    geom_tile()
+})("delta")
+tt <- strip_plot_env(tooltip_plot)
+note(if (isTRUE(tt$ok)) "PASS" else "FAIL", "tooltip plot strips (no fallback)", tt$why %||% "")
+note(if (length(serialize(tt$plot, NULL)) < 2e6) "PASS" else "FAIL",
+     "tooltip plot sheds its ballast",
+     sprintf("%.1f MB -> %.2f MB", length(serialize(tooltip_plot, NULL)) / 1e6,
+             length(serialize(tt$plot, NULL)) / 1e6))
+note(if (!("text" %in% names(tt$plot$layers[[1]]$mapping)) &&
+         !("text" %in% names(tt$plot$mapping))) "PASS" else "FAIL",
+     "plotly-only aes dropped")
+note(if (!inherits(tryCatch(ggplot_build(tt$plot), error = identity), "error")) "PASS" else "FAIL",
+     "tooltip plot still builds")
+
+# A plot that genuinely cannot be detached must be REFUSED, not shipped: an
+# aes() calling a locally-defined function cannot survive the trip.
+undetachable <- local({
+  helper <- function(v) v * 2
+  d <- data.frame(x = 1:5, y = 1:5)
+  ggplot(d, aes(x, helper(y))) + geom_point()
+})
+ud <- strip_plot_env(undetachable)
+note(if (!isTRUE(ud$ok)) "PASS" else "FAIL", "undetachable plot refused, not shipped",
+     substr(ud$why %||% "", 1, 60))
 
 # ---- 3. prune_handoff (before the click flood, while the dir is ours) -------
 old_f <- file.path(HDIR, "20200101000000aaaaaaaaaaaa.rds")
@@ -121,13 +159,30 @@ testServer(APPDIR, {
     e2f_grp = "genotype", comp_x = "celltype", comp_fill = "genotype"
   )
 
+  # A figure whose plot cannot even be built here is genuinely out of scope for
+  # this run (its tab needs inputs we have not set, or its bundle slot is
+  # absent). A figure that BUILDS but produces no figspec is a bug -- that is
+  # exactly how the cell-cell heatmap shipped broken, reported as a harmless
+  # SKIP while it was in fact refusing a 1.26 GB handoff. So decide which case
+  # we are in by asking the plot itself.
+  buildable <- function(pf) {
+    r <- tryCatch(output[[paste0(pf, "_dl_pdf")]], error = function(e) e)
+    !inherits(r, "error")
+  }
+
   ok_n <- 0L
   for (pf in prefixes) {
     before <- list.files(HDIR, pattern = "\\.rds$")
     do.call(session$setInputs, setNames(list(1L), paste0(pf, "_studio")))
     newf <- setdiff(list.files(HDIR, pattern = "\\.rds$", full.names = TRUE),
                     file.path(HDIR, before))
-    if (!length(newf)) { note("SKIP", pf, "no figspec (guarded / needs more inputs)"); next }
+    if (!length(newf)) {
+      if (buildable(pf))
+        note("FAIL", pf, "plot renders but the handoff produced nothing")
+      else
+        note("SKIP", pf, "plot unavailable here (guarded / needs more inputs)")
+      next
+    }
     spec <- tryCatch(readRDS(newf[1]), error = function(e) e)
     ok <- !inherits(spec, "error") &&
       identical(spec$version, 1L) &&

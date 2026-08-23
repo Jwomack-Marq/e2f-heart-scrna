@@ -25,16 +25,45 @@ STUDIO_TTL_SECS     <- 24 * 3600
 # it the whole server frame (input/output/session, every reactive) -- via
 # plot_env and the quosures in each mapping. saveRDS would serialize all of that
 # by value (only globalenv and package namespaces are stored by reference).
-# Every aes() in this app uses literal column names on small frames embedded in
-# the plot, so those environments are dead weight: rebind them to globalenv and
-# prove the plot still builds. Layers and facets are ggproto (environments), so
-# edits to them touch the caller's object too -- on a failed build we restore
-# the originals and hand back the plot untouched; the size guard downstream is
-# the backstop.
+#
+# Most aes() here name data columns, so their environments are dead weight. But
+# not all: commun_heat_gg() builds aes(text = paste0(..., metric, ...)) where
+# `metric` is one of its ARGUMENTS. Blindly rebinding that quosure to globalenv
+# makes `metric` unresolvable, the verification build fails, and the old code
+# then handed back the untouched plot -- 1.26 GB with the whole app hanging off
+# it, which saveRDS would then spend minutes gzipping. So instead of discarding
+# each quosure's environment, copy the few small values it actually needs into a
+# fresh one whose parent is globalenv.
+#
+# Returns list(plot, ok, why). ok = FALSE means "do not hand this off": an
+# unstripped plot is both enormous and useless at the far end, since it carries
+# environments the studio cannot reconstruct.
 strip_plot_env <- function(p) {
-  fixq <- function(m) {
-    for (nm in names(m)) if (rlang::is_quosure(m[[nm]]))
-      m[[nm]] <- rlang::quo_set_env(m[[nm]], globalenv())
+  # plotly-only aesthetics never render in a static export -- ggplot2 ignores
+  # `text` with a warning -- and they are exactly where the awkward closures
+  # live. Dropping them removes the problem rather than working around it.
+  PLOTLY_AES <- c("text", "customdata", "key", "frame", "ids", "hovertext")
+
+  # Values a quosure needs that are NOT data columns: copy them if they are
+  # small and self-contained. Anything big or exotic (a matrix, a Seurat object,
+  # an environment) is left behind deliberately -- carrying it is the bug.
+  small_enough <- function(v)
+    (is.atomic(v) || is.factor(v)) && !is.matrix(v) && length(v) <= 1000
+  slim_quo <- function(q, cols) {
+    env <- rlang::quo_get_env(q)
+    if (identical(env, globalenv()) || rlang::is_namespace(env)) return(q)
+    need <- setdiff(all.vars(rlang::quo_get_expr(q)), cols)
+    vals <- list()
+    for (v in need) {
+      val <- tryCatch(get(v, envir = env), error = function(e) NULL)
+      # functions resolve through the search path at build time; don't copy them
+      if (!is.null(val) && !is.function(val) && small_enough(val)) vals[[v]] <- val
+    }
+    rlang::quo_set_env(q, rlang::new_environment(vals, parent = globalenv()))
+  }
+  fixq <- function(m, cols) {
+    m <- m[setdiff(names(m), PLOTLY_AES)]
+    for (nm in names(m)) if (rlang::is_quosure(m[[nm]])) m[[nm]] <- slim_quo(m[[nm]], cols)
     m
   }
   # A ggproto INSTANCE built inside user code (a layer, a facet, an added
@@ -58,13 +87,15 @@ strip_plot_env <- function(p) {
   old_facet  <- tryCatch(p$facet$params, error = function(e) NULL)
   q <- p                                    # list copy; layers/facet stay shared
   ok <- tryCatch({
+    cols <- unique(c(names(p$data),
+                     unlist(lapply(p$layers, function(l) names(l$data)))))
     q$plot_env <- rlang::new_environment(parent = globalenv())
-    q$mapping  <- fixq(q$mapping)
-    for (l in q$layers) { l$mapping <- fixq(l$mapping); slim_ggproto(l) }
+    q$mapping  <- fixq(q$mapping, cols)
+    for (l in q$layers) { l$mapping <- fixq(l$mapping, cols); slim_ggproto(l) }
     if (!is.null(old_facet)) {
       fp <- q$facet$params
       for (s in intersect(c("facets", "rows", "cols"), names(fp)))
-        fp[[s]] <- fixq(fp[[s]])
+        fp[[s]] <- fixq(fp[[s]], cols)
       q$facet$params <- fp                                    # in place (ggproto)
     }
     # sweep every ggproto component the plot carries (facet, coordinates,
@@ -80,13 +111,19 @@ strip_plot_env <- function(p) {
       }
     }
     for (a in c(attributes(q), if (is.list(q)) unclass(q))) slim_all(a)
-    is.list(ggplot2::ggplot_build(q)$data)
-  }, error = function(e) FALSE)
-  if (ok) return(q)
+    is.list(suppressWarnings(ggplot2::ggplot_build(q))$data)
+  }, error = function(e) conditionMessage(e))
+  if (isTRUE(ok)) return(list(plot = q, ok = TRUE, why = NULL))
   for (i in seq_along(p$layers)) p$layers[[i]]$mapping <- old_layer[[i]]
   if (!is.null(old_facet)) p$facet$params <- old_facet
-  p
+  list(plot = p, ok = FALSE,
+       why = if (is.character(ok)) ok else "the detached plot would not rebuild")
 }
+
+# Serialized size WITHOUT touching the disk. The point is to refuse an oversized
+# figure before saveRDS spends minutes gzipping it -- the failure mode that read
+# as "the app crashed": the old code wrote first and measured afterwards.
+plot_nbytes <- function(x) tryCatch(length(serialize(x, NULL)), error = function(e) NA_real_)
 
 # showNotification needs a real session; under shiny::testServer (or any
 # headless call) fall back to message() so the tryCatch in studio_handoff
@@ -115,10 +152,24 @@ prune_handoff <- function(dir = HANDOFF_DIR, max_age = STUDIO_TTL_SECS) {
 # keeps the studio from ever reading a half-written file off the shared volume.
 studio_handoff <- function(prefix, plot_reactive, input, opts_prefix = prefix) {
   tryCatch({
-    g   <- function(s) input[[paste0(opts_prefix, "_", s)]]
+    g <- function(s) input[[paste0(opts_prefix, "_", s)]]
+    st <- strip_plot_env(apply_fig_opts(plot_reactive(), opts_prefix, input))
+    # Refuse rather than ship an attached plot: it would carry the app's data by
+    # value (gigabytes) and still not rebuild at the far end.
+    if (!isTRUE(st$ok))
+      stop(sprintf("this figure could not be detached from the app (%s)", st$why))
+    # Measure in memory, BEFORE writing. saveRDS on an oversized object is the
+    # slow, session-killing step, so it must never be how we find out.
+    sz <- plot_nbytes(st$plot)
+    if (is.na(sz) || sz > STUDIO_REFUSE_BYTES)
+      stop(sprintf("this figure is too large to hand off (%s)",
+                   if (is.na(sz)) "size could not be measured" else sprintf("%.0f MB", sz / 1e6)))
+    if (sz > STUDIO_WARN_BYTES)
+      studio_notify(sprintf("Large figure (%.0f MB) — the studio may take a moment to open it.",
+                            sz / 1e6))
     spec <- list(
       version = 1L,
-      plot    = strip_plot_env(apply_fig_opts(plot_reactive(), opts_prefix, input)),
+      plot    = st$plot,
       meta    = list(app = "e2f-heart-scrna", prefix = prefix,
                      palette = g("palette"),
                      w_in = g("w") %||% 7, h_in = g("h") %||% 5, dpi = g("dpi") %||% 300,
@@ -127,15 +178,6 @@ studio_handoff <- function(prefix, plot_reactive, input, opts_prefix = prefix) {
     tok <- studio_token()
     tmp <- file.path(HANDOFF_DIR, paste0(tok, ".rds.tmp"))
     saveRDS(spec, tmp)
-    sz <- file.size(tmp)
-    if (sz > STUDIO_REFUSE_BYTES) {
-      unlink(tmp)
-      stop(sprintf("this figure serializes to %.0f MB, which means environment stripping failed",
-                   sz / 1e6))
-    }
-    if (sz > STUDIO_WARN_BYTES)
-      studio_notify(sprintf("Large figure (%.0f MB) — the studio may take a moment to open it.",
-                            sz / 1e6))
     file.rename(tmp, file.path(HANDOFF_DIR, paste0(tok, ".rds")))
     prune_handoff()
     tok
