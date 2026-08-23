@@ -52,6 +52,26 @@ shiny::runApp("shiny_app")   # needs shiny_app/app_data.rds present
 rsconnect::deployApp("shiny_app")   # account: jwomackmu, app: e2f-heart-scrna
 ```
 
+## Methods notebooks (`docs/`)
+
+A Quarto book documenting every analysis behind the app — one chapter per analysis,
+each stating the question, the method with its real parameters, the result, the
+reasoning behind the method choice, and what the result cannot support. Written for
+reviewing the analysis rather than operating the app.
+
+```bash
+docs/render.sh                       # -> docs/_site/index.html  (Quarto in Docker, no R needed)
+docs/export.sh                       # regenerate figures + generated tables from the bundle
+python3 tools/check_docs_coverage.py  # asserts all 18 app tabs are documented exactly once
+```
+
+Rendering executes nothing: every chapter is `engine: markdown`, so the render image
+carries the Quarto CLI and no R at all. Figures are exported once, offline, by
+`docs/export_assets.R`, which loads the app's **own** plotting functions out of `app.R`
+and calls them against the bundle (mounted read-only) — so a figure in the book is the
+figure in the app, and every number in a table is read from the data rather than typed.
+See [docs/README.md](docs/README.md).
+
 ## Data pipeline
 
 `app_data.rds` is produced by the upstream analysis pipeline (not in this repo;
@@ -290,6 +310,119 @@ to be reconstructed:
 Set sizes are lopsided by design — one curated category (a few genes) against a whole
 cluster group (hundreds) — so the fold enrichment and hypergeometric p on the **Overlap
 statistics** tab, not the picture, are what carry the result.
+
+## Docker: the three images, and the lab-server dev deploy
+
+**There is no R on this host.** Everything — running the app, parsing `app.R`, running the
+tests — goes through one of three images. Knowing which does what saves a lot of time.
+
+| image | has | use it for |
+|---|---|---|
+| `lab-server-e2f-heart-scrna-dev` | shiny, bslib, ggplot2, Matrix, plotly, DT, svglite, shinycssloaders, **openxlsx**, presto | the dev deploy, and **the only image that can run `tools/test_downloads.R`** |
+| `lab-server-e2f-heart-scrna` | same **minus openxlsx** | production. `app.R` calls `library(openxlsx)` at line 20, so the test suite cannot run here |
+| `e2f-enrich` | clusterProfiler, org.Mm.eg.db, fgsea, msigdbr, presto | the offline `analysis/` pipeline, plus quick parse and coverage checks (no shiny needed) |
+
+Mount the repo **read-only** and use `--rm` for checks, so a throwaway container can never
+touch the working tree:
+
+```bash
+# syntax check — the fastest way to catch a broken edit, ~5 s
+docker run --rm -v "$PWD:/repo:ro" -w /repo e2f-enrich:latest \
+  Rscript -e 'parse("shiny_app/app.R")'
+
+# static download coverage: every rendered table and plot must have a download
+docker run --rm -v "$PWD:/repo:ro" -w /repo e2f-enrich:latest \
+  Rscript tools/check_download_coverage.R
+
+# runtime suite via shiny::testServer — needs openxlsx, so the dev image. ~3 min
+# (it readRDS's the 119 MB bundle once)
+docker run --rm -v "$PWD:/repo:ro" -w /repo lab-server-e2f-heart-scrna-dev:latest \
+  Rscript tools/test_downloads.R
+```
+
+Ad-hoc poking at the bundle follows the same shape — write the script to a scratch dir,
+mount it, do **one** `readRDS` per script:
+
+```bash
+docker run --rm -v "$PWD:/repo:ro" -v /tmp/scratch:/sp:ro \
+  lab-server-e2f-heart-scrna-dev:latest Rscript /sp/probe.R
+```
+
+### The lab-server stack
+
+The app is served by a separate compose project at **`/home/justin/Projects/lab-server`**,
+which is not part of this repo. Two services run the same app from two payload directories:
+
+| service | payload | route | restart |
+|---|---|---|---|
+| `e2f-heart-scrna` | `apps/e2f-heart-scrna/` | `/e2f-heart-scrna/` | `unless-stopped` |
+| `e2f-heart-scrna-dev` | `apps/e2f-heart-scrna-dev/` | `/e2f-heart-scrna-dev/` | **`"no"`** — up only while someone is testing |
+
+Both are `FROM rocker/shiny:4.5.1` with `COPY . /srv/shiny-server/`, so **the app is baked
+into the image — there are no bind mounts and nothing updates without a rebuild.** nginx
+strips the path prefix before proxying to `3838`, which is why shiny-server serves at `/`.
+Separate payload dirs are the point: a dev experiment cannot disturb production or its
+bundle.
+
+Everything behind the front door sits behind the Han Lab sign-in (the `labgate` cookie), so
+`curl http://localhost/e2f-heart-scrna-dev/` returns the login page, not the app. To check
+the app itself, go **inside** the container (below).
+
+### Deploying to dev
+
+```bash
+# 1. copy the payload across (app.R + download_helpers.R are the runtime files;
+#    the builders are carried for reference)
+cp shiny_app/app.R shiny_app/download_helpers.R \
+   shiny_app/build_fourgroup.R shiny_app/build_fourgroup_enrichment.R \
+   shiny_app/build_signature_scores.R \
+   /home/justin/Projects/lab-server/apps/e2f-heart-scrna-dev/
+
+# 2. rebuild and restart (recreates the container; ~30 s, R packages are cached)
+cd /home/justin/Projects/lab-server
+docker compose up -d --build e2f-heart-scrna-dev
+
+# 3. stop it when you are done testing — restart:"no" means it will not come back by itself
+docker compose stop e2f-heart-scrna-dev
+```
+
+**Verify the deploy took, rather than trusting the build log.** A successful build says
+nothing about whether the file you meant to ship is the one inside:
+
+```bash
+# the payload actually in the running container must match the working tree
+sha256sum shiny_app/app.R
+docker exec lab-server-e2f-heart-scrna-dev-1 sha256sum /srv/shiny-server/app.R
+
+# render the real UI from inside the container, past the sign-in, and grep it
+docker exec lab-server-e2f-heart-scrna-dev-1 Rscript -e '
+  h <- paste(readLines(url("http://localhost:3838/", open="rb"), warn=FALSE), collapse="\n")
+  cat(nchar(h), "bytes\n"); cat(grepl("WT programs", h), "\n")'
+
+# and confirm the app started clean
+docker logs lab-server-e2f-heart-scrna-dev-1 2>&1 | grep -iE 'error|exception'
+```
+
+A healthy load is ~450 KB of HTML and takes ~11 s (the 119 MB `app_data.rds` is read at
+startup). The container name is `lab-server-e2f-heart-scrna-dev-1` — compose appends `-1`.
+
+**The dev bundle is its own copy.** `apps/e2f-heart-scrna-dev/app_data.rds` is a separate
+119 MB file from `shiny_app/app_data.rds`; copying `app.R` does not update it. Re-copy the
+bundle too after any builder run, or the app will show its "run the builder" guards.
+Production is further behind still — its payload is a 23 MB bundle and a 105 KB `app.R`
+from 2026-07-21.
+
+### Running the app locally instead
+
+Unrelated to the lab-server stack, the repo ships its own single-service compose file that
+mounts the bundle at runtime rather than baking it in. See [DOCKER.md](DOCKER.md):
+
+```bash
+docker compose up --build      # http://localhost:3838
+```
+
+It needs `shiny_app/app_data.rds` to exist **before** `up` — Docker will otherwise create an
+empty directory at the mount point and the app will fail to read it.
 
 ## Module scores: how maturation and metabolism are defined
 

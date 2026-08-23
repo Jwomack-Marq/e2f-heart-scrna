@@ -2,8 +2,8 @@
 
 | set A | set B | n A | n B | overlap | expected | fold | p hypergeom |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| P7: KO vs WT (down) | mature-associated | 1 | 20 | 1 | 0 | 552. | 0.00181 |
-| P7: KO vs WT (down) | canonical cell cycle | 1 | 51 | 0 | 0 | 0 | 1.00 |
-| mature-associated | canonical cell cycle | 20 | 51 | 0 | 0.100 | 0 | 1.00 |
+| WT: P0 vs P7 | KO: P0 vs P7 | 502 | 544 | 240 | 11.3 | 21.3 | 4.11e-275 |
+| WT: P0 vs P7 | canonical cell cycle | 502 | 52 | 1 | 1.10 | 0.930 | 0.664 |
+| KO: P0 vs P7 | canonical cell cycle | 544 | 52 | 1 | 1.20 | 0.860 | 0.694 |
 
 : Every pairwise overlap against its hypergeometric expectation. The picture cannot carry this; the table has to. {tbl-colwidths="auto"}

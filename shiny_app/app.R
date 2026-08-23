@@ -4206,6 +4206,12 @@ server <- function(input, output, session) {
     "<li><b>Integration &amp; embedding</b> &mdash; the four libraries integrated with Harmony, then clustered and laid out as the UMAP shown here. Differential expression is computed on the raw / pseudobulk counts, not the normalized/integrated values.</li>",
     "</ol>",
     "<p style='font-size:12px;color:#777'>Full method detail and the comparison to the original analysis are in the accompanying report and <code>00_DOCS/NORMALIZATION.md</code>.</p>",
+    # The methods book (docs/) is the long form of every tab in this app: parameters,
+    # rationale, and what each result cannot support. Kept as a repo-relative pointer
+    # rather than a URL because the book is a build artifact, not a deployed site.
+    "<p style='font-size:12px;color:#777'>Chapter-by-chapter methods for every tab of this app, ",
+    "including the parameters and the reasoning behind each choice, are in the repository's ",
+    "methods book: <code>docs/</code> (build with <code>docs/render.sh</code>).</p>",
     "<div style='background:#fff3e0;border-left:4px solid #e65100;padding:10px 14px;border-radius:4px'>",
     "<b>Critical caveats — read before interpreting:</b><ul>",
     "<li><b>n = 1 animal per condition.</b> Two lanes per sample are the same library sequenced twice, not biological replicates.</li>",

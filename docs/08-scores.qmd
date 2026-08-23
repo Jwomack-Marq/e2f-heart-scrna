@@ -1,0 +1,176 @@
+---
+title: "Module scores and gene axes"
+engine: markdown
+tabs:
+  - "Cell-cycle exit & ploidy"
+  - "Maturation & metabolism"
+---
+
+## What you're looking at
+
+Two tabs under **Dev**. **Cell-cycle exit & ploidy** shows four module-score
+distributions across genotype and timepoint, plus a proliferation-versus-cytokinesis
+scatter. **Maturation & metabolism** shows a maturation score across the four groups, a
+per-cell maturation-versus-metabolism plot, and a *Gene map* that places every gene on
+two axes.
+
+The same machinery underlies both, and it is also what the four-group maturation panels
+in [chapter 7](07-fourgroup.qmd) and the intersections in
+[chapter 9](09-overlaps.qmd) are built on.
+
+## The question
+
+Single genes are noisy in single-cell data — a cardiomyocyte can be genuinely
+proliferative and have zero `Mki67` reads. Scoring a *program* (a curated set of genes)
+per cell is more robust, and it makes composite questions expressible: "cycling without
+cytokinesis" is a difference of two programs, not any single gene.
+
+## How it was done
+
+### The scoring function
+
+An `AddModuleScore` equivalent, written in base R plus Matrix — no Seurat at build time:
+
+```r
+module_score <- function(mat, features, nbin = 24, ctrl = 100, seed = 1) {
+  avg  <- Matrix::rowMeans(mat)                    # mean expression per gene
+  bins <- cut(avg, breaks = quantile(avg, seq(0, 1, length.out = nbin + 1)), ...)
+  for (f in features)                              # 100 control genes per feature,
+    ctrl_genes <- c(ctrl_genes, sample(names(bins)[bins == bins[[f]]], ctrl))
+  Matrix::colMeans(mat[features, ]) - Matrix::colMeans(mat[ctrl_genes, ])
+}
+```
+<span class="src">shiny_app/build_signature_scores.R:102-120 — copied verbatim into build_refmap.R:49-66</span>
+
+The control subtraction is the whole point: a set of highly expressed genes scores high
+in every cell simply because its genes are abundant. Subtracting a set matched on
+expression bin removes that baseline, so the score reflects *relative* enrichment of the
+program in that cell. `nbin = 24`, `ctrl = 100`, `set.seed(1)`.
+
+### The gene sets
+
+Eight sets, four difference scores, all defined at
+`build_signature_scores.R:48-78`. Sex/construct confounders are removed from every set
+before scoring (none of these sets contains one, so the scores are confounder-free by
+construction).
+
+| Score | Definition |
+|---|---|
+| `sig_prolif` | 17 G2/M-programme genes: `Mki67`, `Top2a`, `Ccnb1/2`, `Cdk1`, `Cdc20`, `Aurka/b`, `Bub1`, `Birc5`, `Cenpa/e/f`, `Ube2c`, `Cks2`, `Nusap1`, `Tpx2` |
+| `sig_cytokinesis` | 14 cytokinesis-machinery genes: `Anln`, `Ect2`, `Racgap1`, `Kif23`, `Cit`, `Aurkb`, `Kif20b`, `Prc1`, `Cep55`, `Mklp1`, `Sept7/9`, `Cdca8`, `Incenp` |
+| `sig_ccexit` | 8 exit/arrest genes: `Cdkn1a`, `Cdkn1c`, `Cdkn2a`, `Cdkn1b`, `Meis1`, `Rb1`, `Btg2`, `Gadd45a` |
+| `sig_ploidy` | **`prolif − cytokinesis`** — karyokinesis without cytokinesis |
+| `sig_maturation` | **`mat_mature − mat_immature`** (10 vs 9 genes) |
+| `sig_maturation_nocc` | **`mat_mature − mat_immature_nocc`** — the immature set minus `Ccnd1`, `Mki67`, `Top2a` |
+| `sig_metabolic` | **`faox − glycolysis`** (14 vs 11 genes) |
+
+{{< include _generated/score-coverage.md >}}
+
+Two things in that table are load-bearing. **Which matrix a score was computed on
+decides how many cells have it**: the cycle and metabolic scores were computed on the
+broad matrix and exist for **8,026 cells**, while the maturation scores were computed on
+the curated panel and exist for all **30,030**. And `sig_cytokinesis` uses 13 of 14
+genes — `Mklp1` is a synonym for `Kif23`, which is already in the set, so nothing is
+actually lost.
+
+`pick_mat()` chooses per set, by coverage, with ties going to the curated panel
+(`build_signature_scores.R:122-125`). Both components of a difference score are always
+scored on the **same** matrix, or the subtraction would not be well defined.
+
+![Cycle-exit and ploidy scores across genotype and timepoint](assets/cyc-violins.svg){#fig-cyc}
+
+![Proliferation versus cytokinesis — the polyploidization quadrant](assets/ploidy-scatter.png){#fig-ploidy}
+
+![Transcriptional versus metabolic maturation, per cell](assets/mat-scatter.png){#fig-mat-scatter}
+
+![Maturation score across the four groups, G1 cells only](assets/mat-violin.svg){#fig-mat-violin}
+
+### The gene map
+
+The same idea turned inside out: instead of scoring cells for a program, score **genes**
+for how strongly they mark one end of a program.
+
+Cells are split into tertiles on a score, and each gene gets the AUC of a Wilcoxon
+comparison between the top and bottom tertile — computed **within each timepoint and
+then averaged**, so neither axis becomes a restatement of P0-vs-P7 (which the sort
+confounds). Two axes: `mat_auc` (mature vs immature) and `met_auc` (oxidative vs
+glycolytic), plus a binary cycling axis (S/G2M vs G1).
+
+![The gene map, timepoint-averaged panel](assets/genemap.png){#fig-genemap}
+
+{{< include _generated/tbl-genemap-centres.md >}}
+
+{{< include _generated/tbl-genemap-quads.md >}}
+
+## What it shows
+
+**The two programs are coupled, and not because of their inputs.** With score-set genes
+hidden, 28.8 % of genes sit in mature+oxidative and 28.3 % in immature+glycolytic — the
+two diagonal quadrants total **57 %**, where 50 % would mean the axes are independent.
+The coupling survives removing the genes that define the scores, which is the test that
+matters.
+
+## Why this way
+
+**Why difference scores rather than reporting the components?** Because the biological
+questions are differences. "Polyploidization" is not high proliferation — it is
+karyokinesis *without* cytokinesis, which only a difference expresses; a cell high in
+both is dividing normally. The components are stored too, and the app plots them, so the
+difference can always be decomposed.
+
+**Why `sig_maturation_nocc` exists.** `sig_maturation`'s immature program contains
+`Ccnd1`, `Mki67` and `Top2a`. Using that score to argue "the KO leaves cells less mature
+and therefore more cycling-competent" is then partly circular — the score is *already*
+part cell-cycle score. `sig_maturation_nocc` drops those three, and every downstream
+analysis that touches the cycling question defaults to it
+(`build_fourgroup.R:MAT_SCORE`). The original is kept for continuity, not for
+conclusions.
+
+**Why the axes split at their own median, not at 0.5.** `wilcoxauc`'s AUC carries a small
+global offset because the two tertile groups differ in overall detection rate — here
++0.009 on maturation and −0.014 on metabolism. Most genes sit within ~0.02 of the
+median, so a hard 0.5 cut put **65 %** of them into a single corner: an artefact of the
+offset, not biology. Each panel gets its own centre, because the offset is a property of
+the cells being compared — the P0 panel centres at 0.498 and the P7 panel at 0.519, a
+difference of 0.021 that a shared centre would smear across the map.
+<span class="src">app.R:1868-1876</span>
+
+**Why the axes use a looser row gate than the DE tables.** Expression level only, no
+significance requirement. Applying the DE gate dropped `Gapdh`, `Aldoa`, `Pgk1`, `Eno1`,
+`Hk1` and `Cpt1a` off the map entirely — core glycolysis and fatty-acid oxidation genes,
+absent from a metabolic map. **A gene with no association belongs at the origin, not
+missing**, and a reader who cannot find `Gapdh` reasonably concludes the map is broken.
+
+**Why `in_score_set` genes are hidden by default.** A gene inside the set that defines an
+axis sits at that axis's extreme by construction. `Cox6a2` is in both `mat_mature` and
+`faox`, so it is doubly circular. Hiding them by default is what makes the 57 % coupling
+figure meaningful; the flag stays on the table so they can be shown deliberately.
+
+**Why AUC rather than log2FC for gene classification.** The same reason as
+[chapter 3](03-de.qmd): on this data log2FC spans −1.86 to +0.43 across the maturation
+axis, so a symmetric cut can only ever classify one pole. At AUC 0.60/0.40 the axis
+yields roughly 135 mature- and 42 immature-associated genes.
+<span class="src">build_fourgroup.R:81-87</span>
+
+## What it cannot say
+
+- **A module score is not a measurement of a process.** It is a relative enrichment of a
+  curated gene list against an expression-matched background, on one animal per group.
+- **The cycle and metabolic scores exist for 8,026 cells, not 30,030.** Comparing a
+  cycle score panel's n against a maturation panel's n is comparing two subsets.
+- **`Cox6a2` remains doubly circular** and `Aurkb` sits in both `prolif` and
+  `cytokinesis`, so `sig_ploidy` has one gene cancelling itself. Both are flagged rather
+  than removed, because removing a gene from a curated set silently changes what the set
+  means.
+- **Tertile AUCs are not effect sizes on a biological scale**; they rank genes within
+  this dataset.
+
+## Reproduce it
+
+```bash
+Rscript shiny_app/build_signature_scores.R --probe   # per-set coverage, writes nothing
+Rscript shiny_app/build_signature_scores.R           # compute + save
+Rscript shiny_app/build_fourgroup.R                  # the gene axes live in $geneaxes
+
+docs/export.sh --only='cyc-|ploidy|mat-|genemap|score-coverage'
+```

@@ -12,14 +12,15 @@
 | 01 | tbl-doublet | per-lane doublet rates | _generated/tbl-doublet.md |
 | 01 | tbl-refmap-conf | annotation confusion table | _generated/tbl-refmap-conf.md |
 | 01 | tbl-refmap-cov | reference panel coverage | _generated/tbl-refmap-cov.md |
+| 02 | comp-celltype | cell-type composition by group | assets/comp-celltype.svg |
 | 02 | gene-dot | gene-detail dot plot | assets/gene-dot.svg |
 | 02 | gene-violin | gene-detail violin | assets/gene-violin.svg |
 | 02 | tbl-matrices | the two expression matrices | _generated/tbl-matrices.md |
-| 02 | umap-celltype | UMAP coloured by cell type | assets/umap-celltype.svg |
-| 02 | umap-gene | UMAP coloured by Myh6 expression | assets/umap-gene.svg |
-| 02 | umap-phase | UMAP coloured by cell-cycle phase | assets/umap-phase.svg |
+| 02 | umap-celltype | UMAP coloured by cell type | assets/umap-celltype.png |
+| 02 | umap-gene | UMAP coloured by Myh6 expression | assets/umap-gene.png |
+| 02 | umap-phase | UMAP coloured by cell-cycle phase | assets/umap-phase.png |
 | 03 | de-lfcheat | log2FC heatmap, top genes x cell type | assets/de-lfcheat.svg |
-| 03 | de-volcano | pooled KO-vs-WT volcano (static form of the app's plotly panel) | assets/de-volcano.svg |
+| 03 | de-volcano | pooled KO-vs-WT volcano (static form of the app's plotly panel) | assets/de-volcano.png |
 | 03 | tbl-de-head | top rows of a DE table, as the app shows them | _generated/tbl-de-head.md |
 | 03 | tbl-de-sizes | how many DE tables, and how big | _generated/tbl-de-sizes.md |
 | 04 | enr-e2f-heat | E2F-family regulon activity heatmap | assets/enr-e2f-heat.svg |
@@ -30,7 +31,7 @@
 | 05 | cm-lfcheat | pooled KO-vs-WT log2FC across subclusters | assets/cm-lfcheat.svg |
 | 05 | cm-markerheat | subcluster identity marker heatmap | assets/cm-markerheat.svg |
 | 05 | cm-phase | phase composition by subcluster | assets/cm-phase.svg |
-| 05 | cm-umap | CM subcluster UMAP, res 0.2 | assets/cm-umap.svg |
+| 05 | cm-umap | CM subcluster UMAP, res 0.2 | assets/cm-umap.png |
 | 05 | tbl-cm-subtype | nearest CM subtype per subcluster | _generated/tbl-cm-subtype.md |
 | 05 | tbl-cm-summary | per-subcluster summary sheet | _generated/tbl-cm-summary.md |
 | 06 | e2f-targets | E2F target log2FC lollipop | assets/e2f-targets.svg |
@@ -40,22 +41,21 @@
 | 07 | fg-phase | phase composition, four groups | assets/fg-phase.svg |
 | 07 | fg-score | maturation score by four group | assets/fg-score.svg |
 | 07 | fg-summary | KO-WT maturation gap summary | assets/fg-summary.svg |
-| 07 | fg-volcano | P7 KO-vs-WT volcano, CM2, G1 stratum | assets/fg-volcano.svg |
-| 07 | tbl-fg-audit | enrichment coverage audit | _generated/tbl-fg-audit.md |
+| 07 | fg-volcano | P7 KO-vs-WT volcano, CM2, G1 stratum | assets/fg-volcano.png |
 | 07 | tbl-fg-contrasts | the four contrasts, as defined | _generated/tbl-fg-contrasts.md |
 | 07 | tbl-fg-counts | four-group counts table | _generated/tbl-fg-counts.md |
 | 07 | tbl-fg-coverage | contrast coverage across the two grids | _generated/tbl-fg-coverage.md |
 | 07 | tbl-fg-params | build_fourgroup.R parameters as built | _generated/tbl-fg-params.md |
 | 07 | tbl-fg-skipped | contrasts that were not computed, and why | _generated/tbl-fg-skipped.md |
 | 08 | cyc-violins | cycle-exit / ploidy score violins | assets/cyc-violins.svg |
-| 08 | genemap | gene map, averaged panel | assets/genemap.svg |
-| 08 | mat-scatter | transcriptional vs metabolic maturation | assets/mat-scatter.svg |
+| 08 | genemap | gene map, averaged panel | assets/genemap.png |
+| 08 | mat-scatter | transcriptional vs metabolic maturation | assets/mat-scatter.png |
 | 08 | mat-violin | maturation score by four group | assets/mat-violin.svg |
-| 08 | ploidy-scatter | proliferation vs cytokinesis | assets/ploidy-scatter.svg |
+| 08 | ploidy-scatter | proliferation vs cytokinesis | assets/ploidy-scatter.png |
 | 08 | score-coverage | module-score definitions and coverage | _generated/score-coverage.md |
 | 08 | tbl-genemap-centres | the per-panel axis centres | _generated/tbl-genemap-centres.md |
 | 08 | tbl-genemap-quads | gene-map quadrant occupancy | _generated/tbl-genemap-quads.md |
-| 09 | fg-quadrant | maturation axis x P7 KO log2FC quadrant map | assets/fg-quadrant.svg |
+| 09 | fg-quadrant | maturation axis x P7 KO log2FC quadrant map | assets/fg-quadrant.png |
 | 09 | tbl-intersect | the intersection table | _generated/tbl-intersect.md |
 | 09 | tbl-venn-stats | overlap statistics for the Venn | _generated/tbl-venn-stats.md |
 | 09 | tbl-xc-audit | AUC vs log2FC audit for the WT lists | _generated/tbl-xc-audit.md |

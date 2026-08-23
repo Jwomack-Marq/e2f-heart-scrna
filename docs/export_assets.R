@@ -30,7 +30,7 @@
 
 suppressMessages({
   library(Matrix); library(ggplot2); library(shiny); library(bslib)
-  library(plotly);  library(DT);      library(svglite)
+  library(plotly);  library(DT);      library(svglite); library(ragg)
 })
 
 ARGS   <- commandArgs(trailingOnly = TRUE)
@@ -74,6 +74,18 @@ cat(sprintf("  bundle built %s | %s cells | %s CM | %s panel genes | %s broad ge
 MANIFEST <- list()
 FAILED   <- character(0)
 SKIPPED  <- character(0)
+GAPS     <- list()
+
+# A slot that was never built is not an export failure -- it is a documented gap,
+# and the book has to say so out loud. Anything else lets a chapter imply a result
+# that does not exist in this bundle. Recorded here, rendered into _gaps.md, and
+# included by the chapter that would otherwise have shown it.
+gap <- function(id, chapter, what, why) {
+  GAPS[[length(GAPS) + 1L]] <<- data.frame(
+    chapter = chapter, missing = what, why = why, stringsAsFactors = FALSE)
+  SKIPPED <<- c(SKIPPED, id)
+  cat(sprintf("  %-34s GAP - %s\n", id, why))
+}
 
 register <- function(id, chapter, file, what) {
   MANIFEST[[length(MANIFEST) + 1L]] <<- data.frame(
@@ -102,10 +114,25 @@ step <- function(id, chapter, what, expr) {
 # SVG, not PNG: these are vector plots, the files are an order of magnitude smaller,
 # they stay sharp when a boss zooms in on a projector, and the repo already tracks
 # SVG figures (model/figures/*.svg).
-fig <- function(id, plot, w = 8, h = 5, scale = 1) {
-  path <- file.path(OUT_A, paste0(id, ".svg"))
-  ggsave(path, plot, device = svglite::svglite, width = w * scale, height = h * scale,
-         bg = "white", limitsize = FALSE)
+# `raster = TRUE` for point clouds. A 30,000-cell UMAP as SVG is 4.4 MB of
+# individual <circle> elements -- it bloats the repo, and a browser stutters
+# scrolling past it. Rasterising those at 200 dpi costs nothing a reader can see
+# and buys a factor of ~20. Everything else (bars, tiles, dot plots, lollipops)
+# stays vector, where the text stays crisp under a projector's zoom.
+fig <- function(id, plot, w = 8, h = 5, raster = FALSE, dpi = 200) {
+  ext  <- if (raster) ".png" else ".svg"
+  path <- file.path(OUT_A, paste0(id, ext))
+  tmp  <- paste0(path, ".part")
+  # write to a scratch name and move on success, so a plot that errors mid-render
+  # cannot leave a 0-byte file behind that later looks like a successful export.
+  ok <- FALSE
+  on.exit(if (!ok) unlink(tmp), add = TRUE)
+  if (raster) ggsave(tmp, plot, device = ragg::agg_png, width = w, height = h,
+                     dpi = dpi, units = "in", bg = "white", limitsize = FALSE)
+  else        ggsave(tmp, plot, device = svglite::svglite, width = w, height = h,
+                     bg = "white", limitsize = FALSE)
+  ok <- TRUE
+  file.rename(tmp, path)
   paste0("assets/", basename(path))
 }
 # The five upstream QC figures live in the bundle as base64 data URIs (app$figs) --
@@ -140,9 +167,20 @@ md_table <- function(df, digits = 3, max_rows = NULL) {
       if (all(is.na(x) | x == round(x)) && max(abs(x), na.rm = TRUE) >= 1000)
         return(formatC(x, format = "d", big.mark = ","))
       if (all(is.na(x) | x == round(x))) return(as.character(x))
+      # Hypergeometric and Wilcoxon p-values here run to 1e-280. "fg" would print
+      # that as 280 leading zeros and destroy the table, so any column holding a
+      # value outside a readable range switches to scientific notation wholesale
+      # -- per column, not per cell, so a column stays visually comparable.
+      nz <- x[is.finite(x) & x != 0]
+      sci <- length(nz) && (min(abs(nz)) < 1e-4 || max(abs(nz)) >= 1e6)
+      if (sci) return(ifelse(is.na(x), "", formatC(x, format = "g", digits = digits)))
       return(formatC(signif(x, digits), format = "fg", digits = digits, flag = "#"))
     }
     x <- as.character(x); x[is.na(x)] <- ""
+    # a literal newline inside a cell ends the row and breaks the whole table;
+    # the app's multi-line labels (set names carry their contrast on a second
+    # line) hit this. Collapse to a separator that reads the same inline.
+    x <- gsub("[\r\n]+", " · ", x)
     gsub("|", "\\|", x, fixed = TRUE)
   }
   cols <- lapply(df, fmt)
@@ -154,6 +192,10 @@ md_table <- function(df, digits = 3, max_rows = NULL) {
     paste0("| ", paste(algn, collapse = " | "), " |"), rows)
 }
 frag <- function(id, df, caption = NULL, digits = 3, max_rows = NULL, note = NULL) {
+  # An empty frame renders as a two-line table with no columns -- valid markdown,
+  # silently wrong, and exactly the kind of thing that survives review. Fail here.
+  if (is.null(df) || !NROW(df) || !NCOL(df))
+    stop("no rows -- the bundle slot behind this table is empty or absent")
   path <- file.path(OUT_G, paste0(id, ".md"))
   body <- md_table(df, digits, max_rows)
   if (!is.null(caption)) body <- c(body, "", paste0(": ", caption, " {tbl-colwidths=\"auto\"}"))
@@ -194,7 +236,11 @@ umap_gg <- function(df, colvar, ttl = NULL, psize = .22, labels = TRUE, continuo
 }
 # mirrors comp_plot (app.R:2905-2914)
 comp_gg <- function(x, f) {
-  tb <- as.data.frame(prop.table(table(meta[[x]], meta[[f]]), margin = 1))
+  d <- meta
+  # the app offers genotype x timepoint as a composition axis; it is derived at
+  # display time rather than stored as a column, so derive it the same way here
+  d$splitgrp <- factor(paste(d$genotype, d$timepoint, sep = "-"), levels = FG_GROUPS)
+  tb <- as.data.frame(prop.table(table(d[[x]], d[[f]]), margin = 1))
   names(tb) <- c("x", "fill", "prop")
   ggplot(tb, aes(x, prop, fill = fill)) + geom_col() + theme_pub +
     theme(axis.text.x = element_text(angle = 35, hjust = 1)) +
@@ -362,12 +408,12 @@ step("tbl-celltypes", "01", "cells per cell type x group",
 # ===========================================================================
 cat("\n== 02 atlas ==\n")
 step("umap-celltype", "02", "UMAP coloured by cell type",
-     fig("umap-celltype", umap_gg(meta, "celltype", "Cell type"), 7.5, 5.5))
+     fig("umap-celltype", umap_gg(meta, "celltype", "Cell type"), 7.5, 5.5, raster = TRUE))
 step("umap-phase",    "02", "UMAP coloured by cell-cycle phase",
-     fig("umap-phase", umap_gg(meta, "Phase", "Cell-cycle phase", labels = FALSE), 7.5, 5.5))
+     fig("umap-phase", umap_gg(meta, "Phase", "Cell-cycle phase", labels = FALSE), 7.5, 5.5, raster = TRUE))
 step("umap-gene",     "02", "UMAP coloured by Myh6 expression",
      fig("umap-gene", local({ d <- meta; d$v <- expr_vec("Myh6", d$cell)
-                              umap_gg(d, "v", "Myh6 (log-norm)", continuous = TRUE) }), 7.5, 5.5))
+                              umap_gg(d, "v", "Myh6 (log-norm)", continuous = TRUE) }), 7.5, 5.5, raster = TRUE))
 step("comp-celltype", "02", "cell-type composition by group",
      fig("comp-celltype", comp_gg("splitgrp", "celltype"), 7, 4.6))
 step("gene-violin",   "02", "gene-detail violin",
@@ -389,7 +435,7 @@ step("tbl-matrices",  "02", "the two expression matrices",
 cat("\n== 03 differential expression ==\n")
 CT_KEY <- "P7_Cardiomyocyte"
 step("de-volcano",  "03", "pooled KO-vs-WT volcano (static form of the app's plotly panel)",
-     fig("de-volcano", de_volcano(ctDE[[CT_KEY]], "P7 Cardiomyocyte — KO vs WT"), 7, 5))
+     fig("de-volcano", de_volcano(ctDE[[CT_KEY]], "P7 Cardiomyocyte — KO vs WT"), 7, 5, raster = TRUE))
 step("de-lfcheat",  "03", "log2FC heatmap, top genes x cell type",
      fig("de-lfcheat", lfc_heat(ctDE[grep("^P7_", names(ctDE))], topn = 22,
                                 ttl = "P7 — top genes by |log2FC| across cell types"), 7.5, 6.5))
@@ -444,7 +490,7 @@ step("cm-umap",      "05", "CM subcluster UMAP, res 0.2",
      fig("cm-umap", local({
        d <- cmm; d$sub <- factor(paste0("CM", d[["SCT_snn_res.0.2"]]), levels = cm_subs("0.2"))
        umap_gg(d, "sub", "CM subclusters — res 0.2", psize = .3)
-     }), 7.5, 5.5))
+     }), 7.5, 5.5, raster = TRUE))
 step("cm-markerheat", "05", "subcluster identity marker heatmap", fig("cm-markerheat", markerheat_gg(), 7.5, 8))
 step("cm-phase",      "05", "phase composition by subcluster",    fig("cm-phase", cmphase_gg(), 8.5, 5))
 step("cm-lfcheat",    "05", "pooled KO-vs-WT log2FC across subclusters",
@@ -496,7 +542,7 @@ step("fg-volcano", "07", "P7 KO-vs-WT volcano, CM2, G1 stratum",
        ct <- fg_ct("P7_KO_vs_WT")
        d  <- fg_de("CM2", "P7_KO_vs_WT", "G1")
        de_volcano(d, "CM2 — P7 KO vs WT (G1 stratum)")
-     }), 7, 5))
+     }), 7, 5, raster = TRUE))
 step("tbl-fg-counts", "07", "four-group counts table",
      frag("tbl-fg-counts", fg_counts_wide(),
           caption = "Cells per subcluster x group, with the underpowered flag the app shows."))
@@ -525,16 +571,25 @@ step("tbl-fg-coverage", "07", "contrast coverage across the two grids",
 step("tbl-fg-skipped", "07", "contrasts that were not computed, and why",
      frag("tbl-fg-skipped", FG$skipped, max_rows = 40,
           caption = "`app$fourgroup$skipped` — each arm that fell below the floor, with its cell counts."))
-step("fg-enr-go", "07", "four-group GO, P7 KO vs WT",
-     fig("fg-enr-go", go_dotplot_gg(
-       fg_enr_df("go", "CM2", "P7_KO_vs_WT", "G1", "BP", "up"),
-       "GO BP — up in P7 KO, CM2 (G1)"), 8, 5.5))
-step("tbl-fg-audit", "07", "enrichment coverage audit",
-     frag("tbl-fg-audit", local({
-       a <- FGE$audit
-       a[a$cluster %in% c("AllCM","CM1","CM2") & a$ontology == "BP", , drop = FALSE]
-     }), max_rows = 30,
-        caption = "The audit row behind every GO panel: genes in, universe size, and which fallback rule selected the list."))
+HAVE_FGE <- !is.null(FGE) && !is.null(FGE$go)
+FGE_WHY  <- paste("app$enrich$fourgroup is not in this bundle -- build_fourgroup_enrichment.R",
+                  "has not been run against it (~2 h, ~460 enrichGO calls). The app shows its",
+                  "\"run the builder\" message on that panel for the same reason.")
+if (HAVE_FGE) {
+  step("fg-enr-go", "07", "four-group GO, P7 KO vs WT",
+       fig("fg-enr-go", go_dotplot_gg(
+         fg_enr_df("go", "CM2", "P7_KO_vs_WT", "G1", "BP", "up"),
+         "GO BP — up in P7 KO, CM2 (G1)"), 8, 5.5))
+  step("tbl-fg-audit", "07", "enrichment coverage audit",
+       frag("tbl-fg-audit", local({
+         a <- FGE$audit
+         a[a$cluster %in% c("AllCM","CM1","CM2") & a$ontology == "BP", , drop = FALSE]
+       }), max_rows = 30,
+          caption = "The audit row behind every GO panel: genes in, universe size, and which fallback rule selected the list."))
+} else {
+  gap("fg-enr-go",   "07", "GO/GSEA figures for the four-group contrasts", FGE_WHY)
+  gap("tbl-fg-audit", "07", "the enrichment coverage audit table", FGE_WHY)
+}
 
 # ===========================================================================
 # 08 -- module scores and signature axes
@@ -545,12 +600,12 @@ step("score-coverage", "08", "module-score definitions and coverage",
           caption = "`app$score_meta` — every score, the sets behind it, which matrix it was computed on, and how many of its genes were found."))
 step("cyc-violins", "08", "cycle-exit / ploidy score violins", fig("cyc-violins", cyc_gg(), 8, 5.5))
 step("ploidy-scatter", "08", "proliferation vs cytokinesis",
-     fig("ploidy-scatter", ploidy_scatter("Cardiomyocyte"), 8, 4.6))
+     fig("ploidy-scatter", ploidy_scatter("Cardiomyocyte"), 8, 4.6, raster = TRUE))
 step("mat-scatter", "08", "transcriptional vs metabolic maturation",
-     fig("mat-scatter", mat_scatter("Cardiomyocyte", stratum = "all"), 8.5, 5))
+     fig("mat-scatter", mat_scatter("Cardiomyocyte", stratum = "all"), 8.5, 5, raster = TRUE))
 step("mat-violin", "08", "maturation score by four group",
      fig("mat-violin", score_violin("sig_maturation_nocc", "Cardiomyocyte", stratum = "G1"), 7, 5))
-step("genemap", "08", "gene map, averaged panel", fig("genemap", genemap_gg("avg"), 8, 6))
+step("genemap", "08", "gene map, averaged panel", fig("genemap", genemap_gg("avg"), 8, 6, raster = TRUE))
 step("tbl-genemap-quads", "08", "gene-map quadrant occupancy",
      frag("tbl-genemap-quads", local({
        d <- gm_df("avg", hide_sets = TRUE)
@@ -577,21 +632,28 @@ step("tbl-genemap-centres", "08", "the per-panel axis centres",
 # ===========================================================================
 cat("\n== 09 overlaps ==\n")
 step("fg-quadrant", "09", "maturation axis x P7 KO log2FC quadrant map",
-     fig("fg-quadrant", fg_quadrant_plot("CM2"), 8, 5.5))
+     fig("fg-quadrant", fg_quadrant_plot("CM2"), 8, 5.5, raster = TRUE))
 step("tbl-intersect", "09", "the intersection table",
      frag("tbl-intersect", head(fg_intersect_df("CM2"), 20), max_rows = 20,
           caption = "Top rows of the CM2 intersection: gene-level maturation association crossed with its P7 KO response."))
-VN_P <- list(cluster = "CM2", stratum = "G1", grid = "de", padj = 0.05, lfc = 0.5)
+# AllCM rather than a single subcluster: at these thresholds a per-subcluster
+# down-list is a handful of genes, and a Venn over one gene teaches nothing about
+# the method. The overlap statistics are the point of the tab, and they need sets
+# large enough for an expectation to be meaningful.
+# The tab's own defaults (app.R:2533-2541): the two temporal contrasts crossed
+# against the canonical cell-cycle panel, all cardiomyocytes, phase-matched,
+# |log2FC| >= 0.25. Documenting the default view is the point -- it is what a
+# reader sees before touching a control.
+VN_P   <- list(cluster = "AllCM", stratum = "G1", grid = "de", padj = 0.05, lfc = 0.25)
+VN_IDS <- c("de:WT_P0_vs_P7:both", "de:KO_P0_vs_P7:both", "cur:__canonical__")
 step("venn", "09", "gene-set Venn",
      fig("venn", local({
-       vs <- vn_sets(c("de:P7_KO_vs_WT:down", "ax:mat:mature", "cur:__canonical__"),
-                     VN_P$cluster, VN_P$stratum, VN_P$grid, VN_P$padj, VN_P$lfc)
-       vn_plot(vs, ttl = "CM2, G1 stratum")
+       vs <- vn_sets(VN_IDS, VN_P$cluster, VN_P$stratum, VN_P$grid, VN_P$padj, VN_P$lfc)
+       vn_plot(vs, ttl = "All cardiomyocytes, G1 stratum")
      }), 6.5, 5.5))
 step("tbl-venn-stats", "09", "overlap statistics for the Venn",
      frag("tbl-venn-stats", local({
-       vs <- vn_sets(c("de:P7_KO_vs_WT:down", "ax:mat:mature", "cur:__canonical__"),
-                     VN_P$cluster, VN_P$stratum, VN_P$grid, VN_P$padj, VN_P$lfc)
+       vs <- vn_sets(VN_IDS, VN_P$cluster, VN_P$stratum, VN_P$grid, VN_P$padj, VN_P$lfc)
        vn_stats(vs)
      }), caption = "Every pairwise overlap against its hypergeometric expectation. The picture cannot carry this; the table has to."))
 XC_P <- list(wt_cluster = "AllCM", mat_clusters = XC_MAT_CLUSTERS, cyc_clusters = XC_CYC_CLUSTERS,
@@ -666,6 +728,16 @@ step("tbl-stamp", "11", "provenance stamp",
 # ---- manifest and exit -----------------------------------------------------
 if (LIST) quit(save = "no", status = 0)
 
+G <- do.call(rbind, GAPS)
+if (!is.null(G)) {
+  writeLines(c("<!-- generated by docs/export_assets.R -- do not edit -->", "",
+               md_table(G)), file.path(OUT_G, "_gaps.md"))
+} else {
+  writeLines(c("<!-- generated by docs/export_assets.R -- do not edit -->", "",
+               "*Nothing missing: every figure and table in this book was exported",
+               "from the current bundle.*"), file.path(OUT_G, "_gaps.md"))
+}
+
 M <- do.call(rbind, MANIFEST)
 if (!is.null(M)) {
   writeLines(c("<!-- generated by docs/export_assets.R -- do not edit -->", "",
@@ -673,8 +745,9 @@ if (!is.null(M)) {
              file.path(OUT_G, "_manifest.md"))
 }
 
-cat(sprintf("\n== %d exported, %d failed, %d skipped ==\n",
+cat(sprintf("\n== %d exported, %d failed, %d gap/skipped ==\n",
             if (is.null(M)) 0L else nrow(M), length(FAILED), length(SKIPPED)))
+if (!is.null(G)) cat(sprintf("%d documented gap(s) written to _generated/_gaps.md\n", nrow(G)))
 if (length(FAILED)) {
   cat("\nFAILURES:\n"); cat(paste0("  - ", FAILED, collapse = "\n"), "\n")
   quit(save = "no", status = 1)

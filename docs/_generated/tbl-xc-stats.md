@@ -2,17 +2,9 @@
 
 | comparison | set A | set B | n A | n B | overlap | expected | fold | p hypergeom |
 | :--- | :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| matUP_cycDN | WT P0→P7
-CM maturation up at P7 | P7 KO-vs-WT
-up in WT in CM2/CM4/CM5 | 2 | 1,224 | 1 | 0.100 | 9.89 | 0.0985 |
-| matDN_cycUP | WT P0→P7
-CM maturation up at P0 | P7 KO-vs-WT
-up in KO in CM2/CM4/CM5 | 5 | 213 | 2 | 0 | 45.5 | 0.000757 |
-| cycUP_matDN | WT P0→P7
-canonical cell cycle up at P7 | P7 KO-vs-WT
-up in WT in CM1/CM2/CM3/CM7/CM8 | 3 | 2,094 | 0 | 0.300 | 0 | 1.00 |
-| cycDN_matUP | WT P0→P7
-canonical cell cycle up at P0 | P7 KO-vs-WT
-up in KO in CM1/CM2/CM3/CM7/CM8 | 0 | 81 | 0 | 0 | 0 | 1.00 |
+| matUP_cycDN | WT P0→P7 · CM maturation up at P7 | P7 KO-vs-WT · up in WT in CM2/CM4/CM5 | 2 | 1,224 | 1 | 0.100 | 9.89 | 0.0985 |
+| matDN_cycUP | WT P0→P7 · CM maturation up at P0 | P7 KO-vs-WT · up in KO in CM2/CM4/CM5 | 5 | 213 | 2 | 0 | 45.5 | 0.000757 |
+| cycUP_matDN | WT P0→P7 · canonical cell cycle up at P7 | P7 KO-vs-WT · up in WT in CM1/CM2/CM3/CM7/CM8 | 3 | 2,094 | 0 | 0.300 | 0 | 1.00 |
+| cycDN_matUP | WT P0→P7 · canonical cell cycle up at P0 | P7 KO-vs-WT · up in KO in CM1/CM2/CM3/CM7/CM8 | 0 | 81 | 0 | 0 | 0 | 1.00 |
 
 : All four crossings, with fold enrichment and hypergeometric p. {tbl-colwidths="auto"}

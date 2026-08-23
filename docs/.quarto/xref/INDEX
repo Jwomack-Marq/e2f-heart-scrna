@@ -1,0 +1,38 @@
+{
+  "index.qmd": {
+    "index.html": "f24c414d"
+  },
+  "01-upstream.qmd": {
+    "01-upstream.html": "a387734b"
+  },
+  "02-atlas.qmd": {
+    "02-atlas.html": "edf45b96"
+  },
+  "03-de.qmd": {
+    "03-de.html": "4fc6791c"
+  },
+  "04-enrichment.qmd": {
+    "04-enrichment.html": "6c07f64a"
+  },
+  "05-cm-deepdive.qmd": {
+    "05-cm-deepdive.html": "5a845f5f"
+  },
+  "06-e2f.qmd": {
+    "06-e2f.html": "aff80b00"
+  },
+  "07-fourgroup.qmd": {
+    "07-fourgroup.html": "a4a047e6"
+  },
+  "08-scores.qmd": {
+    "08-scores.html": "a1638eb4"
+  },
+  "09-overlaps.qmd": {
+    "09-overlaps.html": "3099dac9"
+  },
+  "10-signalling.qmd": {
+    "10-signalling.html": "e21589ed"
+  },
+  "11-confounds-repro.qmd": {
+    "11-confounds-repro.html": "ca4b8d3f"
+  }
+}

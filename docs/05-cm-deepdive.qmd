@@ -1,0 +1,147 @@
+---
+title: "The cardiomyocyte deep-dive"
+engine: markdown
+tabs:
+  - "Cardiomyocyte deep-dive"
+---
+
+## What you're looking at
+
+**Cardiomyocytes → Cardiomyocyte deep-dive**, eight sub-tabs over a genuine
+re-clustering of the cardiomyocyte compartment: *Subcluster map*, *Identity (marker
+heatmap)*, *DE (per subcluster)*, *Cell cycle*, *Composition*, *Per-cluster summary*,
+*Top markers*, and *Subcluster enrichment*.
+
+![Cardiomyocyte subclusters at resolution 0.2](assets/cm-umap.png){#fig-cm-umap}
+
+## The question
+
+Cardiomyocytes are 69–79 % of the cells here, and treating them as one population
+throws away the structure the project is actually about — some subpopulations are
+cycling, some are maturing, and the knockout may act on one and not the other. The
+deep-dive exists to ask every question from [chapter 3](03-de.qmd) again *within* a
+cardiomyocyte state rather than across all of them.
+
+## How it was done
+
+Cardiomyocytes were re-clustered on their own, upstream, at three Louvain resolutions
+(0.1, 0.2, 0.3, stored as `SCT_snn_res.*` columns on `app$cm$meta`). **Only resolution
+0.2 is exposed** — 13 subclusters, CM0–CM12 — and every in-repo builder hard-codes
+`RES <- "0.2"` (`build_subcluster_enrichment.R:37`, `build_fourgroup.R:73`) so nothing
+downstream can silently be computed at a different granularity than the map shows.
+
+### Identity
+
+Two independent lines of evidence, deliberately:
+
+**Curated marker heatmap** — z-scored mean expression of a curated marker panel across
+subclusters, precomputed upstream into `app$heat[["res0.2"]]`, plus a
+`nearest_CM_subtype` label per subcluster.
+
+![z-scored marker expression by subcluster](assets/cm-markerheat.svg){#fig-cm-markerheat}
+
+{{< include _generated/tbl-cm-subtype.md >}}
+
+**Data-driven identity markers** — `presto::wilcoxauc` one-vs-rest on the broad matrix
+restricted to cardiomyocytes, keeping `auc > 0.55 & padj < 0.05 & logFC > 0`, taking the
+**top 150 by AUC**, and running GO BP on them. Clusters under **25 cells** are skipped,
+which drops CM12 (9 cells).
+<span class="src">build_subcluster_enrichment.R:41-46, 120-160</span>
+
+{{< include _generated/tbl-cm-summary.md >}}
+
+### Differential expression within a subcluster
+
+The *DE (per subcluster)* panel's *Comparison* dropdown carries two different kinds of
+table:
+
+- **pooled KO-vs-WT** — `app$tables$sub_DE[["res0.2"]]`, KO versus WT with P0 and P7
+  **pooled**, built upstream
+- **the four timepoint-specific contrasts** — read from `app$fourgroup$de` / `$de2`, the
+  same grids the Four-group tab uses ([chapter 7](07-fourgroup.qmd))
+
+![Pooled KO vs WT: top genes across subclusters](assets/cm-lfcheat.svg){#fig-cm-lfcheat}
+
+A detail that trips people up, and that the app says out loud
+(`README.md:230-234`): the *Split map by* control next to the comparison dropdown
+facets **the map only**. The pooled `sub_DE` tables had their timepoint dimension
+collapsed at build time, so no display-time split can recover a per-timepoint contrast
+from them. That is exactly why the comparison is a separate dropdown rather than a
+facet — a facet would imply the split was applied to the statistics.
+
+### Cell cycle and composition
+
+Phase calls (`G1`/`S`/`G2M`) come from Seurat `CellCycleScoring` with the
+Tirosh/Regev 43-gene S and 54-gene G2/M lists, title-cased for mouse, run upstream. The
+phase panel shows the fraction of each phase within each subcluster × genotype ×
+timepoint cell — `prop.table` over every margin except phase.
+
+![Cell-cycle phase by subcluster, genotype and timepoint](assets/cm-phase.svg){#fig-cm-phase}
+
+### Subcluster enrichment
+
+Pooled KO-vs-WT GO and GSEA per subcluster, from `app$enrich$sub`:
+
+| Parameter | Value |
+|---|---|
+| Gene lists | `\|log2FC\| ≥ 1` **and** `padj < 0.05`, confounders excluded, directions separate |
+| GO | `enrichGO`, BP, `pvalueCutoff = 0.2`, `qvalueCutoff = 0.2`, size 10–500 |
+| Universe | the genes present in that subcluster's DE table |
+| GSEA | `fgsea`, Hallmark + KEGG_LEGACY, ranked by `sign(log2FC) × −log10(p)`, ≥ 15 genes |
+| Identity GO | top 150 markers by AUC (`auc > 0.55`, `padj < 0.05`), min 25 cells |
+
+<span class="src">shiny_app/build_subcluster_enrichment.R:37-46</span>
+
+## What it shows
+
+Thirteen subclusters, but they are not thirteen usable analytical units. **CM6 has zero
+P7 cells. CM4 has zero G1 cells** — it is entirely S/G2M, so it has no phase-matched
+table anywhere in the project. **CM12 is 9 cells.** CM0 has 82 WT-P7 and 167 KO-P7
+cells. Several conclusions in the app are restricted to CM1, CM2, CM3, CM5, CM7 and CM8
+for exactly this reason, and the four-group counts table in
+[chapter 7](07-fourgroup.qmd) is the audit behind that restriction.
+
+## Why this way
+
+**Why resolution 0.2 and not a finer one?** With one animal per condition, the binding
+constraint is cells per arm per cluster, not resolution. At 0.2 the median subcluster
+still supports a four-way split into WT/KO × P0/P7; at 0.3 more of those arms fall
+under the 10-cell floor and the number of contrasts that simply cannot be computed
+grows faster than the biological resolution gained. Exposing one resolution rather than
+a slider is a related choice: a reader comparing a result at 0.2 with a result at 0.3
+would be comparing two different sets of cells with the same names.
+
+**Why two independent identity methods?** The curated heatmap tells you whether a
+subcluster matches a subtype someone already named; the one-vs-rest AUC markers tell you
+what actually distinguishes it in this dataset. When a cluster's curated label and its
+data-driven markers disagree, that is the interesting case — most often a
+cycling-state cluster that spans subtypes, which a curated subtype panel cannot express.
+
+**Why the pooled and per-timepoint tables live under one dropdown.** They answer
+different questions and the pooled one cannot answer the timepoint-specific one, so the
+alternative to a shared dropdown is two similar-looking tabs. `tools/test_downloads.R`
+asserts that the deep-dive and the Four-group tab return **identical** tables for the
+same cluster × contrast × stratum × matrix — if that test ever fails, one of the two
+tabs is answering a different question than its label claims.
+
+## What it cannot say
+
+- **Subclusters are not cell types.** They are states in a continuum, cut at a chosen
+  resolution; the boundaries are not biological objects.
+- **A subcluster's KO-vs-WT result is not independent** of its neighbours' — clustering
+  and DE were run on the same cells, so a gene that defines a cluster is favoured to
+  appear in its contrasts.
+- **CM4 has no phase-matched answer at all**, and CM6 no P7 answer. Where the app drops
+  them it names them rather than quietly computing over the rest.
+- **The pooled KO-vs-WT tables average over P0 and P7**, which for any gene that moves
+  developmentally is a mixture, not an effect.
+
+## Reproduce it
+
+```bash
+Rscript shiny_app/build_subcluster_enrichment.R    # app$enrich$sub
+Rscript shiny_app/build_fourgroup.R                # the per-timepoint contrasts
+Rscript tools/test_downloads.R                     # asserts the two tabs agree
+
+docs/export.sh --only='cm-|tbl-cm'
+```

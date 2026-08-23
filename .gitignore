@@ -41,3 +41,8 @@ shiny_app/deck.body.html
 # generated deliverables: Excel workbooks + figures for collaborator requests
 # (rebuild: analysis/<date>_<name>/run.sh) — large and fully regenerable
 deliverables/
+
+# rendered methods book (rebuild: docs/render.sh) — build artifact, like the decks.
+# docs/assets/ and docs/_generated/ ARE tracked: they are the book's figures and
+# generated tables, and rebuilding them needs the git-ignored data bundle.
+docs/_site/
