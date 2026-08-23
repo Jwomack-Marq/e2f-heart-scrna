@@ -51,7 +51,12 @@ testServer(APPDIR, {
     cc_tp = "P7", cc_pathway = "All", cc_metric = "delta",
     deg_hideconf = FALSE,
     fg_enr_cluster = "CM2", fg_enr_contrast = "P7_KO_vs_WT", fg_enr_stratum = "all",
-    fg_enr_ont = "BP", fg_enr_topn = 20
+    fg_enr_ont = "BP", fg_enr_topn = 20,
+    xc_wt_cluster = "AllCM", xc_mat_set = "CM maturation", xc_cyc_set = "__canonical__",
+    xc_mat_clusters = c("CM1","CM2","CM3","CM7","CM8"),
+    xc_cyc_clusters = c("CM2","CM4","CM5"), xc_minc = 1, xc_stratum = "all",
+    xc_grid = "de", xc_padj = 0.05, xc_measure = "auc", xc_auc = 0.60, xc_lfc = 0.25,
+    xc_hidemt = TRUE, xc_gene_cmp = "__all__"
   )
 
   cat("\n== table download frames ==\n")
@@ -161,6 +166,47 @@ testServer(APPDIR, {
   d <- tryCatch(cm_d(), error = function(e) e)
   note(if (is.data.frame(d)) "PASS" else "FAIL", "cm_d pooled",
        if (is.data.frame(d)) sprintf("%d rows", nrow(d)) else conditionMessage(d))
+
+  cat("\n== WT programs x KO clusters ==\n")
+  # app.R's file-level helpers are one frame up from the server execution env.
+  APP <- parent.env(environment(xc_venn_p))
+  gf  <- function(n) get(n, envir = APP)
+  vs <- tryCatch(xc_all(), error = function(e) e)
+  if (inherits(vs, "error")) note("FAIL", "xc_all", conditionMessage(vs))
+  else {
+    note(if (length(vs) == 4) "PASS" else "FAIL", "xc_all", "4 comparisons")
+    for (k in seq_along(vs))
+      note("PASS", paste0("comparison ", k),
+           sprintf("A=%d B=%d shared=%d", length(vs[[k]]$sets[[1]]$genes),
+                   length(vs[[k]]$sets[[2]]$genes),
+                   length(intersect(vs[[k]]$sets[[1]]$genes, vs[[k]]$sets[[2]]$genes))))
+    # The crossing must not quietly redefine "up": rebuild comparison 1's WT side from
+    # the raw table and the curated category and demand the same answer.
+    wt  <- gf("FG")$de[["AllCM"]][["WT_P0_vs_P7__all"]]
+    man <- intersect(gf("de_pass")(wt, "up", 0.05, 0.60, "auc"), gf("GENE_SETS")[["CM maturation"]])
+    man <- setdiff(man[!grepl("^mt-", man)], gf("CONF"))
+    note(if (setequal(man, vs[[1]]$sets[[1]]$genes)) "PASS" else "FAIL",
+         "C1 set A == manual", paste(sort(man), collapse = ", "))
+  }
+  a1 <- gf("xc_ko_set")(c("CM2","CM4","CM5"), "down", "all", "de", 0.05, 0.60, "auc", minc = 1)$genes
+  a3 <- gf("xc_ko_set")(c("CM2","CM4","CM5"), "down", "all", "de", 0.05, 0.60, "auc", minc = 3)$genes
+  note(if (all(a3 %in% a1) && length(a3) <= length(a1)) "PASS" else "FAIL",
+       "minc=3 subset of minc=1", sprintf("%d of %d", length(a3), length(a1)))
+  # CM4 has no G1 stratum for any contrast, so the G1 option must report it, not drop it silently
+  pres <- gf("xc_ko_present")(c("CM2","CM4","CM5"), "G1", "de")
+  note(if (!("CM4" %in% pres)) "PASS" else "FAIL", "CM4 absent from G1",
+       paste(pres, collapse = ", "))
+  # a symmetric |log2FC| cut cannot classify a sparse cell-cycle gene; the audit has to say so
+  aud <- gf("xc_measure_audit")(xc_p())
+  note(if (is.data.frame(aud) && nrow(aud) == 4) "PASS" else "FAIL", "xc_measure_audit",
+       if (is.data.frame(aud)) paste(sprintf("%s/%s AUC %d lfc %d", aud$category,
+         aud$direction, aud$n_AUC, aud$n_log2FC), collapse = " | ") else "not a frame")
+  for (nm in c("xc_wt_tab_df","xc_ko_tab_df","xc_ko_pivot_dat","xc_stats_df","xc_genes_df")) {
+    r <- tryCatch(get(nm)(), error = function(e) e)
+    if (inherits(r, "shiny.silent.error")) note("SKIP", nm, conditionMessage(r))
+    else if (inherits(r, "error")) note("FAIL", nm, conditionMessage(r))
+    else note("PASS", nm, sprintf("%d rows x %d cols", nrow(r), ncol(r)))
+  }
 
   cat("\n== CM deep-dive per-contrast enrichment ==\n")
   session$setInputs(cm_enr_sub = "CM2", cm_enr_contrast = "P7_KO_vs_WT",

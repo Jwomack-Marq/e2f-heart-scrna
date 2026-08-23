@@ -1437,6 +1437,34 @@ vn_choices <- function() {
 # Resolve one set id to its genes AND its testable space. The universe matters: a
 # 52-gene curated panel crossed against a set drawn from 24k tested genes gives a
 # meaningless hypergeometric unless the universe is the space both could have come from.
+# What "up" and "down" mean, in one place. Both the Venn tab and the WT-programs tab
+# build gene lists from the same DE tables; if they each spelled this out the two could
+# drift and nobody would notice, because both would still return plausible lists.
+#
+# `measure` picks the effect size, and the choice is not cosmetic. presto's logFC is a
+# difference of mean log-normalised expression, so it scales with how highly expressed a
+# gene is. Cell-cycle genes in cardiomyocytes are sparse: between WT P0 and P7, Mcm3 goes
+# from 6.6% to 27.2% detection and that is a log2FC of 0.16, while Myh7 moves 2.5. A
+# symmetric |log2FC| cut therefore classifies maturation genes and can never classify a
+# cell-cycle one -- it would report "no cell-cycle gene changes", which is false. AUC is
+# rank-based and scale-free, so the same number means the same thing on both. This is the
+# identical failure mode build_fourgroup.R hit when it classified its maturation axis, and
+# it resolved it the same way (MAT_AUC = 0.60).
+de_pass <- function(d, dir, padj_cut, eff_cut, measure = "lfc") {
+  keep <- !d$confounder & !is.na(d$padj) & d$padj < padj_cut
+  if (identical(measure, "auc")) {
+    if (is.null(d$auc)) return(character(0))
+    keep <- keep & !is.na(d$auc)
+    if (identical(dir, "up"))   keep <- keep & d$auc >= eff_cut
+    if (identical(dir, "down")) keep <- keep & d$auc <= 1 - eff_cut
+    if (identical(dir, "both")) keep <- keep & (d$auc >= eff_cut | d$auc <= 1 - eff_cut)
+  } else {
+    keep <- keep & abs(d$log2FoldChange) >= eff_cut
+    if (identical(dir, "up"))   keep <- keep & d$log2FoldChange > 0
+    if (identical(dir, "down")) keep <- keep & d$log2FoldChange < 0
+  }
+  d$gene[which(keep)]
+}
 vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
   if (is.null(id) || !nzchar(id) || identical(id, "none")) return(NULL)
   kind <- sub(":.*$", "", id); rest <- sub("^[^:]*:", "", id)
@@ -1455,10 +1483,7 @@ vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
     # it to roughly the changing genes and inflate every expected overlap.
     univ <- if (identical(grid, "de2")) genes else (GENES_FULL %||% genes)
     if (is.null(d)) return(out(character(0), lab, univ))
-    keep <- !d$confounder & !is.na(d$padj) & d$padj < padj_cut & abs(d$log2FoldChange) >= lfc_cut
-    if (dir == "up")   keep <- keep & d$log2FoldChange > 0
-    if (dir == "down") keep <- keep & d$log2FoldChange < 0
-    return(out(d$gene[keep], lab, univ))
+    return(out(de_pass(d, dir, padj_cut, lfc_cut), lab, univ))
   }
   if (kind == "ax") {
     validate(need(!is.null(GM), GM_MSG))
@@ -1572,6 +1597,269 @@ vn_region_df <- function(vs) {
                genes = paste(sort(reg[[k]]), collapse = ", "),
                stringsAsFactors = FALSE)
   }))[order(-vapply(reg, length, 0L)), , drop = FALSE]
+}
+
+
+# ---- WT programs x P7 KO clusters --------------------------------------------
+# The collaborator's four crossings, in one place. Two steps, then a crossing:
+#   1. WT P0->P7, restricted to a curated gene category (maturation / cell cycle)
+#   2. P7 KO-vs-WT, unioned over a named group of CM subclusters
+#   3. each WT list crossed against the OPPOSITE category's cluster group
+#
+# The KO side is defined by CLUSTERS, not by a gene category -- that is the email's
+# "8 clusters including G1/Maturation related genes (CM1, CM2, CM3, CM7, CM8), and
+# Cell cycle related genes (CM2, 4, 5)". Filtering both sides by category instead
+# would make crossings 1 and 2 intersect the maturation set with the cell-cycle set,
+# and those two curated sets share only Mki67 and Top2a -- the Venns would read empty
+# by construction rather than by biology.
+XC_MAT_CLUSTERS <- c("CM1","CM2","CM3","CM7","CM8")   # "G1/Maturation related"
+XC_CYC_CLUSTERS <- c("CM2","CM4","CM5")               # "Cell cycle related". CM2 is in BOTH.
+XC_WT_KEY  <- "WT_P0_vs_P7"     # A = WT-P7, so log2FC > 0 means up at P7
+XC_KO_KEY  <- "P7_KO_vs_WT"     # A = KO-P7, so log2FC > 0 means up in KO
+XC_CANON   <- "__canonical__"
+XC_COMPARISONS <- list(
+  list(key = "matUP_cycDN", wt = "mat", wt_dir = "up",   ko = "cyc", ko_dir = "down"),
+  list(key = "matDN_cycUP", wt = "mat", wt_dir = "down", ko = "cyc", ko_dir = "up"),
+  list(key = "cycUP_matDN", wt = "cyc", wt_dir = "up",   ko = "mat", ko_dir = "down"),
+  list(key = "cycDN_matUP", wt = "cyc", wt_dir = "down", ko = "mat", ko_dir = "up"))
+
+# mt- genes are KO-up in all seven subclusters and KO-down in none, which is a library
+# read-fraction difference rather than biology (analysis/2026-08-21_email). Left in,
+# they dominate every KO-up union and carry the oxidative-phosphorylation terms with them.
+xc_is_mt <- function(g) grepl("^mt-", g, ignore.case = TRUE)
+# The testable space is the matrix, never the gene category: a hypergeometric against a
+# 14-gene universe is not a null, it is a tautology.
+xc_universe <- function(grid) setdiff(if (identical(grid, "de2")) genes else (GENES_FULL %||% genes), CONF)
+xc_category <- function(set) {
+  g <- if (identical(set, XC_CANON)) VN_CANONICAL else GENE_SETS[[set]]
+  intersect(g %||% character(0), ALL_GENES)
+}
+xc_cat_label <- function(set) if (identical(set, XC_CANON)) "canonical cell cycle" else set
+xc_eff_label <- function(p) if (identical(p$measure, "auc"))
+  sprintf("AUC >= %s (or <= %s)", p$eff, signif(1 - p$eff, 3)) else
+  sprintf("|log2FC| >= %s", p$eff)
+# Both effect-size measures side by side for the four WT lists. Reported ALWAYS, not
+# only on disagreement: "no cell-cycle gene changes between WT P0 and P7" is a conclusion
+# someone would carry away from this tab, and on this data it is a property of the log2FC
+# scale rather than a result.
+xc_measure_audit <- function(p) {
+  d <- fg_grid(p$grid)[[p$wt_cluster]][[paste0(XC_WT_KEY, "__", p$stratum)]]
+  if (is.null(d)) return(NULL)
+  cats <- list(maturation = p$mat_set, "cell cycle" = p$cyc_set)
+  rows <- list()
+  for (cn in names(cats)) {
+    cg <- xc_category(cats[[cn]])
+    for (dir in c("up", "down")) {
+      na <- length(intersect(de_pass(d, dir, p$padj, p$eff_auc %||% 0.60, "auc"), cg))
+      nl <- length(intersect(de_pass(d, dir, p$padj, p$eff_lfc %||% 0.25, "lfc"), cg))
+      rows[[length(rows) + 1L]] <- data.frame(category = cn,
+        direction = if (identical(dir, "up")) "up at P7" else "up at P0",
+        n_AUC = na, n_log2FC = nl, stringsAsFactors = FALSE)
+    }
+  }
+  do.call(rbind, rows)
+}
+# The four comparisons carry different per-cluster lfc_ columns (CM2/4/5 vs CM1/2/3/7/8),
+# so a plain rbind fails. Union the columns and pad rather than dropping the extras.
+xc_rbind <- function(lst) {
+  lst <- Filter(function(d) !is.null(d) && nrow(d), lst)
+  if (!length(lst)) return(NULL)
+  cols <- unique(unlist(lapply(lst, names)))
+  do.call(rbind, lapply(lst, function(d) {
+    for (cn in setdiff(cols, names(d))) d[[cn]] <- NA
+    d[, cols, drop = FALSE] }))
+}
+xc_cat_choices <- function()
+  c(setNames(XC_CANON, "Canonical cell cycle (S + G2/M + E2F targets)"),
+    setNames(names(GENE_SETS), names(GENE_SETS)))
+
+# Step 1: WT P0->P7 within one curated category.
+xc_wt_set <- function(set, dir, cluster, stratum, grid, padj_cut, eff_cut,
+                      measure = "auc", hide_mt = TRUE) {
+  cat_g <- xc_category(set)
+  lab <- sprintf("WT P0→P7\n%s %s", xc_cat_label(set),
+                 if (identical(dir, "up")) "up at P7" else "up at P0")
+  d <- fg_grid(grid)[[cluster]][[paste0(XC_WT_KEY, "__", stratum)]]
+  g <- if (is.null(d)) character(0) else intersect(de_pass(d, dir, padj_cut, eff_cut, measure), cat_g)
+  if (hide_mt) g <- g[!xc_is_mt(g)]
+  list(genes = setdiff(unique(g), CONF), label = lab, universe = xc_universe(grid),
+       n_category = length(cat_g), cluster = cluster, dir = dir, set = set)
+}
+
+# Step 2: P7 KO-vs-WT per cluster, tidied. One row per gene x cluster that passes.
+xc_ko_long <- function(clusters, dir, stratum, grid, padj_cut, eff_cut,
+                       measure = "auc", hide_mt = TRUE) {
+  rows <- lapply(clusters, function(cl) {
+    d <- fg_grid(grid)[[cl]][[paste0(XC_KO_KEY, "__", stratum)]]
+    if (is.null(d) || !nrow(d)) return(NULL)
+    i <- which(d$gene %in% de_pass(d, dir, padj_cut, eff_cut, measure))
+    if (!length(i)) return(NULL)
+    data.frame(cluster = cl, gene = d$gene[i], log2FoldChange = d$log2FoldChange[i],
+               auc = d$auc[i], padj = d$padj[i], pct_KO = d$pct_A[i], pct_WT = d$pct_B[i],
+               n_KO = d$n_A[i], n_WT = d$n_B[i], stringsAsFactors = FALSE)
+  })
+  out <- do.call(rbind, Filter(Negate(is.null), rows))
+  if (is.null(out)) return(NULL)
+  if (hide_mt) out <- out[!xc_is_mt(out$gene), , drop = FALSE]
+  if (!nrow(out)) return(NULL)
+  out[order(out$gene, out$cluster), , drop = FALSE]
+}
+# Which of the named clusters actually carry a table for this stratum. CM4 has no G1
+# stratum for ANY contrast, so the G1 option silently shrinks the cycling group unless
+# the tab says so -- hence this is reported, not inferred by the reader.
+xc_ko_present <- function(clusters, stratum, grid)
+  clusters[vapply(clusters, function(cl)
+    !is.null(fg_grid(grid)[[cl]][[paste0(XC_KO_KEY, "__", stratum)]]), TRUE)]
+# Arms that clear the 10-cell DE floor but are still too thin to trust.
+xc_ko_thin <- function(clusters, stratum, grid) {
+  thin <- FG$built$thin_cells %||% 50
+  keep <- vapply(clusters, function(cl) {
+    d <- fg_grid(grid)[[cl]][[paste0(XC_KO_KEY, "__", stratum)]]
+    !is.null(d) && nrow(d) && min(d$n_A[1], d$n_B[1]) < thin }, TRUE)
+  clusters[keep]
+}
+
+xc_ko_set <- function(clusters, dir, stratum, grid, padj_cut, eff_cut,
+                      measure = "auc", minc = 1, hide_mt = TRUE) {
+  lab <- sprintf("P7 KO-vs-WT\n%s in %s", if (identical(dir, "up")) "up in KO" else "up in WT",
+                 paste(clusters, collapse = "/"))
+  L <- xc_ko_long(clusters, dir, stratum, grid, padj_cut, eff_cut, measure, hide_mt)
+  g <- if (is.null(L)) character(0) else { tb <- table(L$gene); names(tb)[tb >= minc] }
+  list(genes = setdiff(unique(g), CONF), label = lab, universe = xc_universe(grid),
+       long = L, clusters = clusters, present = xc_ko_present(clusters, stratum, grid),
+       dir = dir, minc = minc)
+}
+
+# One comparison -> exactly the list(sets, universe) shape vn_plot/vn_stats/vn_regions
+# already take, so the drawing and the hypergeometric are reused unchanged.
+xc_comparison <- function(cmp, p) {
+  wt_set <- if (identical(cmp$wt, "mat")) p$mat_set else p$cyc_set
+  ko_cls <- if (identical(cmp$ko, "mat")) p$mat_clusters else p$cyc_clusters
+  A <- xc_wt_set(wt_set, cmp$wt_dir, p$wt_cluster, p$stratum, p$grid, p$padj, p$eff,
+                 p$measure, p$hide_mt)
+  B <- xc_ko_set(ko_cls, cmp$ko_dir, p$stratum, p$grid, p$padj, p$eff, p$measure,
+                 p$minc, p$hide_mt)
+  univ <- intersect(A$universe, B$universe)
+  A$genes <- intersect(A$genes, univ); B$genes <- intersect(B$genes, univ)
+  list(sets = list(A, B), universe = univ, cmp = cmp)
+}
+xc_label <- function(cmp, p) {
+  wt_set <- if (identical(cmp$wt, "mat")) p$mat_set else p$cyc_set
+  ko_cls <- if (identical(cmp$ko, "mat")) p$mat_clusters else p$cyc_clusters
+  sprintf("WT %s %s  ×  P7 KO %s in %s", xc_cat_label(wt_set),
+          if (identical(cmp$wt_dir, "up")) "up" else "down",
+          if (identical(cmp$ko_dir, "up")) "up" else "down", paste(ko_cls, collapse = "/"))
+}
+
+# Step 1 table: both categories x both directions, one frame.
+xc_wt_df <- function(p) {
+  d <- fg_grid(p$grid)[[p$wt_cluster]][[paste0(XC_WT_KEY, "__", p$stratum)]]
+  validate(need(!is.null(d) && nrow(d), fg_skip_msg(p$wt_cluster, XC_WT_KEY, p$stratum, p$grid)))
+  cats <- list(maturation = p$mat_set, "cell cycle" = p$cyc_set)
+  rows <- list()
+  for (cn in names(cats)) for (dir in c("up", "down")) {
+    g <- intersect(de_pass(d, dir, p$padj, p$eff, p$measure), xc_category(cats[[cn]]))
+    if (p$hide_mt) g <- g[!xc_is_mt(g)]
+    g <- setdiff(g, CONF)
+    if (!length(g)) next
+    i <- match(g, d$gene)
+    rows[[length(rows) + 1L]] <- data.frame(
+      category = cn, gene_set = xc_cat_label(cats[[cn]]),
+      direction = if (identical(dir, "up")) "up at P7" else "up at P0",
+      gene = g, log2FoldChange = d$log2FoldChange[i], auc = d$auc[i], padj = d$padj[i],
+      pct_P7 = d$pct_A[i], pct_P0 = d$pct_B[i], stringsAsFactors = FALSE)
+  }
+  out <- do.call(rbind, rows)
+  validate(need(!is.null(out), paste0(
+    "No gene in either category passes padj < ", p$padj, " and ", xc_eff_label(p),
+    " in this cluster and stratum. The categories are small by design (a few dozen genes) ",
+    "-- try the other effect-size measure, loosen the cut, or pick a subcluster instead of ",
+    "all cardiomyocytes.")))
+  out[order(out$category, out$direction, -abs(out$log2FoldChange)), , drop = FALSE]
+}
+# Counts behind Step 1, so an empty circle later is traceable to its list.
+xc_wt_counts <- function(p) {
+  d <- try(xc_wt_df(p), silent = TRUE)
+  if (inherits(d, "try-error")) return(NULL)
+  as.data.frame(table(category = d$category, direction = d$direction), stringsAsFactors = FALSE)
+}
+
+# Step 2 table: every named cluster, both groups, both directions.
+xc_ko_df <- function(p) {
+  grp <- list(maturation = p$mat_clusters, "cell cycle" = p$cyc_clusters)
+  rows <- list()
+  for (gn in names(grp)) for (dir in c("up", "down")) {
+    L <- xc_ko_long(grp[[gn]], dir, p$stratum, p$grid, p$padj, p$eff, p$measure, p$hide_mt)
+    if (is.null(L)) next
+    L$cluster_group <- gn
+    L$direction <- if (identical(dir, "up")) "up in KO" else "up in WT"
+    rows[[length(rows) + 1L]] <- L
+  }
+  out <- do.call(rbind, rows)
+  validate(need(!is.null(out), "No gene passes the current cuts in these clusters."))
+  out <- out[, c("cluster_group","cluster","direction","gene","log2FoldChange","auc","padj",
+                 "pct_KO","pct_WT","n_KO","n_WT")]
+  out[order(out$cluster_group, out$direction, out$cluster, -abs(out$log2FoldChange)), , drop = FALSE]
+}
+# gene x cluster log2FC -- "which genes in each" in one glance rather than a filter.
+xc_ko_pivot_df <- function(p) {
+  d <- xc_ko_df(p)
+  cls <- unique(c(p$mat_clusters, p$cyc_clusters))
+  cls <- cls[order(suppressWarnings(as.integer(sub("^CM", "", cls))), cls)]
+  g <- sort(unique(d$gene))
+  out <- data.frame(gene = g, stringsAsFactors = FALSE)
+  for (cl in cls) { v <- d[d$cluster == cl, , drop = FALSE]
+    out[[cl]] <- if (nrow(v)) v$log2FoldChange[match(g, v$gene)] else NA_real_ }
+  out$n_clusters <- rowSums(!is.na(out[, cls, drop = FALSE]))
+  out[order(-out$n_clusters, out$gene), , drop = FALSE]
+}
+
+# The deliverable table: one row per gene per comparison, both sides' evidence on the
+# same row so a shared gene can be judged without a second lookup.
+xc_gene_df <- function(vs, p) {
+  A <- vs$sets[[1]]; B <- vs$sets[[2]]
+  allg <- sort(union(A$genes, B$genes))
+  if (!length(allg)) return(NULL)
+  wt <- fg_grid(p$grid)[[p$wt_cluster]][[paste0(XC_WT_KEY, "__", p$stratum)]]
+  iw <- if (is.null(wt)) rep(NA_integer_, length(allg)) else match(allg, wt$gene)
+  L  <- B$long
+  # Summarise the KO side once, vectorised. A per-gene subset inside a loop is quadratic
+  # and this table is rebuilt on every keystroke in the threshold boxes.
+  ks <- if (is.null(L)) NULL else {
+    o   <- L[order(L$gene, -abs(L$log2FoldChange)), , drop = FALSE]
+    top <- o[!duplicated(o$gene), , drop = FALSE]
+    cls <- vapply(split(L$cluster, L$gene), paste, "", collapse = ",")
+    nc  <- lengths(split(L$cluster, L$gene))
+    data.frame(gene = top$gene, ko_log2FC_top = top$log2FoldChange, ko_padj_top = top$padj,
+               ko_cluster_top = top$cluster, ko_clusters = unname(cls[top$gene]),
+               ko_n_clusters = as.integer(unname(nc[top$gene])), stringsAsFactors = FALSE)
+  }
+  ik <- if (is.null(ks)) rep(NA_integer_, length(allg)) else match(allg, ks$gene)
+  na_if_null <- function(x, i, default) if (is.null(x)) rep(default, length(i)) else x[i]
+  out <- data.frame(
+    comparison = xc_label(vs$cmp, p),
+    region = ifelse(allg %in% A$genes & allg %in% B$genes, "shared",
+             ifelse(allg %in% A$genes, "WT only", "KO only")),
+    gene = allg,
+    in_maturation_set = allg %in% xc_category(p$mat_set),
+    in_cellcycle_set  = allg %in% xc_category(p$cyc_set),
+    wt_log2FC = na_if_null(wt$log2FoldChange, iw, NA_real_),
+    wt_padj   = na_if_null(wt$padj,           iw, NA_real_),
+    ko_clusters    = na_if_null(ks$ko_clusters,    ik, NA_character_),
+    ko_n_clusters  = na_if_null(ks$ko_n_clusters,  ik, NA_integer_),
+    ko_cluster_top = na_if_null(ks$ko_cluster_top, ik, NA_character_),
+    ko_log2FC_top  = na_if_null(ks$ko_log2FC_top,  ik, NA_real_),
+    ko_padj_top    = na_if_null(ks$ko_padj_top,    ik, NA_real_),
+    stringsAsFactors = FALSE)
+  # per-cluster log2FC, so the union never hides which cluster carried a gene
+  for (cl in B$clusters) {
+    v <- if (is.null(L)) NULL else L[L$cluster == cl, , drop = FALSE]
+    out[[paste0("lfc_", cl)]] <-
+      if (is.null(v) || !nrow(v)) NA_real_ else v$log2FoldChange[match(allg, v$gene)]
+  }
+  out$ko_n_clusters[is.na(out$ko_n_clusters)] <- 0L
+  out[order(factor(out$region, c("shared","WT only","KO only")),
+            -abs(out$wt_log2FC), -abs(out$ko_log2FC_top)), , drop = FALSE]
 }
 
 
@@ -2263,7 +2551,86 @@ ui <- page_navbar(
       nav_panel("Region genes", value = "regions",
         helpText("Every disjoint region of the diagram, largest first. ",
                  "Region A is “in set A only”, AB is “in A and B but not C”, and so on."),
-        dl_data_ui("vn_regions"), DTOutput("vn_regions")))))),
+        dl_data_ui("vn_regions"), DTOutput("vn_regions"))))),
+
+  nav_panel("WT programs ∩ KO clusters", layout_sidebar(
+    sidebar = sidebar(width = 340,
+      tags$b("1. WT P0 → P7"),
+      selectInput("xc_wt_cluster", "Measured in", choices = NULL),
+      selectInput("xc_mat_set", "Maturation category",
+                  choices = xc_cat_choices(), selected = "CM maturation"),
+      selectInput("xc_cyc_set", "Cell-cycle category",
+                  choices = xc_cat_choices(), selected = XC_CANON),
+      hr(), tags$b("2. P7 KO vs WT"),
+      selectizeInput("xc_mat_clusters", "Maturation clusters", choices = NULL, multiple = TRUE),
+      selectizeInput("xc_cyc_clusters", "Cycling clusters", choices = NULL, multiple = TRUE),
+      numericInput("xc_minc", "DE in ≥ N of them", 1, 1, 8, 1),
+      hr(), tags$b("Shared settings"),
+      radioButtons("xc_stratum", "Cells used",
+                   c("All cells (raw)" = "all", "G1 only (phase-matched)" = "G1"),
+                   selected = "all"),
+      radioButtons("xc_grid", "DE matrix", choices = fg_grid_choices(), selected = "de"),
+      radioButtons("xc_measure", "Effect size",
+                   c("AUC (rank-based)" = "auc", "log2 fold change" = "lfc"), selected = "auc"),
+      div(style = "display:flex;gap:8px",
+        numericInput("xc_padj", "padj <", 0.05, 0.001, 1, 0.01),
+        conditionalPanel("input.xc_measure == 'auc'",
+          numericInput("xc_auc", "AUC >=", 0.60, 0.5, 1, 0.01)),
+        conditionalPanel("input.xc_measure != 'auc'",
+          numericInput("xc_lfc", "|log2FC| >=", 0.25, 0, 5, 0.05))),
+      checkboxInput("xc_hidemt", "Hide mitochondrial (mt-) genes", TRUE),
+      hr(),
+      div(downloadButton("xc_book", "Download all four comparisons (XLSX)",
+                         class = "btn-sm btn-outline-primary"), style = "margin-bottom:4px"),
+      helpText(tags$small("One sheet per comparison plus the two step tables, ",
+                          "with a README carrying the caveats.")),
+      uiOutput("xc_caveat"),
+      helpText(strong("Descriptive only — n = 1 animal per group.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("xc", palette = FALSE, rename = FALSE)))),
+    navset_card_tab(id = "xc_tabs",
+      nav_panel("Step 1 — WT P0→P7", value = "wt",
+        helpText("Which genes in each curated category change between WT P0 and WT P7. ",
+                 strong("log2FC > 0 means up at P7."), " These categories are small on ",
+                 "purpose — a few dozen canonical genes — so single-digit lists are the ",
+                 "honest answer, not a failed query."),
+        uiOutput("xc_wt_note"),
+        dl_fig_ui("xcwt"), plotOutput("xc_wt_plot", height = "300px"),
+        dl_data_ui("xc_wt_tab"), DTOutput("xc_wt_tab")),
+      nav_panel("Step 2 — P7 KO vs WT", value = "ko",
+        helpText("Every named subcluster, both directions. ",
+                 strong("log2FC > 0 means up in KO."), " The pivot below the table is the ",
+                 "same data as a gene × cluster grid, so “which genes in each” is one glance."),
+        uiOutput("xc_ko_note"),
+        dl_data_ui("xc_ko_tab"), DTOutput("xc_ko_tab"),
+        div(class = "mt-4", h5("Gene × cluster (log2FC, KO/WT)"),
+            dl_data_ui("xc_ko_pivot"), DTOutput("xc_ko_pivot"))),
+      nav_panel("The four comparisons", value = "venn",
+        helpText("Each WT category list crossed against the ", strong("opposite"),
+                 " category's cluster group, as asked. Circle areas are not to scale — ",
+                 "the numbers carry the counts. Read them with the ",
+                 strong("Overlap statistics"), " tab: an overlap only means something ",
+                 "against what independence would have predicted."),
+        uiOutput("xc_venn_note"),
+        fluidRow(
+          column(6, dl_fig_ui("xcvenn1"), plotOutput("xc_venn1", height = "380px")),
+          column(6, dl_fig_ui("xcvenn2"), plotOutput("xc_venn2", height = "380px"))),
+        fluidRow(
+          column(6, dl_fig_ui("xcvenn3"), plotOutput("xc_venn3", height = "380px")),
+          column(6, dl_fig_ui("xcvenn4"), plotOutput("xc_venn4", height = "380px")))),
+      nav_panel("Overlap statistics", value = "stats",
+        helpText("Observed overlap against the hypergeometric expectation over the shared ",
+                 "testable gene space. Fold near 1 with a non-significant p means the two ",
+                 "sets are unrelated — a real result, not a failed analysis. ",
+                 "No multiple-testing correction across the four rows."),
+        dl_data_ui("xc_stats"), DTOutput("xc_stats")),
+      nav_panel("Shared genes", value = "genes",
+        helpText("One row per gene per comparison, with the WT and KO evidence side by side. ",
+                 "Region is “shared”, “WT only” or “KO only”. The ", strong("lfc_CM…"),
+                 " columns give the per-cluster KO log2FC so a union never hides which ",
+                 "cluster carried a gene."),
+        selectInput("xc_gene_cmp", "Comparison", choices = NULL, width = "520px"),
+        dl_data_ui("xc_genes"), DTOutput("xc_genes")))))),
 
   nav_menu("Dev",
   nav_panel("Cell–cell signalling", layout_sidebar(
@@ -3323,6 +3690,267 @@ server <- function(input, output, session) {
       "The Coverage_audit sheet says how many genes went into each test and which selection rule fired, so an empty result can be told apart from an untested one.")
   )
 
+  # ---- WT programs x P7 KO clusters (the four crossings from the email) ----
+  observe({
+    cc <- fg_cluster_choices()
+    if (!length(cc)) return()
+    updateSelectInput(session, "xc_wt_cluster", choices = cc, selected = "AllCM")
+    subs <- setdiff(FG_CLUSTERS, "AllCM")
+    lab  <- setNames(subs, vapply(subs, function(s) sub_label("0.2", s), ""))
+    updateSelectizeInput(session, "xc_mat_clusters", choices = lab,
+                         selected = intersect(XC_MAT_CLUSTERS, subs))
+    updateSelectizeInput(session, "xc_cyc_clusters", choices = lab,
+                         selected = intersect(XC_CYC_CLUSTERS, subs))
+  })
+  xc_p <- reactive({
+    fg_ok()
+    p <- list(
+      wt_cluster   = input$xc_wt_cluster %||% "AllCM",
+      mat_clusters = input$xc_mat_clusters %||% XC_MAT_CLUSTERS,
+      cyc_clusters = input$xc_cyc_clusters %||% XC_CYC_CLUSTERS,
+      mat_set      = input$xc_mat_set %||% "CM maturation",
+      cyc_set      = input$xc_cyc_set %||% XC_CANON,
+      stratum      = input$xc_stratum %||% "all",
+      grid         = input$xc_grid %||% "de",
+      padj         = input$xc_padj %||% 0.05,
+      measure      = input$xc_measure %||% "auc",
+      eff_auc      = input$xc_auc %||% 0.60,
+      eff_lfc      = input$xc_lfc %||% 0.25,
+      minc         = input$xc_minc %||% 1,
+      hide_mt      = isTRUE(input$xc_hidemt))
+    p$eff <- if (identical(p$measure, "auc")) p$eff_auc else p$eff_lfc
+    validate(need(length(p$mat_clusters) && length(p$cyc_clusters),
+                  "Pick at least one subcluster in each group."))
+    p
+  })
+  xc_all <- reactive({ p <- xc_p(); lapply(XC_COMPARISONS, xc_comparison, p = p) })
+
+  # Every way this tab can be misread, said out loud. Each of these has a specific
+  # failure mode behind it, not a general disclaimer.
+  output$xc_caveat <- renderUI({
+    p <- try(xc_p(), silent = TRUE); if (inherits(p, "try-error")) return(NULL)
+    red <- function(...) helpText(style = "color:#c62828", ...)
+    gone <- c(setdiff(p$mat_clusters, xc_ko_present(p$mat_clusters, p$stratum, p$grid)),
+              setdiff(p$cyc_clusters, xc_ko_present(p$cyc_clusters, p$stratum, p$grid)))
+    thin <- unique(c(xc_ko_thin(p$mat_clusters, p$stratum, p$grid),
+                     xc_ko_thin(p$cyc_clusters, p$stratum, p$grid)))
+    both <- intersect(p$mat_clusters, p$cyc_clusters)
+    shared_cat <- intersect(xc_category(p$mat_set), xc_category(p$cyc_set))
+    tagList(
+      if (length(gone)) red(strong("Dropped: "), paste(unique(gone), collapse = ", "),
+        " has no P7 KO-vs-WT table in the ", p$stratum, " stratum, so it is not in the union. ",
+        if ("CM4" %in% gone) "CM4 has no G1 stratum for any contrast." else ""),
+      if (identical(p$stratum, "all")) red(strong("Sort-confounded. "),
+        "P7 was FACS cycling-enriched 4.5–5.2× relative to P0, so the WT P0→P7 side reads ",
+        "out the sort as well as development — most of all for the cell-cycle category. ",
+        "The G1 stratum holds that fixed, at the cost of thinning the cell-cycle signal ",
+        "by construction and dropping CM4."),
+      if (length(thin)) red(strong("Thin arms: "), paste(thin, collapse = ", "),
+        " have fewer than ", FG$built$thin_cells %||% 50,
+        " cells on one side of the P7 contrast. They clear the DE floor but should not ",
+        "carry a conclusion on their own."),
+      if (length(both)) helpText(strong("Overlapping groups. "),
+        paste(both, collapse = ", "), " is in both cluster groups, so the two KO unions ",
+        "are not independent — a gene can reach the shared region of more than one ",
+        "comparison through it alone."),
+      if (length(shared_cat)) helpText(strong("Overlapping categories. "),
+        paste(shared_cat, collapse = ", "),
+        " belong to both curated categories, so they can appear on both WT sides. ",
+        "The in_maturation_set / in_cellcycle_set columns make that visible."),
+      if (p$hide_mt) helpText(strong("mt- genes hidden. "),
+        "They are up in the KO in every subcluster and down in none, which is a library ",
+        "read-fraction difference rather than biology. Untick to include them."))
+  })
+
+  # ---- Step 1: WT P0->P7 by category and direction ----
+  xc_wt_tab_df <- reactive(xc_wt_df(xc_p()))
+  output$xc_wt_tab <- renderDT(DT::datatable(xc_wt_tab_df(), rownames = FALSE,
+    options = list(pageLength = 15, scrollX = TRUE, dom = "ftip"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(c("log2FoldChange","padj","pct_P7","pct_P0"), 3))
+  xc_wt_p <- reactive({
+    d <- xc_wt_tab_df()
+    n <- as.data.frame(table(category = d$category, direction = d$direction),
+                       stringsAsFactors = FALSE)
+    ggplot(n, aes(category, Freq, fill = direction)) +
+      geom_col(position = position_dodge(width = .8), width = .7) +
+      geom_text(aes(label = Freq), position = position_dodge(width = .8),
+                vjust = -0.3, size = 4) +
+      scale_fill_manual(values = c("up at P7" = "#c62828", "up at P0" = "#1565c0")) +
+      theme_minimal(base_size = input$xc_basesize %||% 13) +
+      labs(x = NULL, y = "genes", fill = NULL,
+           title = sprintf("WT P0→P7 in %s — genes per category and direction", xc_p()$wt_cluster))
+  })
+  output$xc_wt_plot <- renderPlot(apply_fig_opts(xc_wt_p(), "xc", input))
+  register_fig(output, "xcwt", xc_wt_p, input, opts_prefix = "xc")
+  output$xc_wt_note <- renderUI({
+    p <- xc_p()
+    d <- fg_grid(p$grid)[[p$wt_cluster]][[paste0(XC_WT_KEY, "__", p$stratum)]]
+    ct <- fg_ct(XC_WT_KEY); req(ct)
+    a <- xc_measure_audit(p)
+    # an empty list under one measure and a non-empty one under the other is the
+    # difference between "nothing changed" and "the cut could not see it"
+    disagree <- !is.null(a) && any(pmin(a$n_AUC, a$n_log2FC) == 0 & pmax(a$n_AUC, a$n_log2FC) > 0)
+    tagList(
+      de_context_note(p$wt_cluster, ct, p$stratum, p$grid, d),
+      div(style = "font-size:13px",
+          sprintf("Categories: %s (%d genes) · %s (%d genes), %d in both. Cuts: padj < %s, %s.",
+                  xc_cat_label(p$mat_set), length(xc_category(p$mat_set)),
+                  xc_cat_label(p$cyc_set), length(xc_category(p$cyc_set)),
+                  length(intersect(xc_category(p$mat_set), xc_category(p$cyc_set))),
+                  p$padj, xc_eff_label(p))),
+      if (!is.null(a)) div(style = "font-size:12px;margin-top:2px",
+        HTML(paste0("Genes passing by measure &mdash; ",
+          paste(sprintf("<b>%s, %s</b>: AUC %d / log2FC %d", a$category, a$direction,
+                        a$n_AUC, a$n_log2FC), collapse = " &middot; ")))),
+      if (disagree) div(style = "color:#c62828;font-size:12px;margin-top:2px",
+        HTML(paste("&#9888; The two measures disagree on whether a list is empty, so the",
+                   "choice in the sidebar decides the answer. presto's log2FC is a difference",
+                   "of mean log-normalised expression and therefore scales with expression",
+                   "level: from WT P0 to P7 <i>Mcm3</i> quadruples its detection rate",
+                   "(6.6% &rarr; 27.2%) for a log2FC of 0.16, while <i>Myh7</i> moves 2.5.",
+                   "A symmetric |log2FC| cut can classify maturation genes and can never",
+                   "classify a cell-cycle one. AUC is rank-based and means the same thing on",
+                   "both sides, which is why build_fourgroup.R classifies its maturation axis",
+                   "on AUC too."))))
+  })
+
+  # ---- Step 2: P7 KO vs WT across the two cluster groups ----
+  xc_ko_tab_df    <- reactive(xc_ko_df(xc_p()))
+  xc_ko_pivot_dat <- reactive(xc_ko_pivot_df(xc_p()))
+  output$xc_ko_tab <- renderDT(DT::datatable(xc_ko_tab_df(), rownames = FALSE,
+    filter = "top", options = list(pageLength = 15, scrollX = TRUE, dom = "ftip"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(c("log2FoldChange","padj","pct_KO","pct_WT"), 3))
+  output$xc_ko_pivot <- renderDT({ d <- xc_ko_pivot_dat()
+    DT::datatable(d, rownames = FALSE,
+      options = list(pageLength = 15, scrollX = TRUE, dom = "ftip"),
+      class = "compact stripe hover") |>
+      DT::formatSignif(setdiff(names(d), c("gene","n_clusters")), 3) })
+  output$xc_ko_note <- renderUI({ p <- xc_p()
+    div(style = "font-size:13px;margin-bottom:6px",
+        HTML(sprintf(paste0("<b>P7: KO vs WT</b> &middot; maturation clusters <b>%s</b>",
+                            " &middot; cycling clusters <b>%s</b> &middot; %s cells%s.",
+                            " log2FC &gt; 0 is up in KO."),
+                     paste(p$mat_clusters, collapse = ", "),
+                     paste(p$cyc_clusters, collapse = ", "), p$stratum,
+                     if (identical(p$grid, "de2")) " &middot; curated panel" else "")))
+  })
+
+  # ---- the four crossings ----
+  # vn_plot()/vn_stats()/vn_regions() are reused unchanged: xc_comparison() returns
+  # exactly the list(sets, universe) shape they already take.
+  xc_venn_p <- function(i) { force(i)
+    reactive({ vs <- xc_all()[[i]]
+      vn_plot(vs, input$xc_basesize %||% 13, xc_label(vs$cmp, xc_p())) }) }
+  xc_vp1 <- xc_venn_p(1); xc_vp2 <- xc_venn_p(2)
+  xc_vp3 <- xc_venn_p(3); xc_vp4 <- xc_venn_p(4)
+  output$xc_venn1 <- renderPlot(apply_fig_opts(xc_vp1(), "xc", input))
+  output$xc_venn2 <- renderPlot(apply_fig_opts(xc_vp2(), "xc", input))
+  output$xc_venn3 <- renderPlot(apply_fig_opts(xc_vp3(), "xc", input))
+  output$xc_venn4 <- renderPlot(apply_fig_opts(xc_vp4(), "xc", input))
+  # spelled out rather than looped: check_download_coverage.R matches figure prefixes
+  # by literal string, so a paste0() here would read as "no download registered"
+  register_fig(output, "xcvenn1", xc_vp1, input, opts_prefix = "xc")
+  register_fig(output, "xcvenn2", xc_vp2, input, opts_prefix = "xc")
+  register_fig(output, "xcvenn3", xc_vp3, input, opts_prefix = "xc")
+  register_fig(output, "xcvenn4", xc_vp4, input, opts_prefix = "xc")
+  output$xc_venn_note <- renderUI({
+    p <- xc_p(); vs <- xc_all()
+    empt <- vapply(vs, function(v) any(vapply(v$sets, function(s) !length(s$genes), TRUE)), TRUE)
+    sz   <- vapply(vs, function(v) length(v$sets[[2]]$genes) /
+                     max(length(v$sets[[1]]$genes), 1), 0)
+    # The KO side is not symmetric on this data: with AUC 0.60 CM1 has ~1,700 genes
+    # down in KO and ~50 up. Seven independently clustered populations do not agree
+    # that hard by biology -- it is the same one-directional signature the 2026-08-21
+    # deliverable traced to a library read-fraction difference. Worth knowing before
+    # reading a big B circle as a big result.
+    ko <- do.call(rbind, lapply(unique(c(p$mat_clusters, p$cyc_clusters)), function(cl) {
+      u <- xc_ko_long(cl, "up",   p$stratum, p$grid, p$padj, p$eff, p$measure, p$hide_mt)
+      d <- xc_ko_long(cl, "down", p$stratum, p$grid, p$padj, p$eff, p$measure, p$hide_mt)
+      data.frame(cluster = cl, up = if (is.null(u)) 0L else nrow(u),
+                 down = if (is.null(d)) 0L else nrow(d)) }))
+    lop <- !is.null(ko) && nrow(ko) &&
+      median(pmax(ko$up, ko$down) / pmax(pmin(ko$up, ko$down), 1)) >= 5
+    tagList(
+      div(style = "font-size:13px;margin-bottom:4px",
+          sprintf("Universe: %s genes testable in common. Set sizes are lopsided by design — the WT side is one curated category, the KO side is every DE gene in a cluster group — so read the fold and p in %s, not the picture.",
+                  format(length(vs[[1]]$universe), big.mark = ","), "Overlap statistics")),
+      if (any(empt)) div(style = "color:#c62828;font-size:13px",
+        sprintf("%d of 4 comparisons have an empty circle at these cuts. The counts under each title say which side; Step 1 reports what the other effect-size measure would have given.",
+                sum(empt))),
+      if (lop) div(style = "color:#c62828;font-size:12px",
+        HTML(paste0("&#9888; The KO contrast is strongly one-directional here (",
+          paste(sprintf("%s %d&uarr;/%d&darr;", ko$cluster, ko$up, ko$down), collapse = ", "),
+          "). Seven independently clustered populations do not agree that hard by biology; ",
+          "the 2026-08-21 deliverable traced the same one-directional signature to a library ",
+          "read-fraction difference between the two samples. A large KO circle is partly that."))))
+  })
+  xc_stats_df <- reactive({
+    p <- xc_p()
+    do.call(rbind, lapply(xc_all(), function(vs)
+      cbind(comparison = xc_label(vs$cmp, p), vn_stats(vs), stringsAsFactors = FALSE)))
+  })
+  output$xc_stats <- renderDT(DT::datatable(xc_stats_df(), rownames = FALSE,
+    options = list(pageLength = 10, scrollX = TRUE, dom = "t"),
+    class = "compact stripe hover") |>
+    DT::formatSignif(c("expected","fold","p_hypergeom"), 3))
+
+  # ---- the gene tables behind each Venn ----
+  xc_gene_all <- reactive({ p <- xc_p()
+    d <- xc_rbind(lapply(xc_all(), xc_gene_df, p = p))
+    validate(need(!is.null(d) && nrow(d),
+                  "No genes in any of the four comparisons at these cuts."))
+    d })
+  observe({
+    p <- try(xc_p(), silent = TRUE); if (inherits(p, "try-error")) return()
+    ch <- vapply(XC_COMPARISONS, xc_label, "", p = p)
+    ch <- c("All four" = "__all__", setNames(ch, ch))
+    cur <- isolate(input$xc_gene_cmp)
+    updateSelectInput(session, "xc_gene_cmp", choices = ch,
+                      selected = if (!is.null(cur) && cur %in% ch) cur else "__all__")
+  })
+  xc_genes_df <- reactive({ d <- xc_gene_all()
+    sel <- input$xc_gene_cmp %||% "__all__"
+    if (!identical(sel, "__all__")) d <- d[d$comparison == sel, , drop = FALSE]
+    validate(need(nrow(d), "No genes in this comparison at these cuts."))
+    d })
+  output$xc_genes <- renderDT({ d <- xc_genes_df()
+    num <- intersect(c("wt_log2FC","wt_padj","ko_log2FC_top","ko_padj_top",
+                       grep("^lfc_", names(d), value = TRUE)), names(d))
+    DT::datatable(d, rownames = FALSE, filter = "top",
+      options = list(pageLength = 20, scrollX = TRUE, dom = "ftip"),
+      class = "compact stripe hover") |> DT::formatSignif(num, 3) })
+
+  output$xc_book <- dl_book(
+    basename = function() paste0("wt_programs_x_ko_clusters_",
+                                 (xc_p())$stratum,
+                                 if (identical((xc_p())$grid, "de2")) "_curated" else ""),
+    sheets_fn = function() {
+      p <- xc_p(); sh <- list()
+      sh[["Step1_WT_P0_vs_P7"]] <- xc_wt_tab_df()
+      sh[["Step2_P7_KO_vs_WT"]] <- xc_ko_tab_df()
+      sh[["Step2_gene_x_cluster"]] <- xc_ko_pivot_dat()
+      sh[["Overlap_stats"]] <- xc_stats_df()
+      for (k in seq_along(XC_COMPARISONS)) {
+        g <- xc_gene_df(xc_all()[[k]], p)
+        # sheet names are capped at 31 chars, so key not label
+        sh[[paste0("C", k, "_", XC_COMPARISONS[[k]]$key)]] <-
+          if (is.null(g)) data.frame(note = "No genes at these cuts.") else g
+      }
+      sh
+    },
+    title = function() { p <- xc_p()
+      paste0("WT P0-vs-P7 programs crossed with P7 KO-vs-WT clusters (", p$stratum, " cells)") },
+    notes = c(
+      "Step 1 is WT_P0_vs_P7: log2FoldChange > 0 means UP AT P7. Step 2 is P7_KO_vs_WT: log2FoldChange > 0 means UP IN KO.",
+      "The WT side is filtered to a curated gene category. The KO side is NOT filtered by category - it is every DE gene in the named subclusters, unioned. Filtering both sides by category would intersect the maturation set with the cell-cycle set, which share only Mki67 and Top2a.",
+      "Source tables come from build_fourgroup.R and are row-gated: a gene is kept when expressed in >= 5% of one arm AND (padj < 0.05 OR |log2FC| >= 0.5). These are NOT complete gene lists; for every tested gene use the analysis/ pipeline CSVs.",
+      "P7 was FACS cycling-enriched 4.5-5.2x relative to P0, so the 'all cells' WT P0-vs-P7 contrast reads out the sort as well as development. The G1 sheets hold cycling composition fixed but thin the cell-cycle category by construction and drop CM4, which has no G1 stratum.",
+      "Mitochondrially-encoded (mt-) genes are up in the KO in every subcluster and down in none - a library read-fraction difference, not biology. They are excluded unless the sidebar box was unticked.",
+      "n = 1 animal per genotype x timepoint, sexes differ between genotypes, and the KO is not transcript-confirmed. Cell-level Wilcoxon p-values are pseudoreplicated. Descriptive and hypothesis-generating only.")
+  )
+
   # ---- Gene-set Venn ----
   observe({
     cc <- fg_cluster_choices()
@@ -3726,6 +4354,18 @@ server <- function(input, output, session) {
     list(id = "mi_table", base = function() paste0("maturation_intersect_", input$mi_cluster),
          df = function() mi_tab_df()),
     list(id = "mi_spec_tab", base = "candidate_P7_specificity", df = function() mi_spec_df()),
+    # WT programs x KO clusters
+    list(id = "xc_wt_tab", base = function() paste0("WTp0p7_by_category_",
+           (xc_p())$wt_cluster, "_", (xc_p())$stratum),
+         df = function() xc_wt_tab_df()),
+    list(id = "xc_ko_tab", base = function() paste0("P7KOvsWT_by_cluster_", (xc_p())$stratum),
+         df = function() xc_ko_tab_df()),
+    list(id = "xc_ko_pivot", base = function() paste0("P7KOvsWT_gene_x_cluster_", (xc_p())$stratum),
+         df = function() xc_ko_pivot_dat()),
+    list(id = "xc_stats", base = function() paste0("crossings_overlap_stats_", (xc_p())$stratum),
+         df = function() xc_stats_df()),
+    list(id = "xc_genes", base = function() paste0("crossings_genes_", (xc_p())$stratum),
+         df = function() xc_genes_df()),
     # Gene-set Venn
     list(id = "vn_stats", base = function() paste0("venn_overlap_stats_", input$vn_cluster %||% "AllCM"),
          df = function() vn_stats(vn_v())),

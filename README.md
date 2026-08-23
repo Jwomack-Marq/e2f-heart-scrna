@@ -248,6 +248,49 @@ Per-subcluster enrichment follows the same split. `app$enrich$sub` (pooled KO-vs
 deep-dive's enrichment tab; both enrich the two directions **separately**, so that tab has
 a *GO — up* and a *GO — down* panel rather than one showing only the up direction.
 
+### WT programs ∩ KO clusters
+
+A tab for one specific request: cross the WT P0→P7 change in a curated gene category
+against the P7 KO-vs-WT response in a named group of CM subclusters, four ways.
+
+- **Step 1** — WT P0→P7 (default all cardiomyocytes), split by curated category
+  (`CM maturation`, canonical cell cycle = S ∪ G2/M ∪ E2F targets) and direction.
+- **Step 2** — P7 KO-vs-WT in the *maturation* clusters (CM1/2/3/7/8) and the *cycling*
+  clusters (CM2/4/5), per cluster and as a gene × cluster pivot.
+- **The four comparisons** — each WT category list crossed against the **opposite**
+  category's cluster group, drawn with the Gene-set Venn tab's `vn_plot()` and scored with
+  its hypergeometric, plus a per-gene table carrying both sides' evidence on one row.
+
+The KO side is defined by **clusters, not by a gene category**. Filtering both sides by
+category would make comparisons 1 and 2 intersect the maturation set with the cell-cycle
+set, and those two share only `Mki67` and `Top2a` — the Venns would read empty by
+construction rather than by biology. `CM2` is in both cluster groups, so the two KO unions
+are not independent; the tab says so.
+
+Three things are easy to get wrong here, and the tab reports each rather than leaving it
+to be reconstructed:
+
+- **The effect-size measure decides the answer.** `presto`'s log2FC is a difference of mean
+  log-normalised expression, so it scales with expression level. From WT P0 to P7 `Mcm3`
+  quadruples its detection rate (6.6 % → 27.2 %) for a log2FC of 0.16, while `Myh7` moves
+  2.5. A symmetric `|log2FC|` cut therefore classifies maturation genes and can **never**
+  classify a cell-cycle one — it reports "no cell-cycle gene changes", which is false. The
+  tab defaults to **AUC ≥ 0.60**, rank-based and scale-free, the same resolution
+  `build_fourgroup.R` reached for its maturation axis (`MAT_AUC`). Step 1 always prints
+  what *both* measures would have given, so an empty list is never mistaken for a result.
+- **`CM4` has no G1 stratum** — for any contrast. Choosing the phase-matched stratum drops
+  it from the cycling group, so the tab names the dropped clusters instead of quietly
+  computing a two-cluster answer.
+- **The KO contrast is strongly one-directional.** At AUC ≥ 0.60, CM1 has ~1,700 genes down
+  in KO and ~50 up. Seven independently clustered populations do not agree that hard by
+  biology; it is the same one-directional signature the 2026-08-21 deliverable traced to a
+  library read-fraction difference between the two samples. The tab flags it when the median
+  up/down ratio exceeds 5×, and hides mt- genes by default for the same reason.
+
+Set sizes are lopsided by design — one curated category (a few genes) against a whole
+cluster group (hundreds) — so the fold enrichment and hypergeometric p on the **Overlap
+statistics** tab, not the picture, are what carry the result.
+
 ## History
 
 This project previously also shipped as a [shinylive](https://posit-dev.github.io/r-shinylive/)
