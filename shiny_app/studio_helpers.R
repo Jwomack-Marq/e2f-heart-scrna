@@ -37,19 +37,49 @@ strip_plot_env <- function(p) {
       m[[nm]] <- rlang::quo_set_env(m[[nm]], globalenv())
     m
   }
+  # A ggproto INSTANCE built inside user code (a layer, a facet, an added
+  # scale) carries a `super` closure whose environment holds the constructor
+  # call's promises -- and through them the whole calling frame, quosure fix
+  # or not. Swap it for an equivalent closure over the already-resolved parent:
+  # dispatch behaves identically, the frames drop. In place on purpose.
+  slim_ggproto <- function(obj) {
+    ok <- inherits(obj, "ggproto") && is.environment(obj) &&
+      exists("super", envir = obj, inherits = FALSE)
+    if (!ok) return(invisible(NULL))
+    parent <- tryCatch(get("super", envir = obj)(), error = function(e) NULL)
+    if (inherits(parent, "ggproto")) {
+      f <- function() parent
+      environment(f) <- list2env(list(parent = parent), parent = emptyenv())
+      assign("super", f, envir = obj)
+    }
+    invisible(NULL)
+  }
   old_layer  <- lapply(p$layers, function(l) l$mapping)
   old_facet  <- tryCatch(p$facet$params, error = function(e) NULL)
   q <- p                                    # list copy; layers/facet stay shared
   ok <- tryCatch({
     q$plot_env <- rlang::new_environment(parent = globalenv())
     q$mapping  <- fixq(q$mapping)
-    for (l in q$layers) l$mapping <- fixq(l$mapping)          # in place (ggproto)
+    for (l in q$layers) { l$mapping <- fixq(l$mapping); slim_ggproto(l) }
     if (!is.null(old_facet)) {
       fp <- q$facet$params
       for (s in intersect(c("facets", "rows", "cols"), names(fp)))
         fp[[s]] <- fixq(fp[[s]])
       q$facet$params <- fp                                    # in place (ggproto)
     }
+    # sweep every ggproto component the plot carries (facet, coordinates,
+    # layout, scales, guides, ...): ggplot2 4.x stores them as S7 properties
+    # (= attributes), 3.x as list slots. One unslimmed instance is enough to
+    # keep the constructor frames alive, so hit them all, one level deep.
+    slim_all <- function(x) {
+      slim_ggproto(x)
+      if (is.list(x)) for (el in x) slim_ggproto(el)
+      for (fld in c("scales", "guides")) {
+        sub <- tryCatch(x[[fld]], error = function(e) NULL)
+        if (is.list(sub)) for (el in sub) slim_ggproto(el)
+      }
+    }
+    for (a in c(attributes(q), if (is.list(q)) unclass(q))) slim_all(a)
     is.list(ggplot2::ggplot_build(q)$data)
   }, error = function(e) FALSE)
   if (ok) return(q)

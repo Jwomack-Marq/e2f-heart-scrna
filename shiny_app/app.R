@@ -562,7 +562,7 @@ umap_gg <- function(df, colvar, splitvar = NULL, gene = NULL, continuous = FALSE
   if (!continuous && labels && is.null(splitvar)) {
     a <- aggregate(cbind(UMAP1, UMAP2) ~ val, df, median)
     p <- p + geom_label(data = a, aes(label = val), color = "#111", size = labsize / 2.845,
-                        fill = scales::alpha("white", 0.55), label.size = 0, label.padding = unit(0.1, "lines"))
+                        fill = scales::alpha("white", 0.55), linewidth = 0, label.padding = unit(0.1, "lines"))
   }
   if (!is.null(splitvar)) p <- p + facet_wrap(~panel, nrow = nrows)
   if (!legend) p <- p + theme(legend.position = "none")
@@ -4566,6 +4566,7 @@ server <- function(input, output, session) {
 
   # ---- Subset & DEGs (interactive descriptive DE) ----
   observeEvent(input$deg_by, {
+    req(input$deg_by)   # ignoreNULL=FALSE + no UI round-trip (testServer) => NULL reaches here
     lv <- sort(unique(as.character(DMETA[[input$deg_by]])))
     defA <- defB <- NULL
     if (input$deg_by == "genotype")      { defA <- "KO";  defB <- "WT" }

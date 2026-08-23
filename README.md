@@ -338,6 +338,10 @@ docker run --rm -v "$PWD:/repo:ro" -w /repo e2f-enrich:latest \
 # (it readRDS's the 119 MB bundle once)
 docker run --rm -v "$PWD:/repo:ro" -w /repo lab-server-e2f-heart-scrna-dev:latest \
   Rscript tools/test_downloads.R
+
+# Figure Studio handoff: environment stripping, one figspec per figure, TTL. ~3 min
+docker run --rm -v "$PWD:/repo:ro" -w /repo lab-server-e2f-heart-scrna-dev:latest \
+  Rscript tools/test_studio_handoff.R
 ```
 
 Ad-hoc poking at the bundle follows the same shape — write the script to a scratch dir,

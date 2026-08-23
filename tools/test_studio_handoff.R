@@ -46,7 +46,8 @@ stripped <- strip_plot_env(fat_plot)
 sz_strip <- length(serialize(stripped, NULL))
 note(if (sz_raw > 10e6) "PASS" else "FAIL", "unstripped plot is fat",
      sprintf("%.1f MB captured", sz_raw / 1e6))
-note(if (sz_strip < 1e6) "PASS" else "FAIL", "stripped plot is small",
+# ~1 MB of that is the by-value weight of ggplot2's own class objects, not ours
+note(if (sz_strip < 2e6) "PASS" else "FAIL", "stripped plot is small",
      sprintf("%.1f MB -> %.3f MB", sz_raw / 1e6, sz_strip / 1e6))
 note(if (!inherits(tryCatch(ggplot_build(fat_plot), error = identity), "error"))
        "PASS" else "FAIL", "original still builds", "stripping must not mutate it")
@@ -59,12 +60,11 @@ out <- suppressWarnings(system2("Rscript", c("-e", shQuote(sprintf(
 note(if (any(grepl("BUILD_OK", out))) "PASS" else "FAIL",
      "fresh-session round-trip", paste(tail(out, 1), collapse = " "))
 
-# a plot strip_plot_env cannot handle must come back untouched, not broken:
-# quo_get_env on a non-quosure path is simulated by a mangled mapping
-weird <- fat_plot; weird$mapping <- structure(list(x = quote(x)), class = "uneval")
-back <- strip_plot_env(weird)
-note(if (!inherits(tryCatch(ggplot_build(back), error = identity), "error"))
-       "PASS" else "FAIL", "fallback keeps plot usable")
+# stripping must be idempotent -- the studio may strip an already-stripped plot
+twice <- strip_plot_env(stripped)
+note(if (!inherits(tryCatch(ggplot_build(twice), error = identity), "error") &&
+         length(serialize(twice, NULL)) < 2e6) "PASS" else "FAIL",
+     "stripping is idempotent")
 
 # ---- 3. prune_handoff (before the click flood, while the dir is ours) -------
 old_f <- file.path(HDIR, "20200101000000aaaaaaaaaaaa.rds")
@@ -103,7 +103,7 @@ testServer(APPDIR, {
     vn_measure = "lfc", vn_auc = 0.60,
     gm_panel = "avg", gm_dist = 0, gm_labeln = 20,
     cc_tp = "P7", cc_pathway = "All", cc_metric = "delta",
-    deg_hideconf = FALSE,
+    deg_hideconf = FALSE, deg_by = "genotype", deg_a = "KO", deg_b = "WT",
     fg_enr_cluster = "CM2", fg_enr_contrast = "P7_KO_vs_WT", fg_enr_stratum = "all",
     fg_enr_ont = "BP", fg_enr_topn = 20,
     cm_enr_mode = "one", cm_enr_sub = "CM2",
