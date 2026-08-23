@@ -371,12 +371,11 @@ the app itself, go **inside** the container (below).
 ### Deploying to dev
 
 ```bash
-# 1. copy the payload across (app.R + download_helpers.R are the runtime files;
-#    the builders are carried for reference)
-cp shiny_app/app.R shiny_app/download_helpers.R \
-   shiny_app/build_fourgroup.R shiny_app/build_fourgroup_enrichment.R \
-   shiny_app/build_signature_scores.R \
-   /home/justin/Projects/lab-server/apps/e2f-heart-scrna-dev/
+# 1. copy the payload across. Copy ALL of shiny_app/*.R, not a hand-listed subset:
+#    app.R source()s its helpers at startup and reads build_signature_scores.R for the
+#    curated gene lists, so a missing .R file is a container that will not boot. This has
+#    already happened once. app_data.rds is left alone — the payload has its own copy.
+cp shiny_app/*.R /home/justin/Projects/lab-server/apps/e2f-heart-scrna-dev/
 
 # 2. rebuild and restart (recreates the container; ~30 s, R packages are cached)
 cd /home/justin/Projects/lab-server
