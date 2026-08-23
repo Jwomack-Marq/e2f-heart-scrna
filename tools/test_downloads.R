@@ -56,7 +56,9 @@ testServer(APPDIR, {
     xc_mat_clusters = c("CM1","CM2","CM3","CM7","CM8"),
     xc_cyc_clusters = c("CM2","CM4","CM5"), xc_minc = 1, xc_stratum = "all",
     xc_grid = "de", xc_padj = 0.05, xc_measure = "auc", xc_auc = 0.60, xc_lfc = 0.25,
-    xc_hidemt = TRUE, xc_gene_cmp = "__all__"
+    xc_hidemt = TRUE, xc_gene_cmp = "__all__",
+    ct_vlfc = 1, cm_vlfc = 1, fg_vlfc = 1, deg_vlfc = 1,
+    vn_measure = "lfc", vn_auc = 0.60
   )
 
   cat("\n== table download frames ==\n")
@@ -207,6 +209,36 @@ testServer(APPDIR, {
     else if (inherits(r, "error")) note("FAIL", nm, conditionMessage(r))
     else note("PASS", nm, sprintf("%d rows x %d cols", nrow(r), ncol(r)))
   }
+
+  # the effect-size sliders have to actually move the answer, in both directions
+  cat("\n== overlap thresholds are adjustable ==\n")
+  n_at <- function(m, e) { session$setInputs(xc_measure = m,
+      xc_auc = if (m == "auc") e else 0.60, xc_lfc = if (m == "lfc") e else 0.25)
+    vapply(xc_all(), function(v) length(v$sets[[1]]$genes), 0L) }
+  a60 <- n_at("auc", 0.60); a52 <- n_at("auc", 0.52)
+  note(if (all(a52 >= a60) && sum(a52) > sum(a60)) "PASS" else "FAIL",
+       "looser AUC -> larger WT sets",
+       sprintf("0.60: %s -> 0.52: %s", paste(a60, collapse = "/"), paste(a52, collapse = "/")))
+  l100 <- n_at("lfc", 1.0); l050 <- n_at("lfc", 0.5); l025 <- n_at("lfc", 0.25)
+  note(if (all(l025 >= l050) && all(l050 >= l100)) "PASS" else "FAIL",
+       "looser |log2FC| -> larger WT sets",
+       sprintf("1.0: %s -> 0.5: %s -> 0.25: %s", paste(l100, collapse = "/"),
+               paste(l050, collapse = "/"), paste(l025, collapse = "/")))
+  session$setInputs(xc_measure = "auc", xc_auc = 0.60, xc_lfc = 0.25)
+  # the Venn tab gained the same choice; both measures must resolve
+  for (m in c("lfc", "auc")) {
+    session$setInputs(vn_measure = m)
+    r <- tryCatch(vn_v(), error = function(e) e)
+    note(if (is.list(r) && length(r$sets) >= 2) "PASS" else "FAIL", paste0("vn_v measure=", m),
+         if (is.list(r)) paste(vapply(r$sets, function(s) length(s$genes), 0L), collapse = "/")
+         else conditionMessage(r))
+  }
+  session$setInputs(vn_measure = "lfc")
+  # the volcano colour cut is a display threshold, so it must NOT change the table
+  n_tab <- nrow(cm_tab()); session$setInputs(cm_vlfc = 0.25)
+  note(if (identical(nrow(cm_tab()), n_tab)) "PASS" else "FAIL",
+       "volcano cut does not filter", sprintf("%d rows either way", n_tab))
+  session$setInputs(cm_vlfc = 1)
 
   cat("\n== CM deep-dive per-contrast enrichment ==\n")
   session$setInputs(cm_enr_sub = "CM2", cm_enr_contrast = "P7_KO_vs_WT",

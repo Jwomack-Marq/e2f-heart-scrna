@@ -291,6 +291,131 @@ Set sizes are lopsided by design — one curated category (a few genes) against 
 cluster group (hundreds) — so the fold enrichment and hypergeometric p on the **Overlap
 statistics** tab, not the picture, are what carry the result.
 
+## Module scores: how maturation and metabolism are defined
+
+Every `sig_*` score is built from a **hand-picked list of canonical marker genes, hardcoded
+in [`build_signature_scores.R`](shiny_app/build_signature_scores.R)**. Nothing here is
+data-driven and nothing comes from a database — MSigDB and GO appear in this repo only in
+the *enrichment* builders, and never touch a module score.
+
+**On provenance, so nobody over-claims it downstream:** the specific gene choices have no
+recorded source. They arrived in one commit (`be1f1bd`, 2026-07-21, "more data anaylsis")
+with no rationale and no citation, and a comment on the app's own copy
+([app.R:55](shiny_app/app.R#L55)) attributes it to "the pipeline's `_common.R`", a file not
+in this repo. The defensible description is *canonical markers curated by the analyst* —
+not "derived from *(reference)*". If these lists are going into a figure legend, that
+sentence is the one to write.
+
+### The lists
+
+| set | n | genes |
+|---|---|---|
+| `mat_mature` | 10 | Myh6, Tnni3, Pln, Atp2a2, Ckm, Myl2, Cox6a2, Ckmt2, Actn2, Csrp3 |
+| `mat_immature` | 9 | Myh7, Tnni1, Nppa, Nppb, **Ccnd1, Mki67, Top2a**, Myl7, Actc1 |
+| `mat_immature_nocc` | 6 | as above minus the three cell-cycle genes |
+| `glycolysis` | 11 | Slc2a1, Hk1, Hk2, Pfkm, Pfkl, Pkm, Ldha, Gapdh, Eno1, Aldoa, Pgk1 |
+| `faox` | 14 | Cpt1a, Cpt1b, Cpt2, Acadm, Acadvl, Acadl, Hadha, Hadhb, Ppargc1a, Cox6a2, Ndufa4, Sdha, Acaa2, Etfa |
+| `prolif` | 17 | Mki67, Top2a, Ccnb1, Ccnb2, Cdk1, Cdc20, Aurka, Aurkb, Bub1, Birc5, Cenpa, Cenpe, Cenpf, Ube2c, Cks2, Nusap1, Tpx2 |
+| `cytokinesis` | 14 | Anln, Ect2, Racgap1, Kif23, Cit, Aurkb, Kif20b, Prc1, Cep55, Mklp1, Sept7, Sept9, Cdca8, Incenp |
+| `ccexit` | 8 | Cdkn1a, Cdkn1c, Cdkn2a, Cdkn1b, Meis1, Rb1, Btg2, Gadd45a |
+
+The maturation logic is the fetal→adult isoform switches (Myh7→Myh6, Tnni1→Tnni3,
+Myl7→Myl2) plus calcium handling (Pln, Atp2a2), energetics (Ckm, Ckmt2, Cox6a2), sarcomere
+(Actn2, Csrp3) and the fetal stress markers (Nppa, Nppb). Glycolysis is the pathway walked
+end to end; FAO is carnitine shuttle → acyl-CoA dehydrogenases → trifunctional protein →
+thiolase.
+
+**There is no separate OXPHOS set.** Ppargc1a, Cox6a2, Ndufa4, Sdha and Etfa sit inside
+`faox`, so "metabolic maturation" and "oxidative phosphorylation" are not separable on
+these scores.
+
+### How a score is computed
+
+An `AddModuleScore` equivalent in base R + Matrix, no Seurat
+([build_signature_scores.R:102](shiny_app/build_signature_scores.R#L102)):
+
+1. Drop `app$confound` (Xist, Tsix, Y-genes, ROSA26) from every set. None of these sets
+   contain any, so the scores are confounder-free by construction.
+2. Bin all genes into **24** quantile bins by mean expression.
+3. For each set gene, sample **100** control genes from its own bin (`seed = 1`).
+4. **score = mean(set genes) − mean(pooled controls)**, per cell.
+
+Composites are differences, never ratios: `sig_maturation` = mature − immature,
+`sig_metabolic` = faox − glycolysis (positive = more oxidative). No z-scoring, no min-max,
+no rescaling — the values in `app$meta` are raw. `pick_mat()` chooses per set whichever
+matrix covers more of its genes, forcing both halves of a difference onto the same one, so
+scores computed on the broad matrix are `NA` for cells outside its 8,026-cell downsample.
+`app$score_meta` records genes-used / genes-in-set / cells-scored per score and is rendered
+under **Help → QC & normalization**.
+
+One deviation from Seurat worth knowing: the control pool is **not de-duplicated**, so genes
+in dense expression bins carry extra weight in the background. It shifts the baseline, not
+the ranking of cells.
+
+### Three traps
+
+**1. There are three different maturation lists in this codebase and they disagree.**
+
+| where | n | difference |
+|---|---|---|
+| `SETS$mat_mature ∪ mat_immature` — drives the `sig_*` scores | 19 | the full list |
+| `FG$built$score_set_genes$maturation` — the gene map | 16 | drops Ccnd1, Mki67, Top2a |
+| `GENE_SETS[["CM maturation"]]` ([app.R:76](shiny_app/app.R#L76)) — the app dropdowns, and the **WT programs ∩ KO clusters** tab | 14 | drops Ckmt2, Actn2, Csrp3, Myl7, Actc1 |
+
+This is an inconsistency, not a design choice. Reconcile it before these counts go into a
+figure.
+
+**2. `Cox6a2` is in both `mat_mature` and `faox`**, so the maturation and metabolic axes
+share an input gene — `build_fourgroup.R` flags it as doubly circular.
+
+**3. `mat_immature` contains Mki67, Top2a and Ccnd1**, so `sig_maturation` is partly a
+cell-cycle score. Using it to argue "less mature ⇒ more cycling-competent" is circular;
+that is why `sig_maturation_nocc` exists and why everything downstream defaults to it.
+
+### The one place gene selection *is* data-driven
+
+The **Gene map** axes ([build_fourgroup.R:353](shiny_app/build_fourgroup.R#L353)) invert the
+logic: rather than scoring cells from genes, they rank *genes* against the per-cell score.
+CM cells are split on tertiles of `sig_maturation_nocc` **within each timepoint**,
+`presto::wilcoxauc` runs top-third vs bottom-third, and the AUCs are averaged across P0 and
+P7 — within-then-average is what stops the axis becoming a P0-vs-P7 axis, which the FACS
+sort confounds. Classification is AUC ≥ 0.60 / ≤ 0.40 at padj < 0.05, and yields only **48**
+maturation-classified genes out of 11,047. That thin yield is why the curated lists are
+still what the tabs use.
+
+### Effect-size measure: why the app offers AUC
+
+`presto`'s `logFC` is a difference of **mean log-normalised expression**, so it scales with
+how highly expressed a gene is. Between WT P0 and P7, `Mcm3` quadruples its detection rate
+(6.6 % → 27.2 %) for a log2FC of 0.16, while `Myh7` moves 2.5. A symmetric `|log2FC|` cut
+therefore classifies maturation genes and can **never** classify a sparse cell-cycle one —
+it returns "no cell-cycle gene changes", which is false. Measured on this bundle
+(AllCM, all cells, padj < 0.05):
+
+| cut | maturation up / down | cell cycle up / down |
+|---|---|---|
+| AUC ≥ 0.50 | 4 / 7 | **32** / 1 |
+| AUC ≥ 0.55 | 4 / 5 | **14** / 0 |
+| AUC ≥ 0.60 *(default)* | 2 / 5 | **3** / 0 |
+| AUC ≥ 0.65 | 1 / 4 | 0 / 0 |
+| `|log2FC|` ≥ 0.25 | 1 / 4 | **0** / 0 |
+| `|log2FC|` ≥ 1.0 | 0 / 2 | 0 / 0 |
+
+Both overlap tabs — **Gene-set Venn** and **WT programs ∩ KO clusters** — expose the choice
+as a radio plus a slider, because the answer moves across the plausible range and the cut is
+something to sweep rather than set once. `build_fourgroup.R` reached the same resolution
+independently for its maturation axis (`MAT_AUC = 0.60`).
+
+Separately, every volcano has a **"Colour genes at |log2FC| ≥"** slider (default 1). That is
+a *display* threshold — it decides which points are coloured up/down versus grey, and never
+filters the plot or the table. It defaulted to a hardcoded 1, which on the P7 KO-vs-WT
+contrasts colours almost nothing, because at `|log2FC| ≥ 1` those contrasts have **zero**
+genes down in KO.
+
+An unrelated set that is easy to confuse: `model/cmcycle/baniol.py` carries its own
+FAO/glycolysis pair for the Baniol FUCCI re-analysis, and the genes differ (Hmgcs2, Fabp3,
+Pdk4, Ucp2, Cd36, Ech1, Decr1 …). Different dataset, different index — do not cross-cite.
+
 ## History
 
 This project previously also shipped as a [shinylive](https://posit-dev.github.io/r-shinylive/)

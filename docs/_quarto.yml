@@ -1,0 +1,58 @@
+# Methods book for the E2F7/8 heart scRNA-seq app.
+#
+# Nothing here executes. Every chapter carries `engine: markdown` and the
+# project-level `execute: enabled: false` below, so `quarto render` needs only the
+# Quarto CLI -- no R, no app_data.rds. Figures are pre-exported into assets/ by
+# export_assets.R and generated tables into _generated/ (see README.md).
+project:
+  type: book
+  output-dir: _site
+
+execute:
+  enabled: false          # belt-and-braces: no chunk runs, on any engine
+
+book:
+  title: "E2F7/8 heart scRNA-seq: how the analysis was done"
+  subtitle: "A methods companion to the interactive cell browser"
+  author: "Justin Womack"
+  search: true
+  page-navigation: true
+  sidebar:
+    style: docked
+    collapse-level: 1
+  chapters:
+    - index.qmd
+    - part: "From reads to the browser"
+      chapters:
+        - 01-upstream.qmd
+        - 02-atlas.qmd
+    - part: "What changes in the knockout"
+      chapters:
+        - 03-de.qmd
+        - 04-enrichment.qmd
+        - 05-cm-deepdive.qmd
+        - 06-e2f.qmd
+    - part: "The four-group design"
+      chapters:
+        - 07-fourgroup.qmd
+        - 08-scores.qmd
+        - 09-overlaps.qmd
+    - part: "Supporting analyses"
+      chapters:
+        - 10-signalling.qmd
+        - 11-confounds-repro.qmd
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    number-depth: 2
+    code-copy: true
+    code-overflow: wrap
+    fig-align: center
+    tbl-cap-location: bottom
+    link-external-newwindow: true
+    anchor-sections: true

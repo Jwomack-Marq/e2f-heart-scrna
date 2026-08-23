@@ -135,10 +135,15 @@ volc_pal <- function(pos, neg) setNames(c("#c62828","#1565c0","#cccccc","#9e9e9e
                                         c(pos, neg, "n.s.", "sex/construct"))
 # add the derived columns (-log10 p, up/down class) the volcano + hover need.
 # pos/neg name the two directions (default KO/WT for the precomputed DE tabs).
-de_annot <- function(d, pos = "up in KO", neg = "up in WT") {
+# lfc_cut is the colouring threshold, NOT a filter -- every gene stays on the plot and in
+# the table. It defaults to 1 for continuity, but 1 is a poor default on this data: in the
+# P7 KO-vs-WT contrasts almost nothing reaches |log2FC| = 1, so the volcano renders almost
+# entirely grey and reads as "nothing changed". Each volcano tab exposes a slider.
+DE_LFC_CUT <- 1
+de_annot <- function(d, pos = "up in KO", neg = "up in WT", lfc_cut = DE_LFC_CUT) {
   d$neglogp <- -log10(pmax(d$pvalue, 1e-300))
   d$class <- ifelse(d$confounder, "sex/construct",
-              ifelse(abs(d$log2FoldChange) >= 1, ifelse(d$log2FoldChange > 0, pos, neg), "n.s."))
+              ifelse(abs(d$log2FoldChange) >= lfc_cut, ifelse(d$log2FoldChange > 0, pos, neg), "n.s."))
   d$class <- factor(d$class, levels = c(pos, neg, "n.s.", "sex/construct"))
   d
 }
@@ -155,9 +160,10 @@ de_volcano <- function(d, ttl) {
 # interactive plotly volcano: hover shows gene/stats, click emits the gene via
 # customdata (captured by event_data(source = source_id)) to drive the DE table.
 de_volcano_ly <- function(d, ttl, source_id, pos = "up in KO", neg = "up in WT",
-                           xlab = "log2 fold change (KO / WT)", highlight = NULL) {
+                           xlab = "log2 fold change (KO / WT)", highlight = NULL,
+                           lfc_cut = DE_LFC_CUT) {
   validate(need(!is.null(d) && nrow(d), "No DE results for this selection (cluster too small / unbalanced)."))
-  d <- de_annot(d, pos, neg)
+  d <- de_annot(d, pos, neg, lfc_cut)
   d$hover <- sprintf(
     "<b>%s</b><br>logFC: %.2f<br>-log10 p: %.2f<br>padj: %.2g<br>%s",
     d$gene, d$log2FoldChange, d$neglogp, d$padj, as.character(d$class))
@@ -171,7 +177,7 @@ de_volcano_ly <- function(d, ttl, source_id, pos = "up in KO", neg = "up in WT",
       xaxis = list(title = xlab, zeroline = FALSE),
       yaxis = list(title = "-log10 p (ranking only, n=1)", zeroline = FALSE),
       legend = list(title = list(text = ""), itemsizing = "constant"),
-      shapes = lapply(c(-1, 1), function(v) list(type = "line", x0 = v, x1 = v,
+      shapes = lapply(c(-lfc_cut, lfc_cut), function(v) list(type = "line", x0 = v, x1 = v,
         yref = "paper", y0 = 0, y1 = 1, line = list(color = "grey60", width = 1, dash = "dot"))),
       margin = list(t = 34))
   # ring the selected gene's point (set by clicking a point OR a table row)
@@ -206,6 +212,9 @@ de_datatable <- function(df, scroll = "380px") {
     options = opts, class = "compact stripe hover") |>
     DT::formatSignif(intersect(c("log2FoldChange","neglog10p","baseMean","pvalue","padj"), names(df)), 3)
 }
+# One slider definition for all four volcanoes. 0 colours every significant gene.
+volc_lfc_ui <- function(id)
+  sliderInput(id, "Colour genes at |log2FC| ≥", 0, 3, DE_LFC_CUT, 0.05)
 # optionally drop the sex/construct confounder genes (Xist, Y-genes, ROSA26) from a
 # DE frame before it reaches a volcano/table — n=1 makes these dominate the contrast.
 drop_conf <- function(d, hide) {
@@ -1465,7 +1474,7 @@ de_pass <- function(d, dir, padj_cut, eff_cut, measure = "lfc") {
   }
   d$gene[which(keep)]
 }
-vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
+vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut, measure = "lfc") {
   if (is.null(id) || !nzchar(id) || identical(id, "none")) return(NULL)
   kind <- sub(":.*$", "", id); rest <- sub("^[^:]*:", "", id)
   ax_univ <- if (!is.null(GM)) GM$gene else ALL_GENES
@@ -1483,7 +1492,7 @@ vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
     # it to roughly the changing genes and inflate every expected overlap.
     univ <- if (identical(grid, "de2")) genes else (GENES_FULL %||% genes)
     if (is.null(d)) return(out(character(0), lab, univ))
-    return(out(de_pass(d, dir, padj_cut, lfc_cut), lab, univ))
+    return(out(de_pass(d, dir, padj_cut, lfc_cut, measure), lab, univ))
   }
   if (kind == "ax") {
     validate(need(!is.null(GM), GM_MSG))
@@ -1507,9 +1516,10 @@ vn_set <- function(id, cluster, stratum, grid, padj_cut, lfc_cut) {
   NULL
 }
 # Collect the selected slots, and build the shared universe they must be judged in.
-vn_sets <- function(ids, cluster, stratum, grid, padj_cut, lfc_cut) {
+vn_sets <- function(ids, cluster, stratum, grid, padj_cut, lfc_cut, measure = "lfc") {
   ss <- Filter(Negate(is.null), lapply(ids, vn_set, cluster = cluster, stratum = stratum,
-                                       grid = grid, padj_cut = padj_cut, lfc_cut = lfc_cut))
+                                       grid = grid, padj_cut = padj_cut, lfc_cut = lfc_cut,
+                                       measure = measure))
   validate(need(length(ss) >= 2, "Pick at least two gene sets."))
   univ <- Reduce(intersect, lapply(ss, `[[`, "universe"))
   validate(need(length(univ) > 0, "These sets have no shared testable space — the overlap statistics would be meaningless."))
@@ -2139,6 +2149,7 @@ ui <- page_navbar(
       selectInput("ct_sel", "Cell type", choices = NULL),
       textInput("ct_search", "Filter genes (substring)", ""),
       checkboxInput("ct_hideconf", "Hide sex/construct genes", FALSE),
+      volc_lfc_ui("ct_vlfc"),
       hr(), helpText("KO-vs-WT differential expression within each cell type.",
                      br(), strong("p-axis ranks candidates only — not valid at n = 1."))),
     navset_card_tab(
@@ -2164,6 +2175,7 @@ ui <- page_navbar(
       selectizeInput("deg_a", "Group A", choices = NULL, multiple = TRUE),
       selectizeInput("deg_b", "Group B", choices = NULL, multiple = TRUE),
       checkboxInput("deg_hideconf", "Hide sex/construct genes", FALSE),
+      volc_lfc_ui("deg_vlfc"),
       actionButton("deg_run", "Compute DEGs", class = "btn-primary"),
       hr(), helpText("Descriptive Wilcoxon (presto) on log-norm expression of the ",
                      "filtered live cells. Hypothesis-generating only (n = 1); ",
@@ -2211,7 +2223,8 @@ ui <- page_navbar(
                        c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
                        selected = "G1"),
           radioButtons("cm_grid", "DE matrix", choices = fg_grid_choices(), selected = "de")),
-        checkboxInput("cm_hideconf", "Hide sex/construct genes (DE)", FALSE)),
+        checkboxInput("cm_hideconf", "Hide sex/construct genes (DE)", FALSE),
+        volc_lfc_ui("cm_vlfc")),
       conditionalPanel("input.cm_tabs == 'subenr'",
         selectInput("cm_enr_contrast", "Comparison",
                     choices = c("KO vs WT (P0 + P7 pooled)" = "pooled", fg_contrast_choices()),
@@ -2343,6 +2356,7 @@ ui <- page_navbar(
                      c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"),
                      selected = "G1"),
         checkboxInput("fg_hideconf", "Hide sex/construct genes", FALSE),
+        volc_lfc_ui("fg_vlfc"),
         hr(),
         # The "answer the email in one click" button: the whole contrast as a
         # workbook, rather than downloading each subcluster's table by hand.
@@ -2526,9 +2540,17 @@ ui <- page_navbar(
       radioButtons("vn_stratum", "Cells used",
                    c("G1 only (phase-matched)" = "G1", "All cells (raw)" = "all"), selected = "G1"),
       radioButtons("vn_grid", "DE matrix", choices = fg_grid_choices(), selected = "de"),
-      div(style = "display:flex;gap:8px",
-        numericInput("vn_padj", "padj <", 0.05, 0.001, 1, 0.01),
-        numericInput("vn_lfc", "|log2FC| >=", 0.25, 0, 5, 0.05)),
+      # Same effect-size choice as the WT-programs tab, for the same reason: presto's
+      # log2FC scales with expression level, so a symmetric cut cannot see sparse genes
+      # (cell cycle, most transcription factors) at all. AUC is rank-based.
+      radioButtons("vn_measure", "Effect size",
+                   c("log2 fold change" = "lfc", "AUC (rank-based)" = "auc"), selected = "lfc"),
+      conditionalPanel("input.vn_measure != 'auc'",
+        sliderInput("vn_lfc", "|log2FC| ≥", 0, 2, 0.25, 0.05)),
+      conditionalPanel("input.vn_measure == 'auc'",
+        sliderInput("vn_auc", "AUC ≥ (0.50 = no effect-size filter)",
+                    0.50, 0.85, 0.60, 0.01)),
+      numericInput("vn_padj", "padj <", 0.05, 0.001, 1, 0.01),
       hr(),
       helpText("A Venn hides the three things that decide whether an overlap matters — the ",
                "threshold that built each set, the direction of change, and the overlap you would ",
@@ -2572,12 +2594,15 @@ ui <- page_navbar(
       radioButtons("xc_grid", "DE matrix", choices = fg_grid_choices(), selected = "de"),
       radioButtons("xc_measure", "Effect size",
                    c("AUC (rank-based)" = "auc", "log2 fold change" = "lfc"), selected = "auc"),
-      div(style = "display:flex;gap:8px",
-        numericInput("xc_padj", "padj <", 0.05, 0.001, 1, 0.01),
-        conditionalPanel("input.xc_measure == 'auc'",
-          numericInput("xc_auc", "AUC >=", 0.60, 0.5, 1, 0.01)),
-        conditionalPanel("input.xc_measure != 'auc'",
-          numericInput("xc_lfc", "|log2FC| >=", 0.25, 0, 5, 0.05))),
+      # Sliders, not boxes: on this data the answer moves a lot across the plausible
+      # range (canonical cell-cycle genes up at P7 go 0 -> 3 -> 14 -> 32 as the AUC cut
+      # drops 0.65 -> 0.60 -> 0.55 -> 0.50), so the cut is something to sweep, not set once.
+      conditionalPanel("input.xc_measure == 'auc'",
+        sliderInput("xc_auc", "AUC ≥ (0.50 = no effect-size filter)",
+                    0.50, 0.85, 0.60, 0.01)),
+      conditionalPanel("input.xc_measure != 'auc'",
+        sliderInput("xc_lfc", "|log2FC| ≥", 0, 2, 0.25, 0.05)),
+      numericInput("xc_padj", "padj <", 0.05, 0.001, 1, 0.01),
       checkboxInput("xc_hidemt", "Hide mitochondrial (mt-) genes", TRUE),
       hr(),
       div(downloadButton("xc_book", "Download all four comparisons (XLSX)",
@@ -2922,7 +2947,7 @@ server <- function(input, output, session) {
   ct_dt_proxy <- DT::dataTableProxy("ct_table")
   output$ct_volcano <- renderPlotly(de_volcano_ly(drop_conf(ct_d(), input$ct_hideconf),
                          paste0(input$ct_tp, " ", gsub("_", " ", input$ct_sel)), "ct_volcano",
-                         highlight = ct_pick()))
+                         highlight = ct_pick(), lfc_cut = input$ct_vlfc %||% DE_LFC_CUT))
   outputOptions(output, "ct_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
   output$ct_table   <- renderDT(de_datatable(ct_tab()))
   output$ct_pick_ui  <- renderUI(pick_banner(ct_pick(), "ct_clear"))
@@ -3020,7 +3045,7 @@ server <- function(input, output, session) {
     de_volcano_ly(drop_conf(cm_d(), input$cm_hideconf), ttl, "cm_volcano",
                   pos = ct$pos %||% "up in KO", neg = ct$neg %||% "up in WT",
                   xlab = ct$xlab %||% "log2 fold change (KO / WT)",
-                  highlight = cm_pick()) })
+                  highlight = cm_pick(), lfc_cut = input$cm_vlfc %||% DE_LFC_CUT) })
   outputOptions(output, "cm_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
   output$cm_detab   <- renderDT(de_datatable(cm_tab(), scroll = NULL))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
@@ -3484,7 +3509,8 @@ server <- function(input, output, session) {
     de_volcano_ly(fg_d(),
       paste0(ct$label, " — ", if (input$fg_cluster == "AllCM") "all CM" else input$fg_cluster,
              if (input$fg_stratum == "G1") " (G1)" else ""),
-      "fg_volcano", pos = ct$pos, neg = ct$neg, xlab = ct$xlab, highlight = fg_pick())
+      "fg_volcano", pos = ct$pos, neg = ct$neg, xlab = ct$xlab, highlight = fg_pick(),
+      lfc_cut = input$fg_vlfc %||% DE_LFC_CUT)
   })
   outputOptions(output, "fg_volcano", suspendWhenHidden = FALSE)  # register the click source at startup
   output$fg_detab    <- renderDT(de_datatable(fg_tab(), scroll = NULL))
@@ -3956,9 +3982,10 @@ server <- function(input, output, session) {
     cc <- fg_cluster_choices()
     if (length(cc)) updateSelectInput(session, "vn_cluster", choices = cc, selected = "AllCM")
   })
-  vn_v <- reactive(vn_sets(c(input$vn_a, input$vn_b, input$vn_c), input$vn_cluster %||% "AllCM",
-                           input$vn_stratum %||% "G1", input$vn_grid %||% "de",
-                           input$vn_padj %||% 0.05, input$vn_lfc %||% 0.25))
+  vn_v <- reactive({ m <- input$vn_measure %||% "lfc"
+    vn_sets(c(input$vn_a, input$vn_b, input$vn_c), input$vn_cluster %||% "AllCM",
+            input$vn_stratum %||% "G1", input$vn_grid %||% "de", input$vn_padj %||% 0.05,
+            if (identical(m, "auc")) input$vn_auc %||% 0.60 else input$vn_lfc %||% 0.25, m) })
   vn_p <- reactive(vn_plot(vn_v(), input$vn_basesize %||% 13))
   output$vn_plot <- renderPlot(apply_fig_opts(vn_p(), "vn", input))
   for (.f in c("pdf","svg","png")) local({ f <- .f;
@@ -4089,7 +4116,8 @@ server <- function(input, output, session) {
     de_volcano_ly(d, paste0(deg_lab(isolate(input$deg_a)), "  vs  ", deg_lab(isolate(input$deg_b))),
                   "deg_volcano", pos = paste0("up in ", deg_lab(isolate(input$deg_a))),
                   neg = paste0("up in ", deg_lab(isolate(input$deg_b))),
-                  xlab = "logFC  (A / B)", highlight = deg_pick())
+                  xlab = "logFC  (A / B)", highlight = deg_pick(),
+                  lfc_cut = input$deg_vlfc %||% DE_LFC_CUT)
   })
   outputOptions(output, "deg_volcano", suspendWhenHidden = FALSE)  # render at startup so plotly_click source registers before its click observer fires
   output$deg_table   <- renderDT(de_datatable(deg_tab()))
