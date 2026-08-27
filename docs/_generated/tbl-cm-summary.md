@@ -14,6 +14,6 @@
 | CM9 | 1,286 | 4 | 4 | ~timepoint + condition | ok | 82 | Cntn2,Gabbr2,Cd74,Ahsg,Cytl1,Tagln | Ifitm6,Clec7a,C5ar1,Itgb2,S100a9,Lilrb4a |
 | CM10 | 578 | 4 | 3 | ~timepoint + condition | ok | 40 | Gabbr2,Tcf4,Adamts9,4833412C05Rik,Tafa2,Gm40318 | Sec1,Dock9,Dcpp2,Gm31045,Mettl18,Scn4b |
 | CM11 | 304 | 2 | 2 | ~condition | ok | 215 | Gabbr2,Tcf4,Gm11290,Ddit4l,Dpy19l2,Rtn1 | Bmp10,Smim41,Cdh20,Gm34544,Fbxo33,Smoc2 |
-| CM12 | 99 | 0 | 1 |  | skipped_too_few_or_unbalanced | NA |  |  |
+| CM12 | 99 | 0 | 1 |  | skipped_too_few_or_unbalanced |  |  |  |
 
 : `app$tables$sub_summary[["res0.2"]]` — one row per CM subcluster. {tbl-colwidths="auto"}

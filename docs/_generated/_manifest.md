@@ -9,9 +9,15 @@
 | 01 | qc-violins | per-lane QC violins | assets/qc-violins.png |
 | 01 | refmap-heat | annotation concordance heatmap | assets/refmap-heat.svg |
 | 01 | tbl-celltypes | cells per cell type x group | _generated/tbl-celltypes.md |
+| 01 | tbl-changed | what the re-analysis changed, per sample | _generated/tbl-changed.md |
+| 01 | tbl-changed-detail | retention by doublet flag and mito bin | _generated/tbl-changed-detail.md |
 | 01 | tbl-doublet | per-lane doublet rates | _generated/tbl-doublet.md |
+| 01 | tbl-mito-source | mitochondrial fraction as measured upstream | _generated/tbl-mito-source.md |
 | 01 | tbl-refmap-conf | annotation confusion table | _generated/tbl-refmap-conf.md |
 | 01 | tbl-refmap-cov | reference panel coverage | _generated/tbl-refmap-cov.md |
+| 01 | tbl-sensitivity | cells called at each sensitivity | _generated/tbl-sensitivity.md |
+| 01 | tbl-star | STAR alignment, per lane | _generated/tbl-star.md |
+| 01 | tbl-upstream-run | the PIPseeker run, per lane | _generated/tbl-upstream-run.md |
 | 02 | comp-celltype | cell-type composition by group | assets/comp-celltype.svg |
 | 02 | gene-dot | gene-detail dot plot | assets/gene-dot.svg |
 | 02 | gene-violin | gene-detail violin | assets/gene-violin.svg |
@@ -38,10 +44,13 @@
 | 06 | e2f-violin | E2f7/E2f8 expression by genotype x timepoint | assets/e2f-violin.svg |
 | 06 | tbl-e2f | E2f7/E2f8 detection by group | _generated/tbl-e2f.md |
 | 07 | fg-counts | four-group sizes per subcluster | assets/fg-counts.svg |
+| 07 | fg-enr-go | four-group GO, P7 KO vs WT | assets/fg-enr-go.svg |
+| 07 | fg-enr-gsea | four-group GSEA, P7 KO vs WT | assets/fg-enr-gsea.svg |
 | 07 | fg-phase | phase composition, four groups | assets/fg-phase.svg |
 | 07 | fg-score | maturation score by four group | assets/fg-score.svg |
 | 07 | fg-summary | KO-WT maturation gap summary | assets/fg-summary.svg |
 | 07 | fg-volcano | P7 KO-vs-WT volcano, CM2, G1 stratum | assets/fg-volcano.png |
+| 07 | tbl-fg-audit | enrichment coverage audit | _generated/tbl-fg-audit.md |
 | 07 | tbl-fg-contrasts | the four contrasts, as defined | _generated/tbl-fg-contrasts.md |
 | 07 | tbl-fg-counts | four-group counts table | _generated/tbl-fg-counts.md |
 | 07 | tbl-fg-coverage | contrast coverage across the two grids | _generated/tbl-fg-coverage.md |

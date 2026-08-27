@@ -49,8 +49,9 @@ slightly more.
 There are three explanations, and this dataset cannot separate them:
 
 1. **A conditional allele a 3′-biased assay cannot see.** If the targeting removes an
-   internal exon or inserts a cassette upstream of the 3′ end, 10x reads pile up in the
-   final exon and count the transcript as present. The protein can be absent while the
+   internal exon or inserts a cassette upstream of the 3′ end, reads from a 3′-biased
+   assay pile up in the final exon and count the transcript as present. PIP-seq is
+   3′-biased, so this explanation survives the platform correction unchanged. The protein can be absent while the
    3′ signal is intact. This is the most likely explanation and is what the app states.
 2. **Incomplete recombination.** If Cre activity is partial, the cells sequenced are a
    mixture and the population mean is diluted toward wild type — but that would produce

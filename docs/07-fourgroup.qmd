@@ -67,6 +67,14 @@ stratum by construction*, and a missing row reads as "not measured" when the tru
 
 {{< include _generated/tbl-fg-counts.md >}}
 
+Before reading arm sizes off this table, note where the cells went. These counts are
+**bundle** counts, and the bundle is a stratified ~50 % downsample of the cells that passed
+QC (see [chapter 1](01-upstream.qmd#the-downsample-is-not-free-and-it-is-not-only-cosmetic)).
+The `de` grid narrows it further, to 5,755 of ~43,000 post-QC cardiomyocytes. So every arm
+below is roughly half — or an eighth — of what the experiment actually yielded, and a fair
+share of the underpowered arms and skipped contrasts are a consequence of that rather than of
+the biology.
+
 This table is the reason several later analyses are restricted to CM1, CM2, CM3, CM5,
 CM7 and CM8. Read off it: **CM2's KO-P0 arm is 31 cells, and only 12 of them are G1**;
 **CM4 has zero G1 cells in every group**; **CM6 has zero P7 cells at all**. An arm can
@@ -130,6 +138,28 @@ selection, and for a cluster like CM4 (no G1 cells) it is the only stratum that 
 Shipping both, with the raw one labelled, lets a reader see that the two agree — which
 on this data they do — instead of taking the corrected version on trust.
 
+::: {.callout-important}
+## A four-group table carries a median of 3.2 % of the genes tested
+
+This is the sharpest edge in the whole project for anyone using the app to make a decision.
+Measured across all 77 tables in the `de` grid: **median 764 rows of 24,221 genes tested**
+(range 25–9,421). The curated `de2` grid carries a median of 392 of 2,181 genes, 18 %.
+
+So on this tab, **a gene's absence tells you almost nothing.** It usually means the gene did
+not clear the gate, not that it was unchanged and not that it was unmeasured. Only the 17
+`KEEP_ALWAYS` genes are guaranteed present.
+
+The contrast with the rest of the app matters. The pooled KO-vs-WT tables behind
+[chapter 3](03-de.qmd) are computed on the **full** data upstream and carry
+10,821–23,649 genes each — 96 % of what was tested, dropping only genes with `baseMean < 3`
+(`build_app_data.R`, `DE_MIN_BASEMEAN`). Those tables are effectively complete. These are not.
+
+If a gene matters to a decision, read it from the complete tables in
+`our_analysis/results/tables/` or from the ungated deliverable
+(`analysis/2026-08-21_email/`, which recomputes two contrasts over all 24,221 genes) rather
+than from this tab.
+:::
+
 **Why a row gate, and why that one?** 112 possible tables over 24,221 genes is a bundle
 nobody can load in a browser. The gate is a size measure, not a statistical one, which
 is why it is an **or**: `padj < 0.05` **or** `|log2FC| ≥ 0.5`. A gene needs only one
@@ -157,15 +187,38 @@ identically, lets a per-cluster result be checked against the compartment-wide o
 
 ### The enrichment panel of this tab
 
-{{< include _generated/_gaps.md >}}
-
-The method is fully specified in `shiny_app/build_fourgroup_enrichment.R` and documented
-in [chapter 4](04-enrichment.qmd) — tighter thresholds than the pooled subcluster run
+GO and GSEA for the four-group contrasts specifically — distinct from the pooled
+KO-vs-WT enrichment in [chapter 5](05-cm-deepdive.qmd), which averages over P0 and P7
+and therefore cannot answer "what changes in the KO *at P7*". The method is specified in
+`shiny_app/build_fourgroup_enrichment.R` and documented in
+[chapter 4](04-enrichment.qmd): tighter thresholds than the pooled subcluster run
 (`padj < 0.05`, `|log2FC| ≥ 0.25`, GO p/q 0.05/0.2, BP+MF+CC), a universe recomputed
 from the matrix per contrast, and the three-rung fallback ladder with the fired rule
-recorded. It has simply not been run against the current bundle, so the app shows its
-"run the builder" message and this book has no figure to show. Running it is one
-command and about two hours.
+recorded on every row.
+
+It covers all four contrasts × both strata × every subcluster — **77 tables, 154
+direction-tests, 462 GO calls**, producing 19,946 GO rows and 4,833 GSEA rows.
+
+![GO BP, up in the P7 KO, CM2 phase-matched](assets/fg-enr-go.svg){#fig-fg-enr-go}
+
+![GSEA over Hallmark and KEGG for the same contrast](assets/fg-enr-gsea.svg){#fig-fg-enr-gsea}
+
+The audit table is the part worth reading before the figures. Every cluster × contrast ×
+stratum × direction × ontology gets a row, whether or not anything was enriched, so an
+empty panel can be distinguished from an untested one:
+
+{{< include _generated/tbl-fg-audit.md >}}
+
+::: {.callout-warning}
+## Read the `n_mt_input` column before quoting a KO-up term
+
+The audit records how many mitochondrially-encoded genes entered each list. Where that
+count is non-zero and the enriched terms are oxidative phosphorylation, electron
+transport or ATP synthesis, [chapter 11](11-confounds-repro.qmd) applies in full: those
+terms are carried by a block of `mt-` genes that shifts one-directionally between the
+libraries, and removing them costs one cluster's KO-up result all 61 of its terms. The
+KO-down direction has `n_mt_input` of 0 throughout and is unaffected.
+:::
 
 ## Reproduce it
 

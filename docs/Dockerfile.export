@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+# Image for docs/export_assets.R.
+#
+# Built FROM the analysis image (which carries Matrix, presto, clusterProfiler, ggplot2,
+# svglite and ragg) and adds SeuratObject. SeuratObject is needed for exactly one thing:
+# deserialising the ORIGINAL run's Seurat objects in original_Han_analysis/processing/, so
+# the book can compare the original analysis against ours cell by cell rather than taking
+# the hand-off README's word for what changed. Full Seurat is not needed -- the objects are
+# only read, never re-processed.
+FROM e2f-enrich:latest
+
+RUN R -q -e 'install.packages("SeuratObject", repos = c("https://packagemanager.posit.co/cran/__linux__/noble/latest", getOption("repos"))); \
+             library(SeuratObject); cat("SeuratObject", as.character(packageVersion("SeuratObject")), "ok\n")'
+
+WORKDIR /work

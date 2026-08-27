@@ -3,6 +3,7 @@ title: "Confounds and reproducibility"
 engine: markdown
 tabs:
   - "About / caveats"
+  - "Precomputed results"
 ---
 
 ## What you're looking at
@@ -78,6 +79,24 @@ KO-down list of **none**. Seven independently clustered populations do not agree
 cleanly by biology; a one-directional shift of the whole `mt-` block is a read-fraction
 difference between libraries.
 
+**It is present in the libraries as sequenced.** PIPseeker reports a mitochondrial
+fraction per lane, upstream of every choice we made, and it already carries the pattern:
+
+{{< include _generated/tbl-mito-source.md >}}
+
+The knockout is *lower* than wild type at P0 and *higher* at P7 — the same direction and
+the same shape as the downstream measurement above, arrived at independently and before any
+filtering, normalisation or integration. The two lanes of each library agree to within
+0.03 percentage points, so this is a difference between libraries, not noise.
+
+That settles where the artefact comes from and where it does not. It is **not** something
+our pipeline introduced. It is also not an ambient-RNA effect of the kind an earlier draft
+of this book proposed: that argument rested on PIP-seq **v4**'s >10 % ambient load, and this
+run used **chemistry V**, which the same benchmark places under 5 % with every other kit
+tested. What remains is the plain reading — the four libraries differ in mitochondrial
+content, the KO-vs-WT difference reverses between the two timepoints, and any enrichment
+result carried by `mt-` genes inherits that.
+
 {{< include _generated/tbl-mito.md >}}
 
 The arithmetic, from `analysis/2026-08-21_email/05_mito_sensitivity.R`: in CM1 the
@@ -100,6 +119,40 @@ phosphorylation / electron transport / proton transport" result should be read a
 library artefact until a replicated cohort says otherwise. Nothing was deleted from the
 DE tables — the rows are correct — but they carry a `mito_encoded` flag, and the
 WT-programs tab hides `mt-` genes by default for the same reason.
+
+## Precomputed results, linked rather than recomputed
+
+**Dev → Precomputed results** exposes 28 tables the upstream pipeline had already computed but
+the app never carried. They are read from the bundle, so they cost the app nothing to display,
+and several are stronger than what the app computes for itself.
+
+| Category | What is now reachable |
+|---|---|
+| Differential expression (full data) | WT and KO **P7-vs-P0 contrasts over all cardiomyocytes, every gene, no row gate** (20,228 and 20,789 genes) — the complete version of two of the four-group contrasts. Plus **pseudobulk DESeq2** for P0 and P7 |
+| Cell–cell communication | A full **CellChat** run with permutation testing, at pathway and sender × receiver level, for both timepoints |
+| Composition and cell cycle | **propeller** tests of cell-type and phase abundance — an actual statistical test where [chapter 2](02-atlas.qmd)'s Composition tab draws proportions with none |
+| Confounds and QC | Sex calls per sample, E2f7/E2f8 knockout verification, lane barcode overlap, both doublet callers |
+| Annotation | The **cluster → cell-type mapping**, the marker panel used, the confusion matrix and per-type recall |
+| Trajectory | Pseudotime validation and CM stage genes |
+
+Two of those close gaps this book previously recorded as open. The app's **Cell–cell
+signalling** tab scores 20 curated ligand–receptor pairs by hand with no significance test
+([chapter 10](10-signalling.qmd) explains why CellChat was ruled out) — but a CellChat run
+already existed, and is now linked beside it. And the cluster→cell-type mapping was listed in
+[chapter 1](01-upstream.qmd) as unrecoverable; it is now in the bundle.
+
+The same pass also **removed a completeness gap in the pooled DE tables.** `build_app_data.R`
+trimmed them at `baseMean ≥ 3`; `build_linked_results.R` re-reads the complete CSVs and keeps
+every row, taking the eleven cell-type tables from 172,877 to **181,026** rows (+4.7 %). A
+gene a reader looks up and cannot find no longer reads as "not measured" when the truth was
+"expressed too low to store".
+
+Cost of all of it: **+10 MB** on a 634 MB bundle, and no new computation in the app.
+
+```bash
+Rscript shiny_app/build_linked_results.R --probe   # inventory + sizes, writes nothing
+Rscript shiny_app/build_linked_results.R          # ingest + save
+```
 
 ## What was verified, and how
 

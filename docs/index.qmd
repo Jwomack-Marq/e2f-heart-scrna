@@ -19,9 +19,16 @@ table was read out of the data bundle rather than typed — see
 
 ## The experiment
 
-Single-cell RNA-seq (10x) of **E2F7/8 double-knockout versus wild-type mouse heart**,
-at **P0** and **P7** — four libraries, one animal each, sequenced over two lanes
-apiece.
+Single-cell RNA-seq of **E2F7/8 double-knockout versus wild-type mouse heart**, at
+**P0** and **P7** — four libraries, one animal each, sequenced over two lanes apiece.
+
+The assay is **PIP-seq, chemistry V** (particle-templated instant partitions — originally
+Fluent BioSciences, now sold by Illumina as *Single Cell 3' RNA Prep*), **not 10x
+Chromium**. Counting was done by the vendor's own pipeline, **PIPseeker v3.3.0**, aligning
+with STAR 2.7.6a against Ensembl GRCm38. Those parameters are cited to the original run's
+own records, now in the repository at `original_Han_analysis/`;
+[chapter 1](01-upstream.qmd) documents the whole upstream stage, including two claims this
+book previously got wrong.
 
 ```{mermaid}
 flowchart LR

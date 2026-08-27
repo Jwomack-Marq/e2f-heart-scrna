@@ -41,6 +41,13 @@ REPO   <- if (dir.exists("/repo")) "/repo" else "."
 OUT_A  <- if (dir.exists("/out/assets")) "/out/assets" else "docs/assets"
 OUT_G  <- if (dir.exists("/out/generated")) "/out/generated" else "docs/_generated"
 DELIV  <- file.path(REPO, "deliverables/2026-08-21")
+# PowerPoint cannot be trusted with SVG through pandoc's pptx writer, and no
+# SVG->PNG converter exists on this machine. So when a slide-asset dir is mounted,
+# every vector figure also gets a raster twin from the SAME plot object -- not a
+# converted file, the same ggplot rendered through a second device. One plotting
+# source, two output formats, no conversion step to drift.
+SLIDES <- Sys.getenv("SLIDE_PNG_DIR", "")
+if (nzchar(SLIDES) && !dir.exists(SLIDES)) dir.create(SLIDES, recursive = TRUE)
 
 stopifnot(file.exists(BUNDLE))
 dir.create(OUT_A, showWarnings = FALSE, recursive = TRUE)
@@ -52,11 +59,17 @@ dir.create(OUT_G, showWarnings = FALSE, recursive = TRUE)
 # repo and the bundle are mounted read-only and must stay that way.
 STAGE <- file.path(tempdir(), "appstage")
 dir.create(STAGE, showWarnings = FALSE)
-for (f in c("app_data.rds", "download_helpers.R")) {
-  tgt <- file.path(STAGE, f)
-  if (!file.exists(tgt))
-    file.symlink(if (f == "app_data.rds") BUNDLE else file.path(REPO, "shiny_app", f), tgt)
+# Link ALL of shiny_app/*.R, never a hand-listed subset: app.R source()s its helpers
+# at startup and reads build_signature_scores.R for the curated gene lists, so the set
+# of runtime files grows whenever app.R grows a dependency. A hand-maintained list here
+# breaks silently the first time that happens -- which is exactly how the dev container
+# failed to boot in 1c1b1f7, and how this script broke when studio_helpers.R appeared.
+for (f in list.files(file.path(REPO, "shiny_app"), pattern = "\\.R$", full.names = TRUE)) {
+  tgt <- file.path(STAGE, basename(f))
+  if (!file.exists(tgt)) file.symlink(f, tgt)
 }
+if (!file.exists(file.path(STAGE, "app_data.rds")))
+  file.symlink(BUNDLE, file.path(STAGE, "app_data.rds"))
 APP_R <- file.path(REPO, "shiny_app/app.R")
 src   <- readLines(APP_R, warn = FALSE)
 ui_at <- grep("^# -{5,} UI -{5,}$", src)
@@ -133,6 +146,13 @@ fig <- function(id, plot, w = 8, h = 5, raster = FALSE, dpi = 200) {
                      bg = "white", limitsize = FALSE)
   ok <- TRUE
   file.rename(tmp, path)
+  # raster twin for the slides, at print dpi
+  if (nzchar(SLIDES)) {
+    png2 <- file.path(SLIDES, paste0(id, ".png"))
+    if (raster) file.copy(path, png2, overwrite = TRUE)
+    else ggsave(png2, plot, device = ragg::agg_png, width = w, height = h,
+                dpi = 200, units = "in", bg = "white", limitsize = FALSE)
+  }
   paste0("assets/", basename(path))
 }
 # The five upstream QC figures live in the bundle as base64 data URIs (app$figs) --
@@ -144,6 +164,7 @@ figs_png <- function(id, slot) {
   b64  <- sub("^data:image/[a-z]+;base64,", "", d)
   path <- file.path(OUT_A, paste0(id, ".png"))
   writeBin(base64enc_decode(b64), path)
+  if (nzchar(SLIDES)) file.copy(path, file.path(SLIDES, basename(path)), overwrite = TRUE)
   paste0("assets/", basename(path))
 }
 # base64 decoder in base R -- avoids depending on base64enc/openssl being present.
@@ -164,9 +185,10 @@ md_table <- function(df, digits = 3, max_rows = NULL) {
   if (!is.null(max_rows) && nrow(df) > max_rows) df <- head(df, max_rows)
   fmt <- function(x) {
     if (is.numeric(x)) {
+      blank <- function(v) { v[is.na(x)] <- ""; v }   # NA reads as absent, not as "NA"
       if (all(is.na(x) | x == round(x)) && max(abs(x), na.rm = TRUE) >= 1000)
-        return(formatC(x, format = "d", big.mark = ","))
-      if (all(is.na(x) | x == round(x))) return(as.character(x))
+        return(blank(formatC(x, format = "d", big.mark = ",")))
+      if (all(is.na(x) | x == round(x))) return(blank(as.character(x)))
       # Hypergeometric and Wilcoxon p-values here run to 1e-280. "fg" would print
       # that as 280 leading zeros and destroy the table, so any column holding a
       # value outside a readable range switches to scientific notation wholesale
@@ -376,9 +398,205 @@ genemap_gg <- function(panel = "avg", label_n = 24) {
 }
 
 # ===========================================================================
+# 01 -- upstream: the PIPseeker run itself
+# ===========================================================================
+# original_Han_analysis/ holds the upstream run we received: PIPseeker's per-lane
+# run_config.csv, its metrics, and the STAR logs. These are the primary record of how
+# the count matrices were made, so the chapter cites them rather than prose. The heavy
+# parts of that folder are git-ignored; these text files are not.
+cat("\n== 01 upstream provenance (original_Han_analysis) ==\n")
+ORIG  <- file.path(REPO, "original_Han_analysis")
+RAWPS <- file.path(ORIG, "raw_pipseeker_outputs")
+LANES <- if (dir.exists(RAWPS)) sort(list.dirs(RAWPS, recursive = FALSE, full.names = FALSE)) else character(0)
+
+kv <- function(path) {                       # PIPseeker writes key,value with no header
+  if (!file.exists(path)) return(NULL)
+  d <- utils::read.csv(path, header = FALSE, stringsAsFactors = FALSE,
+                       col.names = c("k", "v"))
+  setNames(as.list(d$v), d$k)
+}
+metrics <- function(lane, sens) kv(file.path(RAWPS, lane, "metrics",
+                                             paste0("sensitivity_", sens), "metrics_summary.csv"))
+runcfg  <- function(lane) kv(file.path(RAWPS, lane, "run_config.csv"))
+
+if (!length(LANES)) {
+  gap("tbl-upstream-run", "01", "the PIPseeker run parameters and per-lane metrics",
+      "original_Han_analysis/raw_pipseeker_outputs is not present in this working tree.")
+  gap("tbl-sensitivity", "01", "the cell-calling sensitivity comparison", "same")
+  gap("tbl-star", "01", "STAR alignment statistics", "same")
+  gap("tbl-mito-source", "01", "mitochondrial fraction as PIPseeker measured it", "same")
+} else {
+
+  step("tbl-upstream-run", "01", "the PIPseeker run, per lane",
+       frag("tbl-upstream-run", local({
+         do.call(rbind, lapply(LANES, function(l) {
+           c0 <- runcfg(l); m <- metrics(l, 5)
+           data.frame(lane = l,
+                      chemistry = c0$chemistry %||% NA,
+                      pipseeker = c0$pipeline_version %||% NA,
+                      # lanes whose run_config.csv was not included in the copy we
+                      # received carry the command-line values from
+                      # preprocessing_scripts/pipseeker_scripts.txt instead
+                      # one lane's run_config.csv was not included in the copy we
+                      # received; for it, report the range PIPseeker actually computed,
+                      # which is what the metrics folders record
+                      sensitivity = if (is.null(c0)) {
+                          have <- gsub("sensitivity_", "", list.files(file.path(RAWPS, l, "metrics"),
+                                                                      pattern = "^sensitivity_"))
+                          if (length(have)) sprintf("%s-%s*", min(have), max(have)) else NA
+                        } else sprintf("%s-%s", c0$min_sensitivity %||% "?",
+                                                c0$max_sensitivity %||% "?"),
+                      cells = as.integer(m$num_cell_barcodes),
+                      mean_reads_per_cell = as.integer(m$mean_reads_per_cell),
+                      median_genes = as.integer(m$median_genes_in_cells),
+                      saturation_pct = as.numeric(m$sequencing_saturation),
+                      stringsAsFactors = FALSE)
+         }))
+       }), caption = "The upstream run as PIPseeker recorded it. `sensitivity` is the range computed; the `filtered_matrix/sensitivity_5/` matrices are the ones everything downstream reads."))
+
+  step("tbl-sensitivity", "01", "cells called at each sensitivity",
+       frag("tbl-sensitivity", local({
+         do.call(rbind, lapply(LANES, function(l) {
+           r <- data.frame(lane = l, stringsAsFactors = FALSE)
+           for (s in 3:5) {
+             m <- metrics(l, s)
+             r[[paste0("sens_", s)]] <- if (is.null(m)) NA_integer_ else as.integer(m$num_cell_barcodes)
+           }
+           r$used <- "sensitivity 5"
+           r
+         }))
+       }), caption = "Cell barcodes called at each sensitivity PIPseeker was asked to compute. Blank means that level was not requested for that lane.",
+          note = "Sensitivity is the single most consequential upstream choice: on P0KO_lane6, the only lane computed at all three levels, it moves the cell count from 8,271 to 12,045 -- a 46 % swing. The most permissive level available was the one used."))
+
+  step("tbl-star", "01", "STAR alignment, per lane",
+       frag("tbl-star", local({
+         do.call(rbind, lapply(LANES, function(l) {
+           f <- file.path(RAWPS, l, "star", "Log.final.out")
+           if (!file.exists(f)) return(NULL)
+           tx <- readLines(f, warn = FALSE)
+           g <- function(pat) {
+             h <- grep(pat, tx, value = TRUE, fixed = TRUE)
+             if (!length(h)) return(NA_character_)
+             trimws(sub(".*\\|", "", h[1]))
+           }
+           m <- metrics(l, 5)
+           data.frame(lane = l,
+                      input_reads = as.numeric(gsub("[^0-9]", "", g("Number of input reads"))),
+                      uniquely_mapped_pct = as.numeric(gsub("%", "", g("Uniquely mapped reads %"))),
+                      multi_loci_pct = as.numeric(gsub("%", "", g("% of reads mapped to multiple loci"))),
+                      mapped_to_txome_pct = as.numeric(m$mapping_pct_txome),
+                      stringsAsFactors = FALSE)
+         }))
+       }), caption = "STAR 2.7.6a, run inside PIPseeker, against Ensembl GRCm38 primary assembly with the release-99 GTF."))
+
+  step("tbl-mito-source", "01", "mitochondrial fraction as measured upstream",
+       frag("tbl-mito-source", local({
+         d <- do.call(rbind, lapply(LANES, function(l) {
+           m <- metrics(l, 5)
+           data.frame(sample = sub("_lane[0-9]+$", "", l), lane = l,
+                      pct_mito_in_cells = as.numeric(m$pct_mito_in_cells),
+                      stringsAsFactors = FALSE)
+         }))
+         agg <- aggregate(pct_mito_in_cells ~ sample, d, mean)
+         agg <- agg[match(c("P0WT","P0KO","P7WT","P7KO"), agg$sample), , drop = FALSE]
+         agg <- agg[!is.na(agg$sample), , drop = FALSE]
+         names(agg)[2] <- "pct_mito_mean_of_2_lanes"
+         merge(agg, setNames(aggregate(pct_mito_in_cells ~ sample, d,
+                 function(x) paste(sprintf("%.2f", x), collapse = ", ")),
+                 c("sample", "per_lane")), by = "sample", sort = FALSE)
+       }), digits = 3,
+          caption = "PIPseeker's own per-lane mitochondrial estimate, before any of our filtering.",
+          note = "The KO is *lower* than WT at P0 and *higher* at P7 -- the same direction and shape as the downstream mitochondrial confound, measured independently and upstream of everything we did. The two lanes of each sample agree to within 0.03 pp, which is what technical replicates should look like."))
+}
+
+# ===========================================================================
+# 01 -- what our re-analysis changed, measured against the original run
+# ===========================================================================
+# The hand-off README says the original R scripts were edited for "QC correctness fixes --
+# doublet removal, mouse mito QC, ..." and points at a METHODS_COMPARISON.md that is not in
+# this tree. Rather than take that on trust, this compares the original run's own merged
+# objects against the cells that survive into our bundle, cell by cell. Every claim about
+# what changed is then a measurement.
+cat("\n== 01 original vs ours ==\n")
+ORIGPROC <- if (dir.exists("/orig")) "/orig/processing" else file.path(ORIG, "processing")
+HAVE_SEURAT <- requireNamespace("SeuratObject", quietly = TRUE) &&
+               dir.exists(ORIGPROC) && length(list.files(ORIGPROC, pattern = "\\.rds$"))
+
+if (!HAVE_SEURAT) {
+  gap("tbl-changed", "01", "the original-vs-ours comparison",
+      paste("needs SeuratObject and original_Han_analysis/processing/*.rds.",
+            "The heavy parts of that folder are git-ignored, so a fresh clone will not have them."))
+} else {
+  ORIG_CMP <- local({
+    suppressMessages(library(SeuratObject))
+    m <- meta; m$bc <- sub("^[^_]+_", "", m$cell)
+    do.call(rbind, lapply(c("P0KO","P0WT","P7KO","P7WT"), function(sm) {
+      f <- file.path(ORIGPROC, sprintf("merge.lanes.%s.rds", sm))
+      if (!file.exists(f)) return(NULL)
+      o  <- readRDS(f); md <- o@meta.data
+      mt <- grep("^mt-", rownames(o), value = TRUE)
+      # per layer: the two layers are the two lanes, and their cells are disjoint
+      pm <- unlist(lapply(SeuratObject::Layers(o), function(lay) {
+        x <- SeuratObject::LayerData(o, layer = lay)
+        setNames(100 * Matrix::colSums(x[mt, , drop = FALSE]) /
+                 pmax(Matrix::colSums(x), 1), colnames(x))
+      }))
+      data.frame(sample = sm, cell = rownames(md),
+                 nFeature = md$nFeature_RNA, pct_mt = as.numeric(pm[rownames(md)]),
+                 doublet = md$doublet %in% c(TRUE, "True", "TRUE"),
+                 kept = rownames(md) %in% m$bc[m$orig.ident == sm],
+                 stringsAsFactors = FALSE)
+    }))
+  })
+
+  step("tbl-changed", "01", "what the re-analysis changed, per sample",
+       frag("tbl-changed", local({
+         d <- ORIG_CMP
+         do.call(rbind, lapply(unique(d$sample), function(sm) {
+           x <- d[d$sample == sm, ]
+           elig <- sum(!x$doublet & x$pct_mt <= 20)
+           # Columns are laid out so the arithmetic CLOSES left to right. An earlier
+           # version showed only original / removals / bundle and left the downsample
+           # implicit in a percentage, which read as ~8,500 cells going missing.
+           data.frame(sample = sm,
+                      original_cells = nrow(x),
+                      minus_doublets = -sum(x$doublet),
+                      minus_mito_over_20 = -sum(x$pct_mt > 20 & !x$doublet),
+                      eligible = elig,
+                      minus_not_bundled = -(elig - sum(x$kept)),
+                      in_our_bundle = sum(x$kept),
+                      stringsAsFactors = FALSE)
+         }))
+       }), caption = "The original run's merged objects against the cells that reach our bundle. Each row subtracts left to right and closes on the last column.",
+          note = "Two different things are happening in this table and they should not be confused. The two negative QC columns are **filters** -- those cells are judged unusable. The `minus_not_bundled` column is the **browser downsample**: a stratified ~50 % sample taken so the app loads in a browser, not a quality judgement. Those cells still exist upstream, and the precomputed differential-expression tables were built before it. Every one of our 30,030 cells is present in the original objects, so both runs start from the identical PIPseeker matrices -- nothing was re-counted."))
+
+  step("tbl-changed-detail", "01", "retention by doublet flag and mito bin",
+       frag("tbl-changed-detail", local({
+         d <- ORIG_CMP
+         rows <- list()
+         add <- function(group, level, i) rows[[length(rows) + 1L]] <<- data.frame(
+           group = group, level = level, cells = length(i),
+           retained = sum(d$kept[i]), retained_pct = round(100 * mean(d$kept[i]), 1),
+           stringsAsFactors = FALSE)
+         add("Scrublet doublet", "not a doublet", which(!d$doublet))
+         add("Scrublet doublet", "flagged doublet", which(d$doublet))
+         br <- c(-Inf, 5, 10, 15, 20, Inf)
+         lb <- c("< 5 %", "5-10 %", "10-15 %", "15-20 %", "> 20 %")
+         b  <- cut(d$pct_mt, br, labels = lb)
+         for (lv in lb) { i <- which(b == lv & !d$doublet); if (length(i)) add("Mitochondrial %", lv, i) }
+         cl <- !d$doublet & d$pct_mt <= 20
+         fb <- cut(d$nFeature, c(-Inf, 7000, 8000, 9000, 10000, Inf),
+                   labels = c("< 7,000", "7-8,000", "8-9,000", "9-10,000", "> 10,000"))
+         for (lv in levels(fb)) { i <- which(fb == lv & cl); if (length(i)) add("Genes detected", lv, i) }
+         do.call(rbind, rows)
+       }), caption = "Retention of the original run's cells in our bundle, by the property being tested. A category retained at ~50 % was subject only to the downsample; one retained at 0 % was filtered out.",
+          note = "Two filters are categorical and one is graded. Doublets and cells above 20 % mitochondrial are removed outright. Cells with very high gene counts are progressively depleted rather than cut at a fixed number -- consistent with a quantile- or MAD-based upper bound rather than a hard threshold; the highest-complexity cell we keep has 9,307 genes."))
+}
+
+# ===========================================================================
 # 01 -- upstream: QC, normalization, annotation
 # ===========================================================================
-cat("\n== 01 upstream ==\n")
+cat("\n== 01 upstream (from the bundle) ==\n")
 step("qc-filtering",  "01", "upstream QC filtering figure",  figs_png("qc-filtering", "filtering"))
 step("qc-violins",    "01", "per-lane QC violins",           figs_png("qc-violins",   "qc_violins"))
 step("qc-doublets",   "01", "doublet detection figure",       figs_png("qc-doublets",  "doublet"))
@@ -578,8 +796,18 @@ FGE_WHY  <- paste("app$enrich$fourgroup is not in this bundle -- build_fourgroup
 if (HAVE_FGE) {
   step("fg-enr-go", "07", "four-group GO, P7 KO vs WT",
        fig("fg-enr-go", go_dotplot_gg(
-         fg_enr_df("go", "CM2", "P7_KO_vs_WT", "G1", "BP", "up"),
+         # "A_up", not "up": the builder writes A_up/B_up and the app translates
+         # its own up/down into those (app.R:1019-1029). Passing "up" here matches
+         # no rows and yields an empty panel rather than an error.
+         fg_enr_df("go", "CM2", "P7_KO_vs_WT", "G1", "BP", "A_up"),
          "GO BP — up in P7 KO, CM2 (G1)"), 8, 5.5))
+  step("fg-enr-gsea", "07", "four-group GSEA, P7 KO vs WT",
+       fig("fg-enr-gsea", local({
+         ct <- fg_ct("P7_KO_vs_WT")
+         gsea_barplot_gg(fg_enr_df("gsea", "CM2", "P7_KO_vs_WT", "G1"),
+                         "GSEA — P7 KO vs WT, CM2 (G1)",
+                         up_lab = ct$pos, down_lab = ct$neg)
+       }), 8, 5.5))
   step("tbl-fg-audit", "07", "enrichment coverage audit",
        frag("tbl-fg-audit", local({
          a <- FGE$audit

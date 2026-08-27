@@ -2,16 +2,16 @@
 
 | table | genes kept | confounder rows |
 | :--- | ---: | ---: |
-| P0_Cardiomyocyte | 23,649 | 7 |
-| P0_Endothelial | 18,387 | 7 |
-| P0_Fibroblast | 17,114 | 7 |
-| P0_Immune_Myeloid | 10,821 | 5 |
-| P0_Mural_Pericyte | 13,250 | 5 |
-| P0_RBC | 11,507 | 6 |
-| P7_Cardiomyocyte | 23,003 | 7 |
-| P7_Endothelial | 16,922 | 7 |
-| P7_Fibroblast | 14,940 | 7 |
-| P7_Immune_Myeloid | 11,111 | 6 |
-| P7_Mural_Pericyte | 12,173 | 6 |
+| P0_Cardiomyocyte | 24,642 | 7 |
+| P0_Endothelial | 19,342 | 7 |
+| P0_Fibroblast | 17,844 | 7 |
+| P0_Immune_Myeloid | 11,606 | 5 |
+| P0_Mural_Pericyte | 13,831 | 6 |
+| P0_RBC | 12,109 | 6 |
+| P7_Cardiomyocyte | 23,991 | 7 |
+| P7_Endothelial | 17,631 | 7 |
+| P7_Fibroblast | 15,601 | 7 |
+| P7_Immune_Myeloid | 11,639 | 6 |
+| P7_Mural_Pericyte | 12,790 | 6 |
 
 : Every precomputed cell-type DE table in the bundle. {tbl-colwidths="auto"}
