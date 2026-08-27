@@ -1,0 +1,9 @@
+"subcluster","n_cells","n_KO_samp","n_WT_samp","design","status","n_DE_absLFC_gt1","top_KO_up","top_KO_down"
+"CM0",17485,4,4,"~timepoint + condition","ok",206,"Gm29650,Gm28615,Gas2l2,Gabbr2,Tcf4,Rbp2","Gm27733,E130008D07Rik,Ern2,2310015A16Rik,Tmem163,Lrrc10b"
+"CM1",15100,4,4,"~timepoint + condition","ok",217,"Gm29650,Gabbr2,Tcf4,Adamts9,Gm10640,Ralyl","2310015K22Rik,Fndc9,Gm11961,2310015A16Rik,Gm9009,Gm21586"
+"CM2",6347,4,4,"~timepoint + condition","ok",242,"Gabbr2,Gm29650,Gm10640,Tcf4,Camk2n2,Tmem215","Chac1,Ighm,2310015A16Rik,Csta2,Tmem163,Nptx2"
+"CM3",1287,4,4,"~timepoint + condition","ok",82,"Cntn2,Gabbr2,Cd74,Ahsg,Cytl1,Tagln","Ifitm6,Clec7a,C5ar1,Itgb2,S100a9,Lilrb4a"
+"CM4",1210,4,4,"~timepoint + condition","ok",60,"Gabbr2,Tcf4,Adamts9,Ralyl,Caln1,Gm12381","Psmb8,Nptx2,4933428C19Rik,Nr4a3,Itgb6,Aox4"
+"CM5",584,4,3,"~timepoint + condition","ok",41,"Gabbr2,Tcf4,Adamts9,4833412C05Rik,Gm40318,Ralyl","Sec1,Dock9,Dcpp2,Gm31045,Mettl18,Scn4b"
+"CM6",304,2,2,"~condition","ok",215,"Gabbr2,Tcf4,Gm11290,Ddit4l,Dpy19l2,Rtn1","Bmp10,Smim41,Cdh20,Gm34544,Fbxo33,Smoc2"
+"CM7",99,0,1,NA,"skipped_too_few_or_unbalanced",NA,NA,NA

@@ -1,0 +1,8 @@
+"celltype","recall","n_test"
+"Cardiomyocyte",0.995,4205
+"Endothelial",0.974,608
+"Epicardial",0.867,15
+"Fibroblast",0.998,652
+"Immune_Myeloid",0.97,100
+"Mural_Pericyte",0.965,200
+"RBC",0.63,54

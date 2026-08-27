@@ -1,0 +1,17 @@
+num_input_reads,299644278
+num_reads_above_min_length,290796681
+num_barcoded_reads,265037895
+num_mapped_reads,240265028
+num_mapped_reads_in_cells,162306091
+mapping_pct_txome,90.65
+mapping_pct_genome,8.28
+num_cell_barcodes,7065
+mean_reads_per_cell,42412
+reads_in_cells_pct,59.39
+duplication_rate,1.853
+sequencing_saturation,46.03
+total_transcripts_in_cells,87596799
+median_transcripts_in_cells,10949
+num_genes_expressed_in_cells,30979
+median_genes_in_cells,3178
+pct_mito_in_cells,9.97

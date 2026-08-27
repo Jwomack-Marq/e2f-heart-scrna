@@ -1,0 +1,315 @@
+---
+title: "scRNA-seq analysis for mouse heart samples"
+output: html_document
+date: "2025-04-25"
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+options(future.globals.maxSize = 3*1024^3)   # 3 GiB cap: enough for SCTransform, but a SAFETY BRAKE
+                                             # so a runaway step errors instead of exhausting RAM. Do NOT set to Inf.
+library(Seurat)
+library(SeuratObject)
+# packageVersion("Seurat")
+library(dplyr)
+library(tibble)
+library(patchwork)
+library(dittoSeq)
+library(clusterProfiler)
+library(org.Mm.eg.db)
+library(enrichplot)        # treeplot, pairwise_termsim (GO block, parity with P0)
+library(EnhancedVolcano)
+library(DT)                # datatable()
+# MAESTRO is optional (cell-type annotation only); guarded so this runs without it.
+have.maestro <- requireNamespace("MAESTRO", quietly = TRUE)
+if (have.maestro) suppressMessages(library(MAESTRO))
+## parameters
+timestage <- "P7"
+# Output root for derived files (processing/ + results/). The runner sets
+# SCRNA_OUT_DIR="." so outputs land in our_analysis/. Defaults to ".".
+out.dir <- Sys.getenv("SCRNA_OUT_DIR", unset = ".")
+# Portable working directory: when knitting, this chunk runs in 03_condition_merge/,
+# so ".." is the our_analysis root that holds processing/ and results/.
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+
+seurat.KO <- readRDS(file.path(out.dir, "processing", paste0("merge.lanes.", timestage, "KO.rds")))
+seurat.WT <- readRDS(file.path(out.dir, "processing", paste0("merge.lanes.", timestage, "WT.rds")))
+
+seurat.KO$orig.ident <- paste0(timestage, "KO")
+seurat.WT$orig.ident <- paste0(timestage, "WT")
+
+```
+
+## Merging seurat obj
+
+```{r}
+merge.scRNA <- merge(x = seurat.KO, y=seurat.WT, add.cell.ids = c("KO", "WT"), project = "Han_scRNA")
+# v5: rejoin the per-sample count layers created by merge() (no-op on v4).
+if (utils::packageVersion("SeuratObject") >= "5.0.0") merge.scRNA <- JoinLayers(merge.scRNA)
+merge.scRNA$orig.ident <- factor(merge.scRNA$orig.ident)
+
+head(merge.scRNA@meta.data)
+
+VlnPlot(merge.scRNA, features = "nFeature_RNA", split.by = "orig.ident")
+VlnPlot(merge.scRNA, features = "nCount_RNA", split.by = "orig.ident")
+
+```
+
+```{r}
+merge.scRNA <- SCTransform(merge.scRNA, method = "glmGamPoi", verbose = F, conserve.memory = T)
+
+
+# resolution = 0.8
+merge.scRNA <- RunPCA(merge.scRNA, verbose = F) %>% 
+  FindNeighbors(dims= 1:30) %>%
+  FindClusters() %>% 
+  RunUMAP(reduction = "pca", dims = 1:30) 
+
+
+```
+
+
+
+```{r, fig.width=12, fig.height=6}
+DimPlot(merge.scRNA, group.by = "orig.ident")
+DimPlot(merge.scRNA, group.by = "seurat_clusters")
+# Lane-effect / batch check: if clusters separate by lane here, the lanes need
+# integration (e.g. Harmony) rather than a plain merge() -- see README phase 2.
+if (!is.null(merge.scRNA$lane)) DimPlot(merge.scRNA, group.by = "lane")
+dittoDimPlot(merge.scRNA,var="orig.ident", split.by = "orig.ident")
+dittoDimPlot(merge.scRNA,var="seurat_clusters", split.by = "orig.ident")
+```
+
+## DEG
+
+```{r, fig.width=12, fig.height=6}
+merge.scRNA <- PrepSCTFindMarkers(merge.scRNA)
+merge.scRNA <- SetIdent(merge.scRNA, value = "seurat_clusters")
+
+all.markers <- FindAllMarkers(merge.scRNA, verbose = F)
+all.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+
+top30 <- all.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+DoHeatmap(merge.scRNA, features = top30$gene) + NoLegend()
+```
+
+## Cell type annotation
+
+
+```{r, fig.width=12, fig.height=6}
+if (have.maestro) {
+  data(mouse.all.droplet.TabulaMuris)
+  sig.mouse.heart <- mouse.all.droplet.TabulaMuris[grep("\\(Heart_and_Aorta\\)", mouse.all.droplet.TabulaMuris$cluster) ,]
+  sig.mouse.heart$cluster <- gsub("\\(Heart_and_Aorta\\)", "", sig.mouse.heart$cluster)
+  anno.markers <- all.markers
+  rownames(anno.markers) <- NULL
+  colnames(anno.markers) <- c("p_val","avg_logFC","pct.1","pct.2","p_val_adj","cluster","gene")
+
+  merge.scRNA <- RNAAnnotateCelltype(RNA= merge.scRNA, genes = anno.markers,
+                                      signatures = sig.mouse.heart)
+
+  print(table(merge.scRNA$assign.ident))
+  DimPlot(merge.scRNA, group.by = "assign.ident", label = T)
+} else {
+  message("MAESTRO not installed -- skipping annotation; cardiomyocytes will be selected by markers below.")
+}
+```
+
+
+## Cell cycle scoring
+
+**Phases**: 
+
+*G1*: Gap 1 phase represents the beginning of interphase. During G1 there is growth of the non-chromosomal components of the cells. From this phase, the cell may enter G0 or S phase.
+
+*S*: Synthesis phase for the replication of the chromosomes (also part of interphase).
+
+*G2*: Gap 2 phase represents the end of interphase, prior to entering the mitotic phase. During this phase th cell grows in preparation for mitosis and the spindle forms.
+
+*M*: M phase is the nuclear division of the cell (consisting of prophase, metaphase, anaphase and telophase).
+
+
+```{r}
+# Cell-cycle gene lists from Seurat's built-in human set, mapped to mouse
+# orthologs. Prefer a real ortholog table (babelgene); fall back to title-casing
+# only if the package isn't installed. This removes the dependency on the
+# external Mus_musculus.csv that the original analysis used.
+to_mouse <- function(genes) {
+  if (requireNamespace("babelgene", quietly = TRUE)) {
+    o <- babelgene::orthologs(genes = genes, species = "mouse", human = TRUE)
+    unique(o$symbol)
+  } else {
+    message("Package 'babelgene' not installed; using title-case approximation for mouse symbols.")
+    paste0(substr(genes, 1, 1), tolower(substr(genes, 2, nchar(genes))))
+  }
+}
+s.genes   <- sort(to_mouse(cc.genes.updated.2019$s.genes))
+g2m.genes <- sort(to_mouse(cc.genes.updated.2019$g2m.genes))
+
+# --- Original approach (re-enable if you have the Mus_musculus.csv file) ---
+# phase.genes <- read.csv("scripts/Mus_musculus.csv")
+# s.genesID <- phase.genes %>% filter(phase == "S") %>% pull(geneID)
+# s.genes   <- bitr(s.genesID, fromType = "ENSEMBL", toType = "SYMBOL", OrgDb = org.Mm.eg.db) %>% pull(SYMBOL) %>% sort()
+# g2m.genesID <- phase.genes %>% filter(phase == "G2/M") %>% pull(geneID)
+# g2m.genes   <- bitr(g2m.genesID, fromType = "ENSEMBL", toType = "SYMBOL", OrgDb = org.Mm.eg.db) %>% pull(SYMBOL) %>% sort()
+
+list("S.genes" = s.genes, "G2M.genes" = g2m.genes)
+```
+
+
+
+```{r,  fig.width=12, fig.height=10}
+merge.scRNA <- CellCycleScoring(merge.scRNA, s.features = s.genes, 
+                                      g2m.features = g2m.genes, set.ident = TRUE)
+
+merge.scRNA <- SetIdent(merge.scRNA, value="seurat_clusters")
+RidgePlot(merge.scRNA, features = c("S.Score", "G2M.Score"), ncol = 2)
+```
+
+```{r}
+saveRDS(merge.scRNA, file = file.path(out.dir, "processing", paste0("seurat.", timestage, ".merge.rds")))
+# merge.scRNA <- readRDS(file.path(out.dir, "processing", "seurat.P7.merge.rds"))
+```
+
+
+## Subset cardiac cells
+
+Cardiomyocytes are selected by **cell-type annotation / canonical markers** so
+the selection is reproducible. (The original code drew a fixed circle on the
+UMAP — within radius 9 of point (4,0) — which silently selects the wrong cells
+once re-clustering shifts the embedding.)
+
+```{r, fig.width=12, fig.height=8}
+# Primary: cells annotated as cardiomyocyte/cardiac muscle by RNAAnnotateCelltype.
+cm.pattern <- "cardiac|myocyte|cardiomyocyte"
+# Seurat v5 errors on $ access to a missing meta column (v4 returned NULL), and
+# assign.ident only exists when MAESTRO ran. Guard it so we fall through to the
+# marker-score fallback below when annotation is absent (the MAESTRO-skip path).
+is.cardiac <- if ("assign.ident" %in% colnames(merge.scRNA@meta.data)) {
+  grepl(cm.pattern, merge.scRNA$assign.ident, ignore.case = TRUE)
+} else {
+  rep(FALSE, ncol(merge.scRNA))
+}
+
+# Fallback: if annotation labels don't match, score canonical CM markers and
+# keep the top-scoring clusters.
+cm.markers <- intersect(c("Tnnt2", "Myh6", "Actc1", "Nppa", "Myh7", "Ttn"),
+                        rownames(merge.scRNA))
+if (sum(is.cardiac) < 50) {
+  message("Annotation-based cardiomyocyte selection sparse; using marker score fallback.")
+  merge.scRNA <- AddModuleScore(merge.scRNA, features = list(cm.markers), name = "CMscore")
+  cl.score <- tapply(merge.scRNA$CMscore1, merge.scRNA$seurat_clusters, median)
+  cm.clusters <- names(cl.score)[cl.score > quantile(cl.score, 0.75, na.rm = TRUE)]
+  is.cardiac <- merge.scRNA$seurat_clusters %in% cm.clusters
+}
+cells.select <- colnames(merge.scRNA)[is.cardiac]
+DimPlot(merge.scRNA, cells.highlight = cells.select)
+
+cardiac.cells <- merge.scRNA[, cells.select]
+cardiac.cells <- SetIdent(cardiac.cells, value = "orig.ident")
+
+cat(sprintf("Selected %d cardiomyocytes (%.1f%% of cells)\n",
+            length(cells.select), 100 * length(cells.select) / ncol(merge.scRNA)))
+
+# EXPLORATORY ONLY: single-cell Wilcoxon (pseudoreplication) -- not a valid
+# condition-level test. Use the pseudobulk results below for inference.
+cardiac.cells <- PrepSCTFindMarkers(cardiac.cells)
+markers.2cond <- FindMarkers(cardiac.cells, ident.1 = "P7KO", ident.2 = "P7WT")
+DT::datatable(markers.2cond)
+
+
+EnhancedVolcano(markers.2cond,
+                lab = rownames(markers.2cond),
+                x = 'avg_log2FC',
+                y = 'p_val_adj',
+                ylim = c(0, 100),
+                xlab = bquote(~Log[2]~ 'fold change'),
+                ylab = bquote(~-Log[10]~ 'FDR'),
+                pCutoff = 0.01,
+                FCcutoff = 2,
+                pointSize = 2.0,
+                labSize = 3.0,
+                labCol = 'black',
+                labFace = 'bold',
+                boxedLabels = FALSE,
+                colAlpha = 0.5,
+                legendPosition = 'right',
+                legendLabSize = 10,
+                legendIconSize = 4.0,
+                drawConnectors = TRUE,
+                widthConnectors = 0.2,
+                colConnectors = 'black')  +
+  theme(axis.text.x=element_text(size=10,face="bold"), axis.text.y=element_text(size=10,face="bold"), axis.title=element_text(size=12,face="bold"))
+```
+
+## Pseudobulk DE (recommended for KO vs WT)
+
+```{r pseudobulk-DE, fig.width=10, fig.height=8}
+## Aggregate raw counts per replicate, then test with DESeq2. This is the
+## statistically appropriate way to compare conditions.
+## VALID ONLY if lane1 and lane6 are DIFFERENT animals (biological replicates).
+## If both lanes are the same animal, n=1 per condition and these p-values are
+## not interpretable -- confirm the replicate structure with the lab first.
+suppressMessages(library(DESeq2))
+
+if (!is.null(cardiac.cells$lane)) {
+  cardiac.cells$pb.sample <- paste(cardiac.cells$orig.ident, cardiac.cells$lane, sep = "_")
+  pb <- AggregateExpression(cardiac.cells, assays = "RNA", group.by = "pb.sample",
+                            slot = "counts")$RNA
+  # AggregateExpression (Seurat v5) rewrites "_" in group names to "-", so strip a
+  # "-lane#" OR "_lane#" suffix to recover the condition (e.g. P7WT-lane1 -> P7WT).
+  coldata <- data.frame(sample = colnames(pb),
+                        condition = sub("[-_]lane[0-9]+$", "", colnames(pb)))
+  rownames(coldata) <- coldata$sample   # DESeq2 requires colData rows to match count cols
+  coldata$condition <- relevel(factor(coldata$condition), ref = paste0(timestage, "WT"))
+
+  if (length(unique(coldata$condition)) == 2 && all(table(coldata$condition) >= 2)) {
+    dds <- DESeqDataSetFromMatrix(round(as.matrix(pb)), colData = coldata, design = ~ condition)
+    dds <- dds[rowSums(counts(dds)) >= 10, ]
+    dds <- DESeq(dds)
+    res.pb <- as.data.frame(results(dds))
+    res.pb <- res.pb[order(res.pb$padj), ]
+    write.csv(res.pb, file = file.path(out.dir, "results/markers", paste0(timestage, ".cardiac.pseudobulk.DESeq2.csv")))
+    DT::datatable(head(res.pb, 200))
+    EnhancedVolcano(res.pb, lab = rownames(res.pb),
+                    x = "log2FoldChange", y = "padj",
+                    pCutoff = 0.05, FCcutoff = 1,
+                    title = paste0(timestage, " KO vs WT (cardiac, pseudobulk)"))
+  } else {
+    message("Pseudobulk needs >= 2 replicates per condition; use the exploratory Wilcoxon above only.")
+  }
+} else {
+  message("No `lane` metadata -- re-run the updated scRNA_lane_merge.Rmd to enable pseudobulk DE.")
+}
+```
+
+## GO enrichment (parity with P0; exploratory, on the pseudoreplication markers)
+
+```{r, fig.width=12, fig.height=6}
+pos.markers <- markers.2cond %>% filter(avg_log2FC > 1, p_val < 0.01) %>% rownames()
+GO.res <- enrichGO(pos.markers, OrgDb = "org.Mm.eg.db", keyType = "SYMBOL", ont = "BP",
+                   pvalueCutoff = 0.05, qvalueCutoff = 0.2, readable=T)
+# enrichGO can return NULL or zero *significantly* enriched terms; pairwise_termsim/
+# treeplot/barplot error on an empty result, so guard the whole block (note:
+# nrow(GO.res@result) counts ALL tested terms -- use as.data.frame() for significant).
+n.sig <- tryCatch(nrow(as.data.frame(GO.res)), error = function(e) 0L)
+if (!is.null(GO.res) && isTRUE(n.sig >= 1)) {
+  tryCatch({
+    write.csv(as.data.frame(GO.res), file = file.path(out.dir, "results/markers",
+              paste0(timestage, ".cardiac.exploratory.GO_BP.csv")))
+    GO.res <- pairwise_termsim(GO.res, method = "JC")
+    if (n.sig >= 5) print(treeplot(GO.res))
+    print(mutate(GO.res, qscore = -log(p.adjust, base=10)) %>% barplot(x="qscore"))
+    datatable(GO.res@result, extensions="Buttons",
+              options = list(dom="Blfrtip", buttons=c("copy","csv","excel","pdf","print")))
+  }, error = function(e) message("GO plotting skipped: ", conditionMessage(e)))
+} else {
+  message(sprintf("enrichGO found %s significantly enriched GO BP terms; skipping GO plots/CSV.",
+                  ifelse(is.na(n.sig), 0L, n.sig)))
+}
+```
+
+

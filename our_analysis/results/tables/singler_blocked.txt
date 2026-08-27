@@ -1,0 +1,1 @@
+celldex/SingleR unavailable (ExperimentHub/alabaster dependency stack failed to install). SingleR annotation skipped; our marker-based annotation (annotate.R) is the fallback and is heart-appropriate (celldex MouseRNAseqData is a coarse bulk reference).

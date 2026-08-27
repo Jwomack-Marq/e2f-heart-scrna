@@ -1,0 +1,8 @@
+"","Cardiomyocyte","Endothelial","Epicardial","Fibroblast","Immune_Myeloid","Mural_Pericyte","RBC"
+"Cardiomyocyte",4185,12,2,0,1,0,5
+"Endothelial",16,592,0,0,0,0,0
+"Epicardial",2,0,13,0,0,0,0
+"Fibroblast",0,1,0,651,0,0,0
+"Immune_Myeloid",2,0,0,0,97,0,1
+"Mural_Pericyte",1,0,0,6,0,193,0
+"RBC",20,0,0,0,0,0,34
