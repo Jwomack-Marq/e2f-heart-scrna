@@ -984,6 +984,16 @@ fg_ok <- function() validate(need(!is.null(FG), FG_MSG))
 # which is the same KO-vs-WT question POOLED across P0 and P7 -- that pooled
 # version cannot answer "what changes in the KO at P7", which is what was asked.
 FGE     <- app$enrich$fourgroup     # may be NULL on a bundle built before this
+# ---- linked precomputed results (build_linked_results.R) ---------------------
+# Results the upstream pipeline already computed, carried into the bundle rather than
+# re-approximated in the app. Two of these supersede work the app does by hand: the
+# CellChat run has permutation tests where the curated ligand score has none, and
+# propeller tests abundance where the Composition tab only draws proportions.
+LK      <- app$linked
+LKM     <- app$linked_manifest
+LK_MSG  <- paste("Linked upstream results aren't in this data build —",
+                 "run build_linked_results.R and redeploy.")
+
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
                  "run build_fourgroup_enrichment.R and redeploy.")
 fg_enr_ok <- function() validate(need(!is.null(FGE) && !is.null(FGE$go), FGE_MSG))
@@ -3012,6 +3022,21 @@ ui <- page_navbar(
         uiOutput("gm_geneinfo"),
         uiOutput("gm_method")))))),
 
+  nav_panel("Precomputed results", layout_sidebar(
+    sidebar = sidebar(width = 340,
+      helpText(strong("Computed upstream, linked here."), br(),
+               "Results the analysis pipeline already produced. Reading them costs the app",
+               "nothing, and several are stronger than what the app computes on the fly."),
+      selectInput("lk_group", "Category", choices = NULL),
+      selectInput("lk_table", "Result", choices = NULL),
+      hr(),
+      dl_data_ui("lk_tab"),
+      uiOutput("lk_source")),
+    card(card_header(textOutput("lk_label")),
+         uiOutput("lk_note"),
+         DTOutput("lk_tab"))
+  )),
+
   nav_spacer(),
   nav_menu("Help",
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
@@ -4837,7 +4862,41 @@ server <- function(input, output, session) {
   # column-subsetting -- someone taking data away wants the columns, not the
   # eight that fitted on screen. `base` may be a function when the filename
   # should carry the current selection.
+  # ---- Precomputed results (app$linked, from build_linked_results.R) ----
+  observe({
+    validate(need(!is.null(LKM), LK_MSG))
+    updateSelectInput(session, "lk_group", choices = unique(LKM$group))
+  })
+  observeEvent(input$lk_group, {
+    req(LKM, input$lk_group)
+    m <- LKM[LKM$group == input$lk_group, , drop = FALSE]
+    updateSelectInput(session, "lk_table", choices = setNames(m$key, m$label))
+  }, ignoreNULL = TRUE)
+  lk_row <- reactive({
+    validate(need(!is.null(LKM), LK_MSG)); req(input$lk_table)
+    r <- LKM[LKM$key == input$lk_table, , drop = FALSE]
+    validate(need(nrow(r), "Pick a result.")); as.list(r[1, ])
+  })
+  lk_df <- reactive({
+    validate(need(!is.null(LK), LK_MSG)); req(input$lk_table)
+    d <- LK[[input$lk_table]]
+    validate(need(!is.null(d) && nrow(d), "That result is not in this data build."))
+    d
+  })
+  output$lk_label  <- renderText(lk_row()$label)
+  output$lk_note   <- renderUI(div(style = "font-size:13px;color:#555;margin-bottom:8px",
+                                   lk_row()$note))
+  output$lk_source <- renderUI({ r <- try(lk_row(), silent = TRUE)
+    if (inherits(r, "try-error")) return(NULL)
+    helpText(style = "font-size:11px",
+             sprintf("%s rows · source: our_analysis/results/%s",
+                     format(r$rows, big.mark = ","), r$source)) })
+  output$lk_tab <- renderDT(enr_dt(lk_df(), scroll = "560px"))
+
   TABLE_DL <- list(
+    # Precomputed upstream results
+    list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
+         df = function() lk_df()),
     # Differential expression
     list(id = "ct_table", base = function() paste0("DE_", input$ct_tp, "_", input$ct_sel),
          df = function() drop_conf(ct_d(), input$ct_hideconf)),
