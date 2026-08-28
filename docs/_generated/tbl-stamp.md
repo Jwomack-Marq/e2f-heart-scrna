@@ -14,6 +14,6 @@
 | four-group DE tables (broad) | 77 |
 | four-group DE tables (curated) | 89 |
 | gene-map genes | 11,047 |
-| exported | 2026-08-27 |
+| exported | 2026-08-28 |
 
 : What the figures and tables in this book were generated from. {tbl-colwidths="auto"}
