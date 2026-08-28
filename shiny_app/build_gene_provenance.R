@@ -60,7 +60,43 @@ app <- readRDS("app_data.rds")
 cat("Backing up -> app_data.pre_genesets.bak.rds\n")
 saveRDS(app, "app_data.pre_genesets.bak.rds", compress = "gzip")
 
+# Benchmark: how far our hand panels agree with a published, versioned counterpart.
+# Optional -- the tab degrades to registry-only if the benchmark has not been run.
+fb <- file.path(TABLES, "gene_set_benchmark.csv")
+bench <- if (file.exists(fb)) read.csv(fb, stringsAsFactors = FALSE, check.names = FALSE) else NULL
+if (!is.null(bench)) {
+  prim <- bench[bench$match == "primary" & !is.na(bench$pct_ours_covered), ]
+  cat(sprintf("  benchmark: %d panels, median %.0f%% of our genes covered; %d unanchored\n",
+              nrow(prim), median(prim$pct_ours_covered), sum(bench$reference == "(none found)")))
+}
+
+# Verified references. Every entry here was checked against the actual record -- these are
+# NOT suggested-from-memory citations, which in this domain is how a plausible-looking but
+# non-existent paper ends up in a methods section.
+REFS <- data.frame(
+  topic = c("CM maturation", "CM cell-cycle exit", "Cell-cycle S / G2M",
+            "Metabolic panels", "Metabolic panels"),
+  reference = c(
+    "Uosaki H et al. Transcriptional Landscape of Cardiomyocyte Maturation. Cell Reports 2015;13(8):1705-1716.",
+    "Mahmoud AI et al. Meis1 regulates postnatal cardiomyocyte cell cycle arrest. Nature 2013;497(7448):249-253.",
+    "Tirosh I et al. 2016, as shipped in Seurat::cc.genes.updated.2019 (2019 update).",
+    "MSigDB Hallmark, via msigdbr.",
+    "MSigDB KEGG_LEGACY (C2:CP), via msigdbr."),
+  link = c("https://doi.org/10.1016/j.celrep.2015.10.032",
+           "https://pmc.ncbi.nlm.nih.gov/articles/PMC4159712/",
+           "https://satijalab.org/seurat/",
+           "https://www.gsea-msigdb.org/gsea/msigdb/",
+           "https://www.gsea-msigdb.org/gsea/msigdb/"),
+  relevance = c(
+    "The canonical maturation transcriptional atlas (>200 arrays, embryonic to adult). We do NOT use its gene list -- our mature/immature panels were written independently and have no external anchor. This is the reference to reconcile them against.",
+    "Establishes the postnatal proliferative window closing at P7 and Meis1 driving arrest via p15/p16/p21 -- the same biology, and the same timepoints, as this study. Supports Meis1 and the Cdkn genes in the ccexit panel.",
+    "Source of the S and G2M lists. Human symbols mapped to mouse by babelgene, which loses genes.",
+    "Reference for prolif, ccexit and E2F targets in the benchmark. Hallmark sets are co-expression-derived, not pathway membership.",
+    "Reference for the glycolysis and FAO panels. Membership-curated, and the fairer yardstick for a metabolic panel than Hallmark."),
+  stringsAsFactors = FALSE)
+
 app$genesets <- list(
+  benchmark = bench, refs = REFS,
   registry = reg, drift = drift, n_ext = n_ext, n_hand = n_hand, n_drift = n_drift,
   headline = paste0(
     "Of the ", nrow(reg), " gene sets this project uses, ", n_ext, " are fetched from an ",
@@ -69,6 +105,13 @@ app$genesets <- list(
     "are standard markers, but the selections cannot be traced to a published list or ",
     "version-checked, and that applies to the maturation, metabolic and E2F-target panels ",
     "behind the scores in this app."),
+  bench_note = paste(
+    "There is no ground truth for a marker panel, so \"is it right\" is not directly",
+    "askable. What is askable: for each panel with a published counterpart, how much do",
+    "they agree, and which genes are choices nobody else made? Read a low overlap in both",
+    "directions -- HALLMARK_GLYCOLYSIS omits Gapdh, Hk1, Pfkm, Pfkl and Slc2a1, so scoring",
+    "our panel against it would penalise it for being MORE canonical. Against KEGG, which",
+    "curates by pathway membership, the same panel is 10/11."),
   caveats = c(
     "E2F targets is heavily cell-cycle weighted, so a high E2F-target score in a cycling cell is close to tautological.",
     "sig_maturation's immature side contains Ccnd1, Mki67 and Top2a, so it is partly a cell-cycle score; sig_maturation_nocc drops those and is the one to use when the argument involves cycling.",

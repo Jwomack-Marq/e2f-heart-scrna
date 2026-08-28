@@ -3146,9 +3146,15 @@ ui <- page_navbar(
     card(card_header("Gene sets and their provenance"),
          uiOutput("gsp_headline"),
          uiOutput("gsp_drift"),
-         DTOutput("gsp_tab"),
-         div(style = "margin-top:10px", uiOutput("gsp_caveats")))
-  )),
+         navset_card_tab(id = "gsp_tabs",
+           nav_panel("Registry", value = "reg",
+             DTOutput("gsp_tab"),
+             div(style = "margin-top:10px", uiOutput("gsp_caveats"))),
+           nav_panel("Benchmark vs published sets", value = "bench",
+             uiOutput("gsp_bench_note"),
+             DTOutput("gsp_bench")),
+           nav_panel("References", value = "refs",
+             uiOutput("gsp_refs")))))),
 
   nav_spacer(),
   nav_menu("Help",
@@ -3704,6 +3710,38 @@ server <- function(input, output, session) {
     div(style = "font-size:12px;color:#555",
         tags$b("Things to know before quoting a score built on these:"),
         tags$ul(lapply(GSP$caveats, tags$li)))
+  })
+  output$gsp_bench_note <- renderUI({
+    gsp_ok()
+    validate(need(!is.null(GSP$benchmark),
+                  "Benchmark not in this data build — run our_analysis/05_analyses/gene_set_benchmark.R, then build_gene_provenance.R."))
+    n_un <- sum(GSP$benchmark$reference == "(none found)")
+    tagList(
+      div(class = "alert alert-secondary", style = "font-size:12px", GSP$bench_note),
+      if (n_un > 0) div(class = "alert alert-danger", style = "font-size:12px",
+        HTML(paste0("<b>", n_un, " panel(s) have no published counterpart at all.</b> ",
+                    "The CM maturation panels are the important case: the maturation score ",
+                    "in this app rests on a list with no external anchor. Uosaki et al. 2015 ",
+                    "(References tab) is the atlas to reconcile them against."))))
+  })
+  gsp_bench_df <- reactive({
+    gsp_ok(); validate(need(!is.null(GSP$benchmark), "Benchmark not in this data build."))
+    GSP$benchmark
+  })
+  output$gsp_bench <- renderDT(enr_dt(gsp_bench_df(), scroll = "420px"))
+  output$gsp_refs <- renderUI({
+    gsp_ok()
+    validate(need(!is.null(GSP$refs), "References not in this data build."))
+    r <- GSP$refs
+    div(style = "font-size:13px",
+      p(style = "color:#555",
+        "Checked against the actual record, not recalled. Where a panel has no entry here, ",
+        "it has no source \u2014 that is the finding, not an omission."),
+      tags$ul(lapply(seq_len(nrow(r)), function(i) tags$li(
+        style = "margin-bottom:9px",
+        tags$b(r$topic[i]), tags$br(),
+        tags$a(href = r$link[i], target = "_blank", rel = "noopener", r$reference[i]),
+        tags$br(), tags$span(style = "color:#555;font-size:12px", r$relevance[i])))))
   })
   cm_markerheat_p <- reactive({
     h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
@@ -5139,6 +5177,7 @@ server <- function(input, output, session) {
          df = function() pcd_df()),
     # Gene-set provenance
     list(id = "gsp_tab", base = "gene_set_provenance", df = function() gsp_df()),
+    list(id = "gsp_bench", base = "gene_set_benchmark", df = function() gsp_bench_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
          df = function() lk_df()),
