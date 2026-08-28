@@ -1051,6 +1051,16 @@ PCD_MSG <- paste("The PC-dimension sweep isn't in this data build —",
                  "then build_pcdims.R, and redeploy.")
 pcd_ok  <- function() validate(need(!is.null(PCD), PCD_MSG))
 
+# ---- gene-set provenance (build_gene_provenance.R) --------------------------
+# Every gene set this app scores or filters on, and where it came from. Most were typed
+# into a script here with no citation; that is worth stating on the page rather than
+# leaving a reader to assume the panels are pulled from somewhere.
+GSP     <- app$genesets
+GSP_MSG <- paste("The gene-set provenance audit isn't in this data build —",
+                 "run our_analysis/05_analyses/gene_set_provenance.R,",
+                 "then build_gene_provenance.R, and redeploy.")
+gsp_ok  <- function() validate(need(!is.null(GSP), GSP_MSG))
+
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
                  "run build_fourgroup_enrichment.R and redeploy.")
 fg_enr_ok <- function() validate(need(!is.null(FGE) && !is.null(FGE$go), FGE_MSG))
@@ -3125,6 +3135,21 @@ ui <- page_navbar(
          DTOutput("pcd_tab"))
   )),
 
+  nav_panel("Gene sets & sources", layout_sidebar(
+    sidebar = sidebar(width = 340,
+      helpText(strong("Where each gene list came from."), br(),
+               "Generated from the code itself, not retyped, so it cannot drift out of",
+               "step with the sets actually used."),
+      selectInput("gsp_type", "Source", choices = NULL),
+      textInput("gsp_find", "Find a gene", placeholder = "e.g. Myh6"),
+      hr(), dl_data_ui("gsp_tab"), uiOutput("gsp_counts")),
+    card(card_header("Gene sets and their provenance"),
+         uiOutput("gsp_headline"),
+         uiOutput("gsp_drift"),
+         DTOutput("gsp_tab"),
+         div(style = "margin-top:10px", uiOutput("gsp_caveats")))
+  )),
+
   nav_spacer(),
   nav_menu("Help",
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
@@ -3634,6 +3659,52 @@ server <- function(input, output, session) {
   output$pcd_note <- renderUI({ pcd_ok(); helpText(style = "font-size:11px", PCD$note) })
   pcd_df <- reactive({ pcd_g()$metrics })
   output$pcd_tab <- renderDT(enr_dt(pcd_df(), scroll = "300px"))
+
+  # ---- Gene sets & sources (app$genesets, from build_gene_provenance.R) ----
+  observe({
+    req(GSP)
+    updateSelectInput(session, "gsp_type",
+      choices = c("All sources" = "__all__", sort(unique(GSP$registry$source_type))))
+  })
+  output$gsp_headline <- renderUI({
+    gsp_ok()
+    div(class = "alert alert-warning", style = "font-size:13px", GSP$headline)
+  })
+  output$gsp_drift <- renderUI({
+    gsp_ok(); d <- GSP$drift
+    if (is.null(d) || !any(d$drifted))
+      return(div(class = "alert alert-success", style = "font-size:12px",
+                 "Duplicate-name check: every panel defined in more than one place holds the same genes."))
+    bad <- d[d$drifted, , drop = FALSE]
+    div(class = "alert alert-danger", style = "font-size:12px",
+        HTML(paste0("<b>", nrow(bad), " panel(s) share a name but not their genes</b> \u2014 ",
+                    "the same label means different things in different parts of this app.<ul>",
+                    paste0("<li><b>", bad$set_a, "</b> (", bad$n_a, " genes) vs <b>", bad$set_b,
+                           "</b> (", bad$n_b, " genes); only in the second: <code>",
+                           bad$only_in_b, "</code></li>", collapse = ""), "</ul>")))
+  })
+  gsp_df <- reactive({
+    gsp_ok(); d <- GSP$registry
+    if (!is.null(input$gsp_type) && input$gsp_type != "__all__")
+      d <- d[d$source_type == input$gsp_type, , drop = FALSE]
+    q <- trimws(input$gsp_find %||% "")
+    if (nzchar(q))    # word-boundary match so "Ckm" does not also hit "Ckmt2"
+      d <- d[grepl(paste0("(^|, )", q, "($|,)"), d$genes, ignore.case = TRUE), , drop = FALSE]
+    d
+  })
+  output$gsp_tab <- renderDT(enr_dt(gsp_df(), scroll = "420px"))
+  output$gsp_counts <- renderUI({
+    gsp_ok()
+    helpText(style = "font-size:11px",
+      HTML(sprintf("%d sets shown of %d<br>%d external database<br>%d hand-curated",
+                   nrow(gsp_df()), nrow(GSP$registry), GSP$n_ext, GSP$n_hand)))
+  })
+  output$gsp_caveats <- renderUI({
+    gsp_ok()
+    div(style = "font-size:12px;color:#555",
+        tags$b("Things to know before quoting a score built on these:"),
+        tags$ul(lapply(GSP$caveats, tags$li)))
+  })
   cm_markerheat_p <- reactive({
     h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
     long <- h$long; long$gene <- factor(long$gene, levels = rev(h$genes)); long$cluster <- factor(long$cluster, levels = h$clusters)
@@ -5066,6 +5137,8 @@ server <- function(input, output, session) {
     # PC-dimension sweep
     list(id = "pcd_tab", base = function() paste0("pcdims_", input$pcd_obj %||% "cm", "_comparison"),
          df = function() pcd_df()),
+    # Gene-set provenance
+    list(id = "gsp_tab", base = "gene_set_provenance", df = function() gsp_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
          df = function() lk_df()),
