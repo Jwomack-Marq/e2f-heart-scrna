@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+# Image for re-running a Seurat embedding (our_analysis/04_integrate_annotate/).
+#
+# Nothing else in this repo can do it. The app image carries no Seurat at all, and
+# docs/Dockerfile.export deliberately adds SeuratObject ONLY, because the book just
+# deserialises the original run's objects and never re-processes them. Recomputing an
+# embedding -- SCTransform -> PCA -> Harmony -> UMAP -> clusters -- needs the full
+# stack, so it gets its own image rather than bloating either of those.
+#
+# FROM e2f-enrich because it is already Ubuntu 24.04 / R 4.5.1 on the p3m.dev noble
+# BINARY mirror with Matrix, ggplot2, ragg and the Bioconductor plumbing in place.
+#
+# VERSION CAVEAT, and it matters for how results here may be read: the original
+# pipeline ran on Windows, R 4.5.2, with unpinned Seurat (00_DOCS/HANDOFF_setup_and_run.md).
+# This image will not reproduce those package versions. Comparisons BETWEEN runs made
+# inside this image are valid; a comparison against the shipped
+# processing/seurat.cm.subclustered.rds is confounded by package version and must be
+# reported as such.
+FROM e2f-enrich:latest
+
+# Seurat's compiled deps: RcppEigen/RcppAnnoy/uwot need no extra system libs beyond
+# what the base carries, but igraph (leiden clustering) wants glpk+gmp and spatstat
+# pulls in fftw. glpk/gmp are already in e2f-enrich; fftw is not.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libfftw3-dev libgsl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# CRAN side. p3m.dev serves noble binaries, so this is a download, not a build.
+# CRAN-latest is appended (not substituted) so anything the 2025-10-30 snapshot is
+# too old for still resolves, exactly as the base image does for yulab.utils.
+RUN R -q -e 'options(repos = c(getOption("repos"), CRAN = "https://cloud.r-project.org")); \
+      install.packages(c("Seurat","SeuratObject","harmony","clustree"), Ncpus = 4); \
+      miss <- setdiff(c("Seurat","SeuratObject","harmony","clustree"), rownames(installed.packages())); \
+      if (length(miss)) stop("CRAN install failed for: ", paste(miss, collapse = ", "))'
+
+# glmGamPoi is what SCTransform(method = "glmGamPoi") dispatches to, and it is the
+# method the production scripts use -- without it the call silently falls back to the
+# slower poisson fit and the residuals differ, which would quietly invalidate any
+# comparison against the production embedding.
+RUN R -q -e 'BiocManager::install("glmGamPoi", ask = FALSE, update = FALSE, Ncpus = 4); \
+      if (!"glmGamPoi" %in% rownames(installed.packages())) stop("glmGamPoi install failed")'
+
+# Fail the build now rather than 40 minutes into a run. The glmGamPoi check is a real
+# call, not a library() -- BiocManager only warns on failure, and a broken method
+# argument would not surface until SCTransform was already running.
+RUN R -q -e 'for (p in c("Seurat","SeuratObject","harmony","glmGamPoi","clustree","Matrix","ggplot2","patchwork")) { \
+        library(p, character.only = TRUE); cat("ok ", p, " ", as.character(packageVersion(p)), "\n", sep = "") }; \
+      set.seed(1); m <- matrix(rpois(4000, 5), nrow = 200, \
+                               dimnames = list(paste0("g", 1:200), paste0("c", 1:20))); \
+      f <- glmGamPoi::glm_gp(m, verbose = FALSE); \
+      cat("glmGamPoi fit ok: ", nrow(f$Beta), " genes\n", sep = "")'
+
+WORKDIR /work

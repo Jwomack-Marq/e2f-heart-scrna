@@ -82,6 +82,7 @@ our_analysis/results/models/
 our_analysis/results/tables/*descriptive.DE.csv
 our_analysis/results/tables/cm_subcluster_markers_res*.csv
 our_analysis/results/tables/pseudotime_per_cell.csv
+our_analysis/results/tables/cm_objectmode_percell.csv.gz
 our_analysis/results/tables/pathway_GO_BP_up_in_KO.csv
 our_analysis/results/tables/pathway_fgsea_hallmark_kegg_e2f.csv
 our_analysis/results/tables/tf_activity_by_celltype_genotype.csv

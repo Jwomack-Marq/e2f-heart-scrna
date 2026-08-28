@@ -569,6 +569,20 @@ umap_gg <- function(df, colvar, splitvar = NULL, gene = NULL, continuous = FALSE
   p
 }
 
+# Three-panel UMAP for the object-mode diagnostic. Not umap_gg(): its splitvar path
+# prefixes every facet with labof(splitvar), which reads badly when the facet IS the
+# variant name. theme_umap and disc_pal are reused so it matches the rest of the app.
+objtest_gg <- function(d, rc, pal_choice = "Default", psize = 0.35) {
+  lv <- sort(unique(suppressWarnings(as.integer(as.character(d[[rc]])))))
+  d$val   <- factor(paste0("CM", d[[rc]]), levels = paste0("CM", lv))
+  d$panel <- factor(unname(CMTEST$labels[d$variant]), levels = unname(CMTEST$labels))
+  ggplot(d, aes(UMAP1, UMAP2, color = val)) +
+    geom_point(size = psize, shape = 16) + theme_umap +
+    facet_wrap(~panel, nrow = 1) + labs(color = NULL) +
+    scale_color_manual(values = disc_pal(levels(d$val), pal_choice), drop = FALSE) +
+    guides(color = guide_legend(override.aes = list(size = 3)))
+}
+
 # ---- publication "Figure options": reusable control block + export wiring -------
 # emits a namespaced (prefix_*) control set; `export` picks the download UI (vector
 # ggsave for ggplot panels, camera-button PNG for the WebGL UMAP).
@@ -993,6 +1007,17 @@ LK      <- app$linked
 LKM     <- app$linked_manifest
 LK_MSG  <- paste("Linked upstream results aren't in this data build —",
                  "run build_linked_results.R and redeploy.")
+
+# ---- CM object-mode diagnostic (build_cm_objectmode.R) -----------------------
+# Review asked whether subsetting with comb[, celltype == "Cardiomyocyte"] leaves the
+# embedding contaminated by the whole-heart object because the subset was never made
+# standalone. cm_objectmode_check.R answers it by building the same cells three ways
+# and diffing the results; this carries the answer, not an argument about it.
+CMTEST     <- app$cmtest
+CMTEST_MSG <- paste("The object-mode diagnostic isn't in this data build —",
+                    "run our_analysis/04_integrate_annotate/cm_objectmode_check.R,",
+                    "then build_cm_objectmode.R, and redeploy.")
+cmtest_ok  <- function() validate(need(!is.null(CMTEST), CMTEST_MSG))
 
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
                  "run build_fourgroup_enrichment.R and redeploy.")
@@ -2488,6 +2513,10 @@ ui <- page_navbar(
                     "Timepoint (P0|P7)" = "timepoint", "Genotype × Timepoint" = "both")),
       conditionalPanel("input.cm_tabs == 'bars'",
         radioButtons("cm_bar_mode", "Y axis", c("Proportion" = "prop", "Count" = "count"), inline = TRUE)),
+      conditionalPanel("input.cm_tabs == 'objtest'",
+        selectInput("objtest_res", "Resolution", choices = NULL),
+        helpText(style = "font-size:12px",
+                 "Same cells, same pipeline, same seeds — only how the object was built differs.")),
       hr(), helpText("True re-clustering of cardiomyocytes. Explore subcluster identity,",
                      "differential expression per subcluster, and cell-cycle state.",
                      br(), br(),
@@ -2539,6 +2568,13 @@ ui <- page_navbar(
                  "each cluster's top identity GO term, top KO-vs-WT GSEA pathway, and top KO-up / KO-down genes — ",
                  "a quick read on what each subcluster is doing biologically."),
         dl_data_ui("cm_topmarkers"), DTOutput("cm_topmarkers")),
+      nav_panel("Object-mode test", value = "objtest",
+        uiOutput("objtest_verdict"),
+        dl_fig_ui("objtestmap", "Download figure (static)"),
+        plotOutput("objtest_map", height = "420px"),
+        div(style = "margin-top:10px", uiOutput("objtest_note")),
+        dl_data_ui("objtest_tab"),
+        DTOutput("objtest_tab")),
       nav_panel("Subcluster enrichment", value = "subenr",
         helpText("Per res-0.2 subcluster: identity markers and the differential signal, enriched. ",
                  "The ", strong("Comparison"), " dropdown switches between the pooled ",
@@ -3467,6 +3503,40 @@ server <- function(input, output, session) {
             psize = 5, labels = (cb == "subcluster"))
   })
   register_fig(output, "cmmap", cm_map_gg_p, input)
+
+  # ---- Object-mode test (app$cmtest, from build_cm_objectmode.R) ----
+  # Does the CM subset need to be its own object? Three builds of the same cells, the
+  # same pipeline and seeds on each, diffed. The verdict line states the answer; the
+  # table carries the numbers behind it.
+  observe({
+    req(CMTEST)
+    updateSelectInput(session, "objtest_res", choices = CMTEST$res,
+                      selected = if ("0.2" %in% CMTEST$res) "0.2" else CMTEST$res[1])
+  })
+  output$objtest_verdict <- renderUI({
+    cmtest_ok()
+    div(class = paste("alert", if (isTRUE(CMTEST$ab_same)) "alert-success" else "alert-warning"),
+        style = "font-size:13px", CMTEST$verdict)
+  })
+  objtest_map_p <- reactive({
+    cmtest_ok(); req(input$objtest_res)
+    rc <- paste0("SCT_snn_res.", input$objtest_res)
+    validate(need(rc %in% names(CMTEST$percell), "That resolution is not in this data build."))
+    objtest_gg(CMTEST$percell, rc)
+  })
+  output$objtest_map <- renderPlot(objtest_map_p())
+  register_fig(output, "objtestmap", objtest_map_p, input)
+  output$objtest_note <- renderUI({
+    cmtest_ok()
+    tagList(
+      div(style = "font-size:12px;color:#555",
+          tags$b("How each arm was built."),
+          tags$ul(style = "margin-bottom:4px", lapply(CMTEST$variants, function(v)
+            tags$li(tags$b(unname(CMTEST$labels[v])), " — ", unname(CMTEST$blurb[v]))))),
+      helpText(style = "font-size:11px", CMTEST$note))
+  })
+  objtest_df <- reactive({ cmtest_ok(); CMTEST$metrics })
+  output$objtest_tab <- renderDT(enr_dt(objtest_df(), scroll = "360px"))
   cm_markerheat_p <- reactive({
     h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
     long <- h$long; long$gene <- factor(long$gene, levels = rev(h$genes)); long$cluster <- factor(long$cluster, levels = h$clusters)
@@ -4894,6 +4964,8 @@ server <- function(input, output, session) {
   output$lk_tab <- renderDT(enr_dt(lk_df(), scroll = "560px"))
 
   TABLE_DL <- list(
+    # CM object-mode diagnostic
+    list(id = "objtest_tab", base = "cm_objectmode_comparison", df = function() objtest_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
          df = function() lk_df()),
