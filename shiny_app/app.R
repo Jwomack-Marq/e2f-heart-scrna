@@ -583,6 +583,28 @@ objtest_gg <- function(d, rc, pal_choice = "Default", psize = 0.35) {
     guides(color = guide_legend(override.aes = list(size = 3)))
 }
 
+# Faceted UMAP for the PC-dimension sweep. The facet strip carries the cumulative PCA
+# variance for each cut, because "dims 1:10" on its own does not tell you whether the
+# discarded components held anything.
+pcdims_gg <- function(g, colvar, pal_choice = "Default", psize = 0.3) {
+  d <- g$percell
+  d$val <- if (colvar == "cluster") {
+    lv <- sort(unique(suppressWarnings(as.integer(as.character(d$cluster)))))
+    factor(paste0(g$prefix, d$cluster), levels = paste0(g$prefix, lv))
+  } else factor(d[[colvar]])
+  # "of the top-50 PC variance", never "of PCA variance": Stdev() only returns the PCs
+  # that were computed, so the 50-PC figure is 100% by construction. Labelling it as a
+  # share of total variance would invite reading that as "50 PCs capture everything".
+  strip <- function(x) sprintf("dims 1:%d \u2014 %.1f%% of the top-50 PC variance",
+                               x, g$varpct[as.character(x)])
+  d$panel <- factor(strip(d$dims), levels = strip(g$dims))
+  ggplot(d, aes(UMAP1, UMAP2, color = val)) +
+    geom_point(size = psize, shape = 16) + theme_umap +
+    facet_wrap(~panel, nrow = 1) + labs(color = NULL) +
+    scale_color_manual(values = disc_pal(levels(d$val), pal_choice), drop = FALSE) +
+    guides(color = guide_legend(override.aes = list(size = 3)))
+}
+
 # ---- publication "Figure options": reusable control block + export wiring -------
 # emits a namespaced (prefix_*) control set; `export` picks the download UI (vector
 # ggsave for ggplot panels, camera-button PNG for the WebGL UMAP).
@@ -1018,6 +1040,16 @@ CMTEST_MSG <- paste("The object-mode diagnostic isn't in this data build —",
                     "run our_analysis/04_integrate_annotate/cm_objectmode_check.R,",
                     "then build_cm_objectmode.R, and redeploy.")
 cmtest_ok  <- function() validate(need(!is.null(CMTEST), CMTEST_MSG))
+
+# ---- PC-dimension sweep (build_pcdims.R) ------------------------------------
+# Both production embeddings carry dims 1:30 into FindNeighbors and RunUMAP with no
+# recorded justification -- docs/01-upstream.qmd lists the PC count as a parameter the
+# book cannot cite. This holds SCT/PCA/Harmony fixed and varies only that cut.
+PCD     <- app$pcdims
+PCD_MSG <- paste("The PC-dimension sweep isn't in this data build —",
+                 "run our_analysis/04_integrate_annotate/pcdims_sweep.R for each object,",
+                 "then build_pcdims.R, and redeploy.")
+pcd_ok  <- function() validate(need(!is.null(PCD), PCD_MSG))
 
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
                  "run build_fourgroup_enrichment.R and redeploy.")
@@ -3073,6 +3105,26 @@ ui <- page_navbar(
          DTOutput("lk_tab"))
   )),
 
+  nav_panel("PC dimensions", layout_sidebar(
+    sidebar = sidebar(width = 340,
+      helpText(strong("How many PCs should the UMAP use?"), br(),
+               "Both production embeddings use dims 1:30 and neither records why.",
+               "SCTransform, PCA and Harmony are identical across the three panels —",
+               "only the number of components carried into the neighbour graph and",
+               "UMAP changes."),
+      selectInput("pcd_obj", "Object", choices = NULL),
+      selectInput("pcd_col", "Colour by", choices = NULL),
+      hr(),
+      dl_fig_ui("pcdmap", "Download figure (static)"),
+      dl_data_ui("pcd_tab"),
+      uiOutput("pcd_var")),
+    card(card_header(textOutput("pcd_label")),
+         uiOutput("pcd_verdict"),
+         plotOutput("pcd_map", height = "430px"),
+         div(style = "margin-top:10px", uiOutput("pcd_note")),
+         DTOutput("pcd_tab"))
+  )),
+
   nav_spacer(),
   nav_menu("Help",
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
@@ -3537,6 +3589,51 @@ server <- function(input, output, session) {
   })
   objtest_df <- reactive({ cmtest_ok(); CMTEST$metrics })
   output$objtest_tab <- renderDT(enr_dt(objtest_df(), scroll = "360px"))
+
+  # ---- PC dimensions (app$pcdims, from build_pcdims.R) ----
+  observe({
+    req(PCD)
+    updateSelectInput(session, "pcd_obj",
+      choices = setNames(PCD$objects, vapply(PCD$objects, function(o) PCD[[o]]$label, "")))
+  })
+  pcd_g <- reactive({ pcd_ok(); req(input$pcd_obj)
+    g <- PCD[[input$pcd_obj]]; validate(need(!is.null(g), "That object is not in this build.")); g })
+  observeEvent(input$pcd_obj, {
+    g <- PCD[[input$pcd_obj]]; req(g)
+    updateSelectInput(session, "pcd_col", choices = g$colby, selected = unname(g$colby)[1])
+  }, ignoreNULL = TRUE)
+  output$pcd_label <- renderText(paste0(pcd_g()$label, " — PC dimensions carried into the UMAP"))
+  # The two numbers that answer the question: does the UMAP shape move, and do the
+  # clusters people actually read move with it.
+  output$pcd_verdict <- renderUI({
+    g <- pcd_g()
+    fmt <- function(a, b) sprintf("<b>%s</b>: %.0f%% of neighbours kept, shape m&sup2; %.2f, clusters ARI %.2f",
+                                  a, 100 * g$knn30[[b]], g$m2[[b]], g$ari[[b]])
+    div(class = "alert alert-warning", style = "font-size:13px",
+        HTML(paste0("Against the production cut of 30 &mdash; ",
+                    fmt("10 vs 30", "10v30"), "<br>", fmt("30 vs 50", "30v50"),
+                    "<br><span style='font-size:12px;color:#555'>",
+                    "<b>Neighbours kept</b>: share of each cell's 30 nearest neighbours that are still ",
+                    "neighbours under the other cut &mdash; 100% would mean the local structure is identical. ",
+                    "<b>m&sup2;</b>: Procrustes shape distance, 0 = identical, 1 = unrelated. ",
+                    "<b>ARI</b>: 1 = identical cluster assignments, at ",
+                    sub("SCT_snn_res.", "resolution ", g$prod_res), ".</span>")))
+  })
+  output$pcd_var <- renderUI({
+    g <- pcd_g()
+    helpText(style = "font-size:11px",
+      HTML(paste0("Share of the top-50 PC variance<br>",
+                  paste(sprintf("&nbsp;dims 1:%s &mdash; %.1f%%", names(g$varpct), g$varpct),
+                        collapse = "<br>"),
+                  "<br><br>", format(nrow(g$percell) / length(g$dims), big.mark = ","),
+                  " cells per panel")))
+  })
+  pcd_map_p <- reactive({ g <- pcd_g(); req(input$pcd_col); pcdims_gg(g, input$pcd_col) })
+  output$pcd_map <- renderPlot(pcd_map_p())
+  register_fig(output, "pcdmap", pcd_map_p, input)
+  output$pcd_note <- renderUI({ pcd_ok(); helpText(style = "font-size:11px", PCD$note) })
+  pcd_df <- reactive({ pcd_g()$metrics })
+  output$pcd_tab <- renderDT(enr_dt(pcd_df(), scroll = "300px"))
   cm_markerheat_p <- reactive({
     h <- heat[["res0.2"]]; validate(need(!is.null(h), "No marker heatmap for this resolution."))
     long <- h$long; long$gene <- factor(long$gene, levels = rev(h$genes)); long$cluster <- factor(long$cluster, levels = h$clusters)
@@ -4966,6 +5063,9 @@ server <- function(input, output, session) {
   TABLE_DL <- list(
     # CM object-mode diagnostic
     list(id = "objtest_tab", base = "cm_objectmode_comparison", df = function() objtest_df()),
+    # PC-dimension sweep
+    list(id = "pcd_tab", base = function() paste0("pcdims_", input$pcd_obj %||% "cm", "_comparison"),
+         df = function() pcd_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
          df = function() lk_df()),
