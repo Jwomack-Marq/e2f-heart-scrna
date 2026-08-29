@@ -80,7 +80,7 @@ our_analysis/results/figures/
 our_analysis/results/markers/
 our_analysis/results/models/
 our_analysis/results/tables/*descriptive.DE.csv
-our_analysis/results/tables/cm_subcluster_markers_res*.csv
+our_analysis/results/tables/cm_subcluster_markers_*.csv
 our_analysis/results/tables/pseudotime_per_cell.csv
 our_analysis/results/tables/cm_objectmode_percell.csv.gz
 our_analysis/results/tables/pcdims_*_percell.csv.gz

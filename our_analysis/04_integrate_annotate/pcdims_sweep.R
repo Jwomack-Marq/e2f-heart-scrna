@@ -141,8 +141,57 @@ for (d in DIMS_SWEEP) {
     nclust   = vapply(RES_COLS, function(rc) length(unique(o[[rc]][, 1])), integer(1)))
   for (rc in RES_COLS)
     cat(sprintf("     %-18s %d clusters\n", rc, res[[TAG(d)]]$nclust[[rc]]))
+  # Carry this arm's labels and embedding back onto the SHARED object, under names that
+  # say which cut produced them. One object ends up holding every arm, which is the point:
+  # SCT/PCA/Harmony are identical across arms by construction, so three saved objects
+  # would be three copies of the same 2.3 GB matrices differing in a metadata column.
+  for (rc in RES_COLS) {
+    vcol <- sprintf("dims%d_res%s", d, sub("^SCT_snn_res\\.", "", rc))
+    obj[[vcol]] <- as.character(o@meta.data[[rc]])
+  }
+  obj[[sprintf("umap.dims%d", d)]] <- SeuratObject::CreateDimReducObject(
+    embeddings = Embeddings(o, "umap")[, 1:2, drop = FALSE],
+    key = sprintf("umapd%d_", d), assay = DefaultAssay(o))
   rm(o); gc(verbose = FALSE)
 }
+## --- the variant object + the registry that names its labellings -------------
+# Only for the CM compartment: the per-subcluster downstream (markers, pseudobulk DE,
+# enrichment) is CM-specific, and nothing consumes a whole-heart variant object, so
+# writing 3 GB for it would be dead weight.
+VARIANTS <- do.call(rbind, lapply(DIMS_SWEEP, function(d) do.call(rbind, lapply(RES_SWEEP,
+  function(r) data.frame(
+    variant_id    = sprintf("%s_dims%d_res%s", OBJ, d, r),
+    object        = OBJ, dims = d, resolution = r,
+    cluster_col   = sprintf("dims%d_res%s", d, r),
+    umap_reduction= sprintf("umap.dims%d", d),
+    n_clusters    = res[[TAG(d)]]$nclust[[paste0("SCT_snn_res.", r)]],
+    harmony_var   = "orig.ident",
+    source_script = "our_analysis/04_integrate_annotate/pcdims_sweep.R",
+    created       = format(Sys.Date()),
+    # dims 30 / res 0.2 is what cm_subcluster_build.R and the app ship today. Flagged so
+    # the app can default to it and mark everything else as not-the-published-labelling.
+    is_production = (OBJ == "cm" && d == 30 && r == 0.2),
+    stringsAsFactors = FALSE)))))
+
+if (OBJ == "cm") {
+  vpath <- file.path(PROC, "cm_variants.rds")
+  saveRDS(obj, vpath)
+  cat(sprintf("\n[%s] variant object -> %s (%d cells, %d variant columns)\n",
+              OBJ, basename(vpath), ncol(obj), nrow(VARIANTS)))
+}
+# Upsert rather than overwrite: the registry is meant to accumulate as new labellings are
+# added (a resolution sweep, a lane-harmonised run), and running one object must not erase
+# another's rows.
+regf <- file.path(OUTTAB, "clustering_registry.csv")
+if (file.exists(regf)) {
+  old_reg <- read.csv(regf, stringsAsFactors = FALSE)
+  old_reg <- old_reg[!old_reg$variant_id %in% VARIANTS$variant_id, , drop = FALSE]
+  VARIANTS <- rbind(old_reg[, intersect(names(old_reg), names(VARIANTS)), drop = FALSE], VARIANTS)
+}
+VARIANTS <- VARIANTS[order(VARIANTS$object, VARIANTS$dims, VARIANTS$resolution), ]
+write.csv(VARIANTS, regf, row.names = FALSE)
+cat(sprintf("[%s] registry -> %s (%d variants)\n", OBJ, basename(regf), nrow(VARIANTS)))
+
 meta_keep <- obj@meta.data[, intersect(KEEP_META, colnames(obj@meta.data)), drop = FALSE]
 rm(obj); gc(verbose = FALSE)
 

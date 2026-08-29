@@ -46,16 +46,35 @@ ID_TOPN    <- 150                   # top markers fed to enrichGO
 ID_AUC     <- 0.55
 ID_PADJ    <- 0.05
 
+VARIANT <- local({ a <- grep("^--variant=", commandArgs(TRUE), value = TRUE)
+                   if (length(a)) sub("^--variant=", "", a[1]) else NA_character_ })
 cat("Loading app_data.rds ...\n")
 app  <- readRDS("app_data.rds")
 cat("Backing up -> app_data.pre_subenrich.bak.rds\n")
-saveRDS(app, "app_data.pre_subenrich.bak.rds", compress = "gzip")
+saveRDS(app, sprintf("app_data.pre_subenrich%s.bak.rds",
+                     if (is.na(VARIANT)) "" else paste0("_", VARIANT)), compress = "gzip")
 
-cmm   <- app$cm$meta
-subDE <- app$tables$sub_DE[[RES_KEY]]
+# Two modes. Without --variant this is unchanged: production labels off app$cm$meta and
+# production DE off app$tables$sub_DE. With --variant=<id> both come from
+# app$clusterings, so the enrichment belongs to the labelling that produced the DE rather
+# than silently mixing one variant's clusters with another's contrasts.
 EXPR  <- app$deg_expr
 CONF  <- app$confound                       # sex/construct confounder genes
-stopifnot(!is.null(subDE), !is.null(EXPR), RES_COL %in% names(cmm))
+
+if (!is.na(VARIANT)) {
+  v <- app$clusterings$variants[[VARIANT]]
+  if (is.null(v)) stop("variant ", VARIANT, " not in app$clusterings -- run build_clusterings.R")
+  subDE  <- v$de
+  LABELS <- v$labels                        # named char vector, cell -> cluster number
+  cat(sprintf("variant mode: %s (%s, %d clusters)\n", VARIANT, v$label, v$n_clusters))
+} else {
+  cmm    <- app$cm$meta
+  subDE  <- app$tables$sub_DE[[RES_KEY]]
+  stopifnot(RES_COL %in% names(cmm))
+  LABELS <- setNames(as.character(cmm[[RES_COL]]), cmm$cell)
+  cat(sprintf("production mode: res %s\n", RES))
+}
+stopifnot(!is.null(subDE), !is.null(EXPR), length(LABELS) > 0)
 
 # ---- gene sets for GSEA (match the cell-type build: Hallmark + KEGG_LEGACY, keep prefixes)
 cat("Fetching MSigDB gene sets (Hallmark + KEGG_LEGACY, mouse) ...\n")
@@ -125,9 +144,9 @@ for (cl in cls) {
 # ---------------------------------------------------------------- identity ----
 cat("\n== Identity GO per subcluster (markers from broad deg_expr) ==\n")
 id_rows <- list()
-cells <- intersect(cmm$cell, colnames(EXPR))
+cells <- intersect(names(LABELS), colnames(EXPR))
 X   <- EXPR[, cells, drop = FALSE]
-lab <- paste0("CM", cmm[[RES_COL]][match(cells, cmm$cell)])
+lab <- paste0("CM", unname(LABELS[cells]))
 uni <- rownames(X)[Matrix::rowSums(X) > 0]
 tabl <- table(lab)
 keep_cls <- names(tabl)[tabl >= ID_MIN_CELLS]
@@ -148,15 +167,24 @@ for (cl in keep_cls) {
 # ---------------------------------------------------------------- assemble ----
 bind <- function(L) { L <- L[!vapply(L, is.null, logical(1))]
                       if (length(L)) do.call(rbind, L) else NULL }
-app$enrich$sub <- list(res = RES,
-                       go          = bind(go_rows),
-                       gsea        = bind(gsea_rows),
-                       identity_go = bind(id_rows))
+out <- list(res = RES, variant = VARIANT,
+            go          = bind(go_rows),
+            gsea        = bind(gsea_rows),
+            identity_go = bind(id_rows))
+if (!is.na(VARIANT)) {
+  app$enrich$sub_by_variant[[VARIANT]] <- out
+  # Production stays reachable at the address every existing panel already reads, so
+  # adding variants never moves the published numbers.
+  if (identical(VARIANT, app$clusterings$production)) app$enrich$sub <- out
+} else {
+  app$enrich$sub <- out
+}
+app$enrich$sub_keys <- names(app$enrich$sub_by_variant)
 
 cat("\n== Summary ==\n")
-cat(sprintf("  go rows          : %s\n", if (is.null(app$enrich$sub$go)) 0 else nrow(app$enrich$sub$go)))
-cat(sprintf("  gsea rows        : %s\n", if (is.null(app$enrich$sub$gsea)) 0 else nrow(app$enrich$sub$gsea)))
-cat(sprintf("  identity_go rows : %s\n", if (is.null(app$enrich$sub$identity_go)) 0 else nrow(app$enrich$sub$identity_go)))
+cat(sprintf("  go rows          : %s\n", if (is.null(out$go)) 0 else nrow(out$go)))
+cat(sprintf("  gsea rows        : %s\n", if (is.null(out$gsea)) 0 else nrow(out$gsea)))
+cat(sprintf("  identity_go rows : %s\n", if (is.null(out$identity_go)) 0 else nrow(out$identity_go)))
 
 cat("\nSaving app_data.rds (gzip) ...\n")
 saveRDS(app, "app_data.rds", compress = "gzip")

@@ -40,14 +40,30 @@ RUN R -q -e 'options(repos = c(getOption("repos"), CRAN = "https://cloud.r-proje
 RUN R -q -e 'BiocManager::install("glmGamPoi", ask = FALSE, update = FALSE, Ncpus = 4); \
       if (!"glmGamPoi" %in% rownames(installed.packages())) stop("glmGamPoi install failed")'
 
-# Fail the build now rather than 40 minutes into a run. The glmGamPoi check is a real
-# call, not a library() -- BiocManager only warns on failure, and a broken method
-# argument would not surface until SCTransform was already running.
-RUN R -q -e 'for (p in c("Seurat","SeuratObject","harmony","glmGamPoi","clustree","Matrix","ggplot2","patchwork")) { \
+# DESeq2 + apeglm run the pseudobulk KO-vs-WT step in cm_subcluster_analyze.R, which calls
+# DESeq() then lfcShrink(type = "apeglm"). Neither was in ANY image in this project, so the
+# shipped cm_subcluster_res*_KOvsWT_*.descriptive.DE.csv tables could not be regenerated
+# anywhere on this machine -- they came off the Windows box. With these two added, this
+# image runs the whole offline pipeline (it already carries clusterProfiler, fgsea, msigdbr
+# and org.Mm.eg.db from e2f-enrich), so a variant sweep needs one image, not three.
+RUN R -q -e 'BiocManager::install(c("DESeq2","apeglm"), ask = FALSE, update = FALSE, Ncpus = 4); \
+      miss <- setdiff(c("DESeq2","apeglm"), rownames(installed.packages())); \
+      if (length(miss)) stop("Bioconductor install failed for: ", paste(miss, collapse = ", "))'
+
+# Fail the build now rather than 40 minutes into a run. The glmGamPoi and DESeq2 checks are
+# real calls, not library() -- BiocManager only warns on failure, and neither a broken
+# method argument nor a missing apeglm shrinkage backend would surface until the pipeline
+# was already an hour in.
+RUN R -q -e 'for (p in c("Seurat","SeuratObject","harmony","glmGamPoi","clustree","DESeq2","apeglm","Matrix","ggplot2","patchwork")) { \
         library(p, character.only = TRUE); cat("ok ", p, " ", as.character(packageVersion(p)), "\n", sep = "") }; \
       set.seed(1); m <- matrix(rpois(4000, 5), nrow = 200, \
                                dimnames = list(paste0("g", 1:200), paste0("c", 1:20))); \
       f <- glmGamPoi::glm_gp(m, verbose = FALSE); \
-      cat("glmGamPoi fit ok: ", nrow(f$Beta), " genes\n", sep = "")'
+      cat("glmGamPoi fit ok: ", nrow(f$Beta), " genes\n", sep = ""); \
+      cd <- data.frame(condition = factor(rep(c("WT","KO"), each = 5), levels = c("WT","KO"))); \
+      dds <- DESeq2::DESeqDataSetFromMatrix(m[, 1:10], colData = cd, design = ~ condition); \
+      dds <- DESeq2::DESeq(dds, quiet = TRUE); \
+      sh <- DESeq2::lfcShrink(dds, coef = "condition_KO_vs_WT", type = "apeglm", quiet = TRUE); \
+      cat("DESeq2 + apeglm shrinkage ok: ", nrow(sh), " genes\n", sep = "")'
 
 WORKDIR /work

@@ -18,7 +18,12 @@ source(file.path(dirname(this), "_common.R"))
 suppressWarnings(suppressMessages({ library(DESeq2); library(ggplot2); library(dplyr); library(tidyr) }))
 
 .cli <- commandArgs(trailingOnly = TRUE)
-RESOLUTIONS <- if (length(.cli) >= 1 && all(nzchar(.cli))) as.numeric(.cli) else c(0.1, 0.2)
+# Two modes. Bare numbers keep the original behaviour (resolutions of the shipped
+# seurat.cm.subclustered.rds). --variant=<id> reads the clustering registry instead and
+# runs a named labelling out of cm_variants.rds.
+VARIANTS_CLI <- sub("^--variant=", "", grep("^--variant=", .cli, value = TRUE))
+.bare <- grep("^--", .cli, value = TRUE, invert = TRUE)
+RESOLUTIONS <- if (length(.bare) && all(nzchar(.bare))) as.numeric(.bare) else c(0.1, 0.2)
 TOPN             <- 10           # top markers per subcluster for the heatmap
 MIN_CELLS_PER_PB <- 20           # min cells per (group,lane) pseudobulk sample (mirrors per_celltype_de.R)
 CONFOUND <- c("Eif2s3y","Kdm5d","Uty","Ddx3y","Xist","Tsix","Gt(ROSA)26Sor")  # sex + ROSA26 construct
@@ -82,19 +87,18 @@ block_heatmap <- function(mat, block, file, title, w = 850, h = 1000, legend = "
   "ggplot"
 }
 
-## --- load object ONCE (run_res works on a local copy per resolution) --------
-cm0 <- readRDS(file.path(PROC, "seurat.cm.subclustered.rds"))
-cm0$genotype <- genotype_of(cm0$orig.ident)
-
-run_res <- function(RES, cm) {
-  res_col <- paste0("SCT_snn_res.", RES)
-  if (!res_col %in% colnames(cm@meta.data)) { message("resolution ", RES, " (", res_col, ") not in object -- skipped."); return(invisible()) }
+# `res_col` says which labels to use, `tag` names the output files and `title` labels the
+# figures. Splitting those three is the whole generalization: a labelling is no longer
+# identified by its resolution, so a dims arm (or any future variant) can drive the same
+# analysis without the outputs colliding.
+run_variant <- function(res_col, tag, title, umap_red, cm) {
+  if (!res_col %in% colnames(cm@meta.data)) { message("cluster column ", res_col, " not in object -- skipped."); return(invisible()) }
   ids <- as.character(cm[[res_col]][,1])
   lev <- paste0("CM", sort(as.integer(unique(ids))))
   cm$cm_subcluster <- factor(paste0("CM", ids), levels = lev)
   Idents(cm) <- "cm_subcluster"
-  cat(sprintf("\n########## RESOLUTION %.1f -> %d subclusters: %s ##########\n",
-              RES, length(lev), paste(lev, collapse = ", ")))
+  cat(sprintf("\n########## %s -> %d subclusters: %s ##########\n",
+              title, length(lev), paste(lev, collapse = ", ")))
   print(table(cm$cm_subcluster, cm$orig.ident))
 
   ## === (3) markers + distinguished heatmap =================================
@@ -103,18 +107,18 @@ run_res <- function(RES, cm) {
   markers <- FindAllMarkers(cm, assay = "SCT", only.pos = TRUE,
                             min.pct = 0.25, logfc.threshold = 0.25, verbose = FALSE)
   markers$cluster <- factor(markers$cluster, levels = lev)
-  write.csv(markers, file.path(OUTTAB, sprintf("cm_subcluster_markers_res%s.csv", RES)), row.names = FALSE)
+  write.csv(markers, file.path(OUTTAB, sprintf("cm_subcluster_markers_%s.csv", tag)), row.names = FALSE)
 
   top <- markers %>% group_by(cluster) %>% slice_max(avg_log2FC, n = TOPN, with_ties = FALSE) %>%
     ungroup() %>% group_by(gene) %>% slice_max(avg_log2FC, n = 1, with_ties = FALSE) %>% ungroup() %>%
     arrange(cluster, desc(avg_log2FC))
-  write.csv(top, file.path(OUTTAB, sprintf("cm_subcluster_top_markers_res%s.csv", RES)), row.names = FALSE)
+  write.csv(top, file.path(OUTTAB, sprintf("cm_subcluster_top_markers_%s.csv", tag)), row.names = FALSE)
 
   az <- avg_z(cm, top$gene, cm$cm_subcluster)
   blk <- droplevels(factor(top$cluster[match(az$genes, top$gene)], levels = lev))
   hbk <- block_heatmap(az$mat[az$genes, , drop = FALSE], blk,
-    file.path(OUTFIG, sprintf("cm_subcluster_marker_heatmap_res%s.png", RES)),
-    sprintf("CM subcluster markers (res %.1f) -- top %d/subcluster", RES, TOPN),
+    file.path(OUTFIG, sprintf("cm_subcluster_marker_heatmap_%s.png", tag)),
+    sprintf("CM subcluster markers (%s) -- top %d/subcluster", title, TOPN),
     w = 850, h = max(700, 22 * length(az$genes)))
   cat(sprintf("marker heatmap drawn via %s\n", hbk))
 
@@ -128,7 +132,7 @@ run_res <- function(RES, cm) {
   cl.mean <- sapply(ms.cols, function(col) tapply(cm[[col]][,1], cm$cm_subcluster, mean))
   sub.lab <- colnames(cl.mean)[max.col(cl.mean, ties.method = "first")]; names(sub.lab) <- rownames(cl.mean)
   write.csv(data.frame(subcluster = names(sub.lab), nearest_CM_subtype = unname(sub.lab)),
-            file.path(OUTTAB, sprintf("cm_subcluster_subtype_map_res%s.csv", RES)), row.names = FALSE)
+            file.path(OUTTAB, sprintf("cm_subcluster_subtype_map_%s.csv", tag)), row.names = FALSE)
 
   ## === (2) KO-vs-WT descriptive DE within each subcluster ==================
   # NB: AggregateExpression replaces '_' in group names with '-', so we derive the
@@ -170,7 +174,7 @@ run_res <- function(RES, cm) {
     res$gene <- rownames(res); res$confounder <- res$gene %in% CONFOUND
     res$NOTE <- "descriptive_n1_sexconfound_no_valid_pvalues"
     res <- res[order(-abs(res$log2FoldChange)), ]
-    write.csv(res, file.path(OUTTAB, sprintf("cm_subcluster_res%s_KOvsWT_%s.descriptive.DE.csv", RES, scl)), row.names = FALSE)
+    write.csv(res, file.path(OUTTAB, sprintf("cm_subcluster_%s_KOvsWT_%s.descriptive.DE.csv", tag, scl)), row.names = FALSE)
     bio <- res[!res$confounder, ]
     up <- head(bio$gene[bio$log2FoldChange > 1], 6); dn <- head(bio$gene[bio$log2FoldChange < -1], 6)
     summ[[scl]] <- cbind(rowbase, design = paste(deparse(design), collapse=""), status = "ok",
@@ -179,7 +183,7 @@ run_res <- function(RES, cm) {
     cat(sprintf("  %-5s n=%5d  KO-up: %s\n", scl, ncol(sub), paste(up, collapse = ", ")))
   }
   summ <- do.call(rbind, summ)
-  write.csv(summ, file.path(OUTTAB, sprintf("cm_subcluster_res%s_KOvsWT_summary.csv", RES)), row.names = FALSE)
+  write.csv(summ, file.path(OUTTAB, sprintf("cm_subcluster_%s_KOvsWT_summary.csv", tag)), row.names = FALSE)
 
   ## === (4) G2/M/S phase across subclusters =================================
   if (!"Phase" %in% colnames(cm@meta.data)) {
@@ -195,38 +199,69 @@ run_res <- function(RES, cm) {
     dplyr::summarise(n = dplyr::n(), pct_S = round(100*mean(Phase == "S"), 1),
               pct_G2M = round(100*mean(Phase == "G2M"), 1),
               pct_cycling = round(100*mean(cycling), 1), .groups = "drop")
-  write.csv(cyc, file.path(OUTTAB, sprintf("cm_subcluster_res%s_cellcycle.csv", RES)), row.names = FALSE)
+  write.csv(cyc, file.path(OUTTAB, sprintf("cm_subcluster_%s_cellcycle.csv", tag)), row.names = FALSE)
 
   # NB: dplyr::count is masked by plyr (pulled in via DESeq2's deps) -> use group_by/summarise.
   ph <- cm@meta.data |> dplyr::group_by(cm_subcluster, genotype, Phase) |>
     dplyr::summarise(n = dplyr::n(), .groups = "drop_last") |>
     dplyr::mutate(frac = n / sum(n)) |> dplyr::ungroup()
   p_ph <- ggplot(ph, aes(cm_subcluster, frac, fill = Phase)) + geom_col() + facet_wrap(~ genotype) +
-    theme_bw() + labs(title = sprintf("Cell-cycle phase composition by CM subcluster (res %.1f, descriptive n=1)", RES),
+    theme_bw() + labs(title = sprintf("Cell-cycle phase composition by CM subcluster (%s, descriptive n=1)", title),
                       x = NULL, y = "fraction") + theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  ggsave(file.path(OUTFIG, sprintf("cm_subcluster_res%s_cellcycle_phase_composition.png", RES)), p_ph, width = 10, height = 5, dpi = 120)
+  ggsave(file.path(OUTFIG, sprintf("cm_subcluster_%s_cellcycle_phase_composition.png", tag)), p_ph, width = 10, height = 5, dpi = 120)
 
   cc <- cc_lists(); sgen <- intersect(cc$S, rownames(cm)); ggen <- setdiff(intersect(cc$G2M, rownames(cm)), sgen)
   DefaultAssay(cm) <- "SCT"
   azcc <- avg_z(cm, c(sgen, ggen), cm$cm_subcluster)
   blkcc <- factor(ifelse(azcc$genes %in% sgen, "S", "G2M"), levels = c("S", "G2M"))
   hcc <- block_heatmap(azcc$mat[azcc$genes, , drop = FALSE], blkcc,
-    file.path(OUTFIG, sprintf("cm_subcluster_res%s_cellcycle_marker_heatmap.png", RES)),
-    sprintf("S / G2M phase markers by CM subcluster (res %.1f)", RES), w = 800, h = max(700, 16 * length(azcc$genes)))
+    file.path(OUTFIG, sprintf("cm_subcluster_%s_cellcycle_marker_heatmap.png", tag)),
+    sprintf("S / G2M phase markers by CM subcluster (%s)", title), w = 800, h = max(700, 16 * length(azcc$genes)))
   cat(sprintf("cell-cycle marker heatmap drawn via %s\n", hcc))
 
   ## --- subcluster + phase UMAP ----------------------------------------------
-  png(file.path(OUTFIG, sprintf("cm_subcluster_res%s_umap.png", RES)), 1400, 600)
-  print((DimPlot(cm, group.by = "cm_subcluster", reduction = "umap", label = TRUE) + ggtitle(sprintf("CM subclusters (res %.1f)", RES))) |
-        (DimPlot(cm, group.by = "Phase", reduction = "umap") + ggtitle("Cell-cycle phase")))
+  png(file.path(OUTFIG, sprintf("cm_subcluster_%s_umap.png", tag)), 1400, 600)
+  print((DimPlot(cm, group.by = "cm_subcluster", reduction = umap_red, label = TRUE) + ggtitle(sprintf("CM subclusters (%s)", title))) |
+        (DimPlot(cm, group.by = "Phase", reduction = umap_red) + ggtitle("Cell-cycle phase")))
   dev.off()
 
   cat("\n--- KO-vs-WT per subcluster (biological genes; sex/construct flagged) ---\n")
   print(summ[, c("subcluster","n_cells","status","n_DE_absLFC_gt1","top_KO_up")], row.names = FALSE)
   cat("\n--- cycling fraction by subcluster ---\n"); print(as.data.frame(cyc), row.names = FALSE)
-  cat(sprintf("=== DONE resolution %.1f ===\n", RES))
+  cat(sprintf("=== DONE %s ===\n", title))
   invisible()
 }
 
-for (RES in RESOLUTIONS) { run_res(RES, cm0); gc(verbose = FALSE) }
-cat(sprintf("\n=== DONE cm_subcluster_analyze (resolutions: %s) ===\n", paste(RESOLUTIONS, collapse = ", ")))
+## --- driver: legacy resolutions, or registry variants -----------------------
+# Legacy mode is unchanged on purpose. It reads the same object, resolves the same column
+# and writes the same filenames as before this script was generalized, so the production
+# tables stay reproducible by the command that has always produced them.
+if (length(VARIANTS_CLI)) {
+  regf <- file.path(OUTTAB, "clustering_registry.csv")
+  if (!file.exists(regf)) stop("no clustering registry at ", regf,
+                               "\n  run our_analysis/04_integrate_annotate/pcdims_sweep.R first")
+  reg <- read.csv(regf, stringsAsFactors = FALSE)
+  vobj <- file.path(PROC, "cm_variants.rds")
+  if (!file.exists(vobj)) stop("no variant object at ", vobj,
+                               "\n  re-run pcdims_sweep.R --object=cm to write it")
+  cm0 <- readRDS(vobj); cm0$genotype <- genotype_of(cm0$orig.ident)
+  for (vid in VARIANTS_CLI) {
+    r <- reg[reg$variant_id == vid, , drop = FALSE]
+    if (!nrow(r)) { message("variant ", vid, " not in the registry -- skipped."); next }
+    run_variant(r$cluster_col[1], sub("^cm_", "", vid),
+                sprintf("dims 1:%d, res %s", r$dims[1], r$resolution[1]),
+                r$umap_reduction[1], cm0)
+    gc(verbose = FALSE)
+  }
+  cat(sprintf("\n=== DONE cm_subcluster_analyze (variants: %s) ===\n",
+              paste(VARIANTS_CLI, collapse = ", ")))
+} else {
+  cm0 <- readRDS(file.path(PROC, "seurat.cm.subclustered.rds"))
+  cm0$genotype <- genotype_of(cm0$orig.ident)
+  for (RES in RESOLUTIONS) {
+    run_variant(paste0("SCT_snn_res.", RES), sprintf("res%s", RES),
+                sprintf("res %.1f", RES), "umap", cm0)
+    gc(verbose = FALSE)
+  }
+  cat(sprintf("\n=== DONE cm_subcluster_analyze (resolutions: %s) ===\n", paste(RESOLUTIONS, collapse = ", ")))
+}

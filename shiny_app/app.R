@@ -1061,6 +1061,27 @@ GSP_MSG <- paste("The gene-set provenance audit isn't in this data build —",
                  "then build_gene_provenance.R, and redeploy.")
 gsp_ok  <- function() validate(need(!is.null(GSP), GSP_MSG))
 
+# ---- clustering variants (build_clusterings.R) ------------------------------
+# The CM labelling is a choice, not a fact: the PC-dimension sweep showed the subcluster
+# count moving 7 -> 11 -> 12 with the PC cut. This makes that choice selectable and lets
+# the downstream numbers follow it. Markers, composition and phase are recomputed live
+# (presto is in the runtime image, ~1-3 s); pseudobulk DE and enrichment are precomputed
+# offline per variant because DESeq2 and clusterProfiler are not.
+CLU     <- app$clusterings
+CLU_MSG <- paste("Clustering variants aren't in this data build —",
+                 "run pcdims_sweep.R, cm_subcluster_analyze.R --variant=...,",
+                 "then build_clusterings.R, and redeploy.")
+clu_ok  <- function() validate(need(!is.null(CLU), CLU_MSG))
+clu_choices <- function() {
+  if (is.null(CLU)) return(character(0))
+  ids <- names(CLU$variants)
+  setNames(ids, vapply(ids, function(i) {
+    v <- CLU$variants[[i]]
+    sprintf("%s — %d subclusters%s", v$label, v$n_clusters,
+            if (isTRUE(v$is_production)) "  (production)"
+            else if (!isTRUE(v$has_downstream)) "  (labels only)" else "") }, ""))
+}
+
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
                  "run build_fourgroup_enrichment.R and redeploy.")
 fg_enr_ok <- function() validate(need(!is.null(FGE) && !is.null(FGE$go), FGE_MSG))
@@ -2555,6 +2576,15 @@ ui <- page_navbar(
                     "Timepoint (P0|P7)" = "timepoint", "Genotype × Timepoint" = "both")),
       conditionalPanel("input.cm_tabs == 'bars'",
         radioButtons("cm_bar_mode", "Y axis", c("Proportion" = "prop", "Count" = "count"), inline = TRUE)),
+      conditionalPanel("input.cm_tabs == 'variant'",
+        selectInput("clu_var", "Clustering variant", choices = NULL),
+        radioButtons("clu_mat", "Matrix for live markers",
+                     c("Broad (more genes, fewer cells)" = "deg", "Curated panel (all CM cells)" = "curated"),
+                     selected = "deg"),
+        selectInput("clu_cl", "Subcluster (for DE / enrichment)", choices = NULL),
+        helpText(style = "font-size:12px",
+                 "Every variant runs the identical SCTransform, PCA and Harmony — only the",
+                 "number of PCs carried into the neighbour graph and UMAP differs.")),
       conditionalPanel("input.cm_tabs == 'objtest'",
         selectInput("objtest_res", "Resolution", choices = NULL),
         helpText(style = "font-size:12px",
@@ -2610,6 +2640,19 @@ ui <- page_navbar(
                  "each cluster's top identity GO term, top KO-vs-WT GSEA pathway, and top KO-up / KO-down genes — ",
                  "a quick read on what each subcluster is doing biologically."),
         dl_data_ui("cm_topmarkers"), DTOutput("cm_topmarkers")),
+      nav_panel("Variant explorer", value = "variant",
+        uiOutput("clu_banner"),
+        layout_columns(col_widths = c(6, 6),
+          card(card_header(textOutput("clu_comp_hdr")), plotOutput("clu_comp", height = "300px")),
+          card(card_header("Cell-cycle phase by subcluster"), plotOutput("clu_phase", height = "300px"))),
+        navset_card_tab(
+          nav_panel("Markers (computed live)",
+            uiOutput("clu_mk_note"), dl_data_ui("clu_mk"), DTOutput("clu_mk")),
+          nav_panel("KO vs WT (precomputed)",
+            uiOutput("clu_de_note"), dl_data_ui("clu_de"), DTOutput("clu_de")),
+          nav_panel("Enrichment (precomputed)",
+            uiOutput("clu_enr_note"), DTOutput("clu_enr")),
+          nav_panel("Cell-cycle table", DTOutput("clu_cyc")))),
       nav_panel("Object-mode test", value = "objtest",
         uiOutput("objtest_verdict"),
         dl_fig_ui("objtestmap", "Download figure (static)"),
@@ -3586,6 +3629,120 @@ server <- function(input, output, session) {
             psize = 5, labels = (cb == "subcluster"))
   })
   register_fig(output, "cmmap", cm_map_gg_p, input)
+
+  # ---- Clustering variants (app$clusterings, from build_clusterings.R) ----
+  observe({
+    req(CLU)
+    updateSelectInput(session, "clu_var", choices = clu_choices(), selected = CLU$production)
+  })
+  clu_v <- reactive({ clu_ok(); req(input$clu_var)
+    v <- CLU$variants[[input$clu_var]]
+    validate(need(!is.null(v), "That variant is not in this data build.")); v })
+  observeEvent(input$clu_var, {
+    v <- CLU$variants[[input$clu_var]]; req(v)
+    cl <- sort(unique(as.integer(v$labels)))
+    updateSelectInput(session, "clu_cl", choices = paste0("CM", cl))
+  }, ignoreNULL = TRUE)
+
+  # Reading a non-production variant and reading production must never look the same in a
+  # screenshot, so the banner is loud and states which labelling produced the numbers.
+  output$clu_banner <- renderUI({
+    v <- clu_v()
+    if (isTRUE(v$is_production))
+      div(class = "alert alert-success", style = "font-size:13px",
+          HTML(sprintf("Showing the <b>production</b> labelling (%s, %d subclusters) &mdash; these are the numbers the rest of the app and the book report.", v$label, v$n_clusters)))
+    else
+      div(class = "alert alert-danger", style = "font-size:13px",
+          HTML(sprintf("<b>Not the published labelling.</b> Showing %s (%d subclusters); production is %s. Every number on this page belongs to the selected variant. Subcluster IDs are not comparable across variants &mdash; CM3 here is not CM3 in production.",
+                       v$label, v$n_clusters, CLU$variants[[CLU$production]]$label)))
+  })
+
+  clu_lab_cells <- reactive({ v <- clu_v(); v$labels })
+
+  # Live markers. presto::wilcoxauc is the same call the "Subset & DEGs" tab uses; cached
+  # on (variant, matrix) so flipping back to a variant already seen is instant.
+  clu_mk_df <- reactive({
+    v <- clu_v(); req(input$clu_mat)
+    M <- if (input$clu_mat == "deg") deg_expr else expr
+    lab <- clu_lab_cells()
+    cells <- intersect(names(lab), colnames(M))
+    validate(need(length(cells) > 50, "Too few of this variant's cells are in the selected matrix."))
+    g <- paste0("CM", unname(lab[cells]))
+    keep <- names(table(g))[table(g) >= 10]
+    validate(need(length(keep) >= 2, "Fewer than two subclusters have >= 10 cells here."))
+    sel <- g %in% keep
+    w <- suppressWarnings(presto::wilcoxauc(M[, cells[sel], drop = FALSE], g[sel]))
+    w <- w[w$logFC > 0 & w$padj < 0.05, c("group","feature","auc","logFC","pct_in","pct_out","padj")]
+    w <- w[order(w$group, -w$auc), ]
+    names(w)[1:2] <- c("subcluster", "gene")
+    w
+  }) |> bindCache(input$clu_var, input$clu_mat)
+  output$clu_mk <- renderDT(enr_dt(clu_mk_df(), scroll = "380px"))
+  output$clu_mk_note <- renderUI({
+    v <- clu_v(); M <- if ((input$clu_mat %||% "deg") == "deg") deg_expr else expr
+    cells <- intersect(names(clu_lab_cells()), colnames(M))
+    helpText(style = "font-size:12px", sprintf(
+      "presto::wilcoxauc, one-vs-rest, computed now on %s cells x %s genes. Positive logFC, padj < 0.05. Subclusters with < 10 cells in this matrix are dropped.",
+      format(length(cells), big.mark = ","), format(nrow(M), big.mark = ",")))
+  })
+
+  # Composition and phase: cheap enough to recompute, so no precompute for these either.
+  clu_meta <- reactive({
+    lab <- clu_lab_cells()
+    m <- meta[match(names(lab), meta$cell), , drop = FALSE]
+    m$sub <- factor(paste0("CM", unname(lab)),
+                    levels = paste0("CM", sort(unique(as.integer(lab)))))
+    m[!is.na(m$cell), , drop = FALSE]
+  })
+  output$clu_comp_hdr <- renderText(sprintf("Composition by genotype — %s", clu_v()$label))
+  output$clu_comp <- renderPlot({
+    d <- clu_meta(); validate(need(nrow(d) && "genotype" %in% names(d), "No genotype column."))
+    ggplot(d, aes(sub, fill = genotype)) + geom_bar(position = "fill") +
+      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+  output$clu_phase <- renderPlot({
+    d <- clu_meta(); validate(need("Phase" %in% names(d), "No Phase column in this build."))
+    ggplot(d[!is.na(d$Phase), ], aes(sub, fill = Phase)) + geom_bar(position = "fill") +
+      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  })
+
+  # Precomputed halves: DESeq2 and clusterProfiler are not in the runtime image, so these
+  # are looked up rather than computed, and say so when a variant has not been built.
+  clu_de_df <- reactive({
+    v <- clu_v(); req(input$clu_cl)
+    validate(need(!is.null(v$de), "Pseudobulk DE has not been built for this variant — run cm_subcluster_analyze.R --variant=... then build_clusterings.R."))
+    d <- v$de[[input$clu_cl]]
+    validate(need(!is.null(d) && nrow(d), "No DE table for that subcluster (it may have been too thin to test)."))
+    d
+  })
+  output$clu_de <- renderDT(enr_dt(clu_de_df(), scroll = "380px"))
+  output$clu_de_note <- renderUI({
+    v <- clu_v()
+    helpText(style = "font-size:12px", HTML(paste0(
+      "Pseudobulk DESeq2, apeglm-shrunken, precomputed for <b>", v$label, "</b>. ",
+      "n = 1 per group and sex-confounded, so these are <b>descriptive log2 fold changes with no valid p-values</b> ",
+      "&mdash; the same caveat the production tables carry.")))
+  })
+  clu_enr_df <- reactive({
+    v <- clu_v()
+    e <- app$enrich$sub_by_variant[[v$variant_id]]
+    if (is.null(e) && isTRUE(v$is_production)) e <- app$enrich$sub
+    validate(need(!is.null(e) && !is.null(e$go),
+                  "Enrichment has not been built for this variant — run build_subcluster_enrichment.R --variant=... and redeploy."))
+    e$go
+  })
+  output$clu_enr <- renderDT(enr_dt(clu_enr_df(), scroll = "380px"))
+  output$clu_enr_note <- renderUI({
+    helpText(style = "font-size:12px",
+             "KO-vs-WT GO biological process per subcluster, precomputed with clusterProfiler against the DE tables of this same variant.")
+  })
+  output$clu_cyc <- renderDT({
+    v <- clu_v()
+    validate(need(!is.null(v$cellcycle), "No cell-cycle table for this variant."))
+    enr_dt(v$cellcycle, scroll = "340px")
+  })
 
   # ---- Object-mode test (app$cmtest, from build_cm_objectmode.R) ----
   # Does the CM subset need to be its own object? Three builds of the same cells, the
@@ -5177,6 +5334,11 @@ server <- function(input, output, session) {
          df = function() pcd_df()),
     # Gene-set provenance
     list(id = "gsp_tab", base = "gene_set_provenance", df = function() gsp_df()),
+    # Clustering variants
+    list(id = "clu_mk", base = function() paste0("markers_", input$clu_var %||% "variant"),
+         df = function() clu_mk_df()),
+    list(id = "clu_de", base = function() paste0("DE_", input$clu_var %||% "variant", "_", input$clu_cl %||% ""),
+         df = function() clu_de_df()),
     list(id = "gsp_bench", base = "gene_set_benchmark", df = function() gsp_bench_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
