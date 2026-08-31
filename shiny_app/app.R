@@ -345,12 +345,16 @@ go_dotplot_df <- function(d, ttl, topn = 20, ...)
 # static "all subclusters at once" overviews (faceted; renderPlot, low-memory) --
 # "All clusters" enrichment view: one full-size plot per subcluster, two per row
 # (server registers a renderPlot per subcluster id "cm_<kind>_all_<CMn>").
-cm_enr_grid <- function(kind) {
+# `per_row` is a real control, not a constant: a GO dot plot two-up gets ~450 px of width
+# inside this sidebar layout, and 40-character term names then take most of it. One-up is
+# the readable default; two-up stays available because comparing subclusters side by side
+# is the point of this view, and the labels are truncated hard to make it viable.
+cm_enr_grid <- function(kind, per_row = 1L, height = "420px") {
   subs <- cm_subs("0.2")
-  outs <- lapply(subs, function(cl) plotOutput(paste0("cm_", kind, "_all_", cl), height = "340px"))
-  rows <- lapply(seq(1, length(outs), by = 2), function(i)
-    fluidRow(column(6, outs[[i]]),
-             if (i + 1L <= length(outs)) column(6, outs[[i + 1L]])))
+  outs <- lapply(subs, function(cl) plotOutput(paste0("cm_", kind, "_all_", cl), height = height))
+  w <- if (per_row >= 2L) 6L else 12L
+  rows <- lapply(seq(1, length(outs), by = per_row), function(i)
+    fluidRow(lapply(seq(i, min(i + per_row - 1L, length(outs))), function(j) column(w, outs[[j]]))))
   do.call(tagList, rows)
 }
 # per-subcluster enrichment slice (precomputed into ENR$sub by build_subcluster_enrichment.R)
@@ -2682,6 +2686,14 @@ ui <- page_navbar(
                     "Timepoint (P0|P7)" = "timepoint", "Genotype × Timepoint" = "both")),
       conditionalPanel("input.cm_tabs == 'bars'",
         radioButtons("cm_bar_mode", "Y axis", c("Proportion" = "prop", "Count" = "count"), inline = TRUE)),
+      conditionalPanel("input.cm_tabs == 'subenr'",
+        accordion(open = FALSE,
+          accordion_panel("Enrichment figure options",
+            # One shared prefix for all four views: they are the same kind of plot and a
+            # reader wants them consistent. register_fig()'s opts_prefix lets each keep its
+            # own download id while reading these controls.
+            figure_controls("cmsubenr", export = "none", palette = "continuous",
+                            rename = FALSE, default_base = 11, axis = TRUE, labelchars = TRUE)))),
       conditionalPanel("input.cm_tabs == 'variant'",
         selectInput("clu_var", "Clustering variant", choices = NULL),
         radioButtons("clu_mat", "Matrix for live markers",
@@ -2797,11 +2809,14 @@ ui <- page_navbar(
               dl_fig_ui("cmsubgsea"), plotlyOutput("cm_sub_gsea_plot", height = "440px"),
               dl_data_ui("cm_sub_gsea_tab"), DTOutput("cm_sub_gsea_tab", height = "320px")))),
         conditionalPanel("input.cm_enr_mode == 'all'",
+          div(class = "d-flex align-items-center gap-3 mb-2",
+              radioButtons("cm_enr_perrow", "Plots per row", c("1" = "1", "2" = "2"),
+                           selected = "1", inline = TRUE)),
           navset_card_tab(
-            nav_panel("Identity GO", cm_enr_grid("idgo")),
-            nav_panel("GO — up", cm_enr_grid("kogo")),
-            nav_panel("GO — down", cm_enr_grid("kodn")),
-            nav_panel("GSEA", cm_enr_grid("gsea")))))))),
+            nav_panel("Identity GO", uiOutput("cm_grid_idgo")),
+            nav_panel("GO — up",     uiOutput("cm_grid_kogo")),
+            nav_panel("GO — down",   uiOutput("cm_grid_kodn")),
+            nav_panel("GSEA",        uiOutput("cm_grid_gsea")))))))),
 
   nav_panel("E2F focus", layout_sidebar(
     sidebar = sidebar(width = 320,
@@ -4351,8 +4366,11 @@ server <- function(input, output, session) {
                      span(" · pooled over P0 and P7 — this cannot answer what changes in the KO at P7.")
                    else NULL)) })
   # ---- identity GO: contrast-independent, always the pooled marker enrichment ----
-  output$cm_sub_idgo_plot <- renderPlotly({ req(input$cm_enr_sub)
-    go_dotplot_df(enr_sub_df("identity_go", input$cm_enr_sub), paste0("Identity GO BP — ", input$cm_enr_sub)) })
+  cm_sub_idgo_p <- reactive({ req(input$cm_enr_sub)
+    do.call(go_dotplot_gg, c(list(enr_sub_df("identity_go", input$cm_enr_sub),
+                                  paste0("Identity GO BP — ", input$cm_enr_sub)), cm_sub_opts())) })
+  output$cm_sub_idgo_plot <- renderPlotly(
+    ggplotly(cm_sub_idgo_p(), tooltip = "text") |> layout(margin = list(l = 0, t = 40)))
   cm_sub_idgo_df <- reactive({ req(input$cm_enr_sub)
     d <- enr_sub_df("identity_go", input$cm_enr_sub)
     d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))] })
@@ -4373,9 +4391,20 @@ server <- function(input, output, session) {
     paste0("No GO ", a$ont, " term reached padj < 0.05 / q < 0.2 for the ", lab, " list. ",
            fg_enr_why(input$cm_enr_sub, a$ct$key, a$st, a$ont,
                       if (identical(dir, "up")) "A_up" else "B_up")) }
+  # One options bundle for all four subcluster-enrichment views (prefix "cmsubenr").
+  # In the "All clusters" grid the panels are half or full width rather than a whole
+  # card, so the label budget is tighter there; `compact` applies that without needing a
+  # second set of controls.
+  cm_sub_opts <- function(compact = FALSE) {
+    lc <- input$cmsubenr_labelchars %||% 46
+    list(base_size  = input$cmsubenr_basesize %||% 11,
+         pal_choice = input$cmsubenr_palette,
+         axis_scale = input$cmsubenr_axisscale %||% 1,
+         label_chars = if (compact) min(lc, if ((input$cm_enr_perrow %||% "1") == "2") 26 else 38) else lc)
+  }
   cm_sub_go_plot <- function(dir) { d <- cm_sub_go(dir)
     validate(need(nrow(d), cm_sub_go_empty(dir)))
-    go_dotplot_gg(d, cm_sub_go_ttl(dir)) }
+    do.call(go_dotplot_gg, c(list(d, cm_sub_go_ttl(dir)), cm_sub_opts())) }
   cm_sub_go_ly <- function(dir)                      # same body go_dotplot_df() uses
     ggplotly(cm_sub_go_plot(dir), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
   output$cm_sub_kogo_plot <- renderPlotly(cm_sub_go_ly("up"))
@@ -4389,9 +4418,11 @@ server <- function(input, output, session) {
   # ---- GSEA: same source switch; up/down wording from the contrast ----
   cm_sub_gsea_dat <- reactive({ a <- cm_enr_a(); req(input$cm_enr_sub)
     enr_src_df("gsea", input$cm_enr_sub, a$ct, a$st) })
-  cm_sub_gsea_p <- reactive({ a <- cm_enr_a()
-    gsea_barplot_gg(cm_sub_gsea_dat(), paste0("GSEA — ", input$cm_enr_sub, " · ", a$lab$label),
-                    20, up_lab = a$lab$up, down_lab = a$lab$dn) })
+  cm_sub_gsea_p <- reactive({ a <- cm_enr_a(); o <- cm_sub_opts(); o$pal_choice <- NULL
+    do.call(gsea_barplot_gg,
+            c(list(cm_sub_gsea_dat(),
+                   paste0("GSEA — ", input$cm_enr_sub, " · ", a$lab$label),
+                   20, up_lab = a$lab$up, down_lab = a$lab$dn), o)) })
   output$cm_sub_gsea_plot <- renderPlotly(
     ggplotly(cm_sub_gsea_p(), tooltip = "text") |> layout(margin = list(l = 0, t = 40)))
   cm_sub_gsea_df <- reactive({ d <- cm_sub_gsea_dat()
@@ -4403,13 +4434,18 @@ server <- function(input, output, session) {
            if (is.null(a$ct)) "KOvsWT_pooled" else paste0(a$ct$key, "_", a$st),
            if (identical(kind, "GO") && !is.null(a$ct)) paste0("_", a$ont) else "",
            "_", input$cm_enr_sub, suffix) }
-  register_fig(output, "cmsubidgo", reactive({ req(input$cm_enr_sub)
-    go_dotplot_gg(enr_sub_df("identity_go", input$cm_enr_sub),
-                  paste0("Identity GO BP — ", input$cm_enr_sub)) }), input)
+  # the same reactive the panel renders, so download and Figure Studio get what is shown
+  register_fig(output, "cmsubidgo", cm_sub_idgo_p, input)
   register_fig(output, "cmsubkogo", reactive(cm_sub_go_plot("up")), input)
   register_fig(output, "cmsubkodn", reactive(cm_sub_go_plot("down")), input)
   register_fig(output, "cmsubgsea", cm_sub_gsea_p, input)
-  # "All clusters" view: one full-size plot per subcluster (two per row on screen).
+  for (.k in c("idgo", "kogo", "kodn", "gsea")) local({
+    k <- .k
+    output[[paste0("cm_grid_", k)]] <- renderUI(
+      cm_enr_grid(k, per_row = as.integer(input$cm_enr_perrow %||% "1"),
+                  height = if ((input$cm_enr_perrow %||% "1") == "2") "360px" else "420px"))
+  })
+  # "All clusters" view: one plot per subcluster, 1 or 2 per row (see cm_enr_perrow).
   # These read cm_enr_a() too, so the grid honours the comparison like the single view.
   local({
     for (.cl in cm_subs("0.2")) local({
@@ -4418,14 +4454,15 @@ server <- function(input, output, session) {
         d <- enr_src_df("go", cl, a$ct, a$st, a$ont, dir)
         lab <- if (identical(dir, "up")) a$lab$up else a$lab$dn
         validate(need(nrow(d), paste0(cl, ": no GO term for the ", lab, " list.")))
-        go_dotplot_gg(d, paste0(ttl, " — ", lab), topn = 8) }
+        do.call(go_dotplot_gg, c(list(d, paste0(ttl, " — ", lab), topn = 8), cm_sub_opts(TRUE))) }
       output[[paste0("cm_idgo_all_", cl)]] <- renderPlot(
-        go_dotplot_gg(enr_sub_df("identity_go", cl), ttl, topn = 8))
+        do.call(go_dotplot_gg, c(list(enr_sub_df("identity_go", cl), ttl, topn = 8), cm_sub_opts(TRUE))))
       output[[paste0("cm_kogo_all_", cl)]] <- renderPlot(go_all("up"))
       output[[paste0("cm_kodn_all_", cl)]] <- renderPlot(go_all("down"))
       output[[paste0("cm_gsea_all_", cl)]] <- renderPlot({ a <- cm_enr_a()
-        gsea_barplot_gg(enr_src_df("gsea", cl, a$ct, a$st), ttl, topn = 10,
-                        up_lab = a$lab$up, down_lab = a$lab$dn) })
+        o <- cm_sub_opts(TRUE); o$pal_choice <- NULL          # bar chart takes an up/down pair
+        do.call(gsea_barplot_gg, c(list(enr_src_df("gsea", cl, a$ct, a$st), ttl, topn = 10,
+                                        up_lab = a$lab$up, down_lab = a$lab$dn), o)) })
     })
   })
 
