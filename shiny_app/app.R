@@ -2748,17 +2748,21 @@ ui <- page_navbar(
         dl_data_ui("cm_topmarkers"), DTOutput("cm_topmarkers")),
       nav_panel("Variant explorer", value = "variant",
         uiOutput("clu_banner"),
-        layout_columns(col_widths = c(6, 6),
-          card(card_header(textOutput("clu_comp_hdr")), plotOutput("clu_comp", height = "300px")),
-          card(card_header("Cell-cycle phase by subcluster"), plotOutput("clu_phase", height = "300px"))),
-        navset_card_tab(
+        navset_pill(
+          nav_panel("Composition & phase",
+            div(style = "margin-top:10px", uiOutput("clu_sum_note")),
+            layout_columns(col_widths = c(6, 6),
+              plotOutput("clu_comp",  height = "420px"),
+              plotOutput("clu_phase", height = "420px"))),
           nav_panel("Markers (computed live)",
-            uiOutput("clu_mk_note"), dl_data_ui("clu_mk"), DTOutput("clu_mk")),
+            div(style = "margin-top:10px", uiOutput("clu_mk_note")),
+            dl_data_ui("clu_mk"), DTOutput("clu_mk")),
           nav_panel("KO vs WT (precomputed)",
-            uiOutput("clu_de_note"), dl_data_ui("clu_de"), DTOutput("clu_de")),
+            div(style = "margin-top:10px", uiOutput("clu_de_note")),
+            dl_data_ui("clu_de"), DTOutput("clu_de")),
           nav_panel("Enrichment (precomputed)",
-            uiOutput("clu_enr_note"), DTOutput("clu_enr")),
-          nav_panel("Cell-cycle table", DTOutput("clu_cyc")))),
+            div(style = "margin-top:10px", uiOutput("clu_enr_note")), DTOutput("clu_enr")),
+          nav_panel("Cell cycle", DTOutput("clu_cyc")))),
       nav_panel("Object-mode test", value = "objtest",
         uiOutput("objtest_verdict"),
         dl_fig_ui("objtestmap", "Download figure (static)"),
@@ -3784,7 +3788,7 @@ server <- function(input, output, session) {
   # on (variant, matrix) so flipping back to a variant already seen is instant.
   clu_mk_df <- reactive({
     v <- clu_v(); req(input$clu_mat)
-    M <- if (input$clu_mat == "deg") deg_expr else expr
+    M <- if (input$clu_mat == "deg") EXPR else expr
     lab <- clu_lab_cells()
     cells <- intersect(names(lab), colnames(M))
     validate(need(length(cells) > 50, "Too few of this variant's cells are in the selected matrix."))
@@ -3800,7 +3804,7 @@ server <- function(input, output, session) {
   }) |> bindCache(input$clu_var, input$clu_mat)
   output$clu_mk <- renderDT(enr_dt(clu_mk_df(), scroll = "380px"))
   output$clu_mk_note <- renderUI({
-    v <- clu_v(); M <- if ((input$clu_mat %||% "deg") == "deg") deg_expr else expr
+    v <- clu_v(); M <- if ((input$clu_mat %||% "deg") == "deg") EXPR else expr
     cells <- intersect(names(clu_lab_cells()), colnames(M))
     helpText(style = "font-size:12px", sprintf(
       "presto::wilcoxauc, one-vs-rest, computed now on %s cells x %s genes. Positive logFC, padj < 0.05. Subclusters with < 10 cells in this matrix are dropped.",
@@ -3815,7 +3819,12 @@ server <- function(input, output, session) {
                     levels = paste0("CM", sort(unique(as.integer(lab)))))
     m[!is.na(m$cell), , drop = FALSE]
   })
-  output$clu_comp_hdr <- renderText(sprintf("Composition by genotype — %s", clu_v()$label))
+  output$clu_sum_note <- renderUI({
+    v <- clu_v()
+    helpText(style = "font-size:12px", sprintf(
+      "%s — %d subclusters. Left: genotype composition. Right: cell-cycle phase. Both recomputed from the selected labelling.",
+      v$label, v$n_clusters))
+  })
   output$clu_comp <- renderPlot({
     d <- clu_meta(); validate(need(nrow(d) && "genotype" %in% names(d), "No genotype column."))
     ggplot(d, aes(sub, fill = genotype)) + geom_bar(position = "fill") +
