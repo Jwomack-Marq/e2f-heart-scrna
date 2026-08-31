@@ -171,3 +171,35 @@ analysis/2026-08-21_email/run.sh
 
 docs/export.sh --only='enr-'
 ```
+
+## A colour-scale defect in the GO dot plot, and the controls added for it
+
+Reported from a projector: the GO figures were hard to read, the pale yellow especially,
+and the axis labels crowded the panel. The first half was not a preference — it was
+backwards.
+
+`go_dotplot_gg` coloured points by `p.adjust` through
+`scale_color_viridis_c(option = "magma", direction = -1)`. That reversal puts the pale
+yellow end of magma on the **smallest** `p.adjust`, so the **most significant terms were
+drawn in the least visible colour** and the least significant ones were solid black. True
+on any display; a projector only made it obvious.
+
+Fixed by replacing the option/direction pair with an explicit low-to-high colour ramp, and
+by writing the registry so the mistake cannot come back: every entry in
+`PALETTES_CONTINUOUS` has its darkest colour first, and these scales carry `p.adjust`, so
+element 1 is always what "most significant" gets. There is no direction flag left to flip.
+
+The three enrichment figures now carry figure options in the sidebar, and what you see,
+download, and send to Figure Studio is the same figure:
+
+| Control | What it does |
+|---|---|
+| Palette | 5 continuous ramps for GO (significance = dark), 4 up/down pairs for GSEA and TF, each including a print-safe grey |
+| Base font size | title, legend and axes together |
+| Axis label size | axis text alone — the projector complaint was specifically the axis labels, and scaling everything down to fix them shrinks the title too |
+| Truncate long term names | the other half of the complaint: a 90-character GO term eats the panel at 440 px. Hover and the downloaded table keep the full name |
+
+Two plots elsewhere still use `magma` with `direction = -1` — the four-group candidate dot
+plot and the Gene-detail dot plot. Those colour by **mean expression**, where the reversal
+is correct: high expression is dark and prominent. They were left alone on purpose.
+<span class="src">shiny_app/app.R — PALETTES_CONTINUOUS, PALETTES_UPDOWN, go_dotplot_gg, gsea_barplot_gg, enr_tf_top_gg</span>

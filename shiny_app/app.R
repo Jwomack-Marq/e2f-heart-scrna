@@ -300,33 +300,48 @@ enr_dt <- function(df, scroll = "320px") {
 # up_lab/down_lab default to the KO-vs-WT wording the existing call sites use.
 # They are parameters because the four-group contrasts include WT: P0 vs P7,
 # where a legend reading "up in KO" is not a style question -- it is wrong.
-gsea_barplot_gg <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT") {
+gsea_barplot_gg <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT",
+                            base_size = 12, pal_choice = NULL, label_chars = 46L,
+                            axis_scale = 1) {
   validate(need(!is.null(d) && nrow(d), "No GSEA results for this selection."))
   d <- head(d[order(-abs(d$NES)), ], topn)
   d$dir <- ifelse(d$NES > 0, up_lab, down_lab)
-  d$pathway <- factor(d$pathway, levels = d$pathway[order(d$NES)])
+  # hover keeps the full name; only the axis label is shortened
+  d$full <- d$pathway
+  lab <- shorten_lab(d$pathway, label_chars)         # once: values and levels must agree
+  d$pathway <- factor(lab, levels = lab[order(d$NES)])
+  pal <- updown_pal(pal_choice)
   ggplot(d, aes(NES, pathway, fill = dir,
-        text = paste0(pathway, "<br>NES: ", NES, "<br>padj: ", padj, "<br>size: ", size))) +
+        text = paste0(full, "<br>NES: ", NES, "<br>padj: ", padj, "<br>size: ", size))) +
     geom_col() + geom_vline(xintercept = 0, color = "grey60") +
-    scale_fill_manual(values = setNames(c("#c62828", "#1565c0"), c(up_lab, down_lab))) +
-    theme_minimal(base_size = 12) +
+    scale_fill_manual(values = setNames(pal, c(up_lab, down_lab))) +
+    theme_minimal(base_size = base_size) +
+    theme(axis.text = element_text(size = rel(axis_scale))) +
     labs(x = sprintf("NES (>0 enriched toward %s)", up_lab), y = NULL, fill = NULL, title = ttl)
 }
-gsea_barplot_df <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT")
-  ggplotly(gsea_barplot_gg(d, ttl, topn, up_lab, down_lab), tooltip = "text") |>
+gsea_barplot_df <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT", ...)
+  ggplotly(gsea_barplot_gg(d, ttl, topn, up_lab, down_lab, ...), tooltip = "text") |>
     layout(margin = list(l = 0, t = 40))
-go_dotplot_gg <- function(d, ttl, topn = 20) {
+go_dotplot_gg <- function(d, ttl, topn = 20, base_size = 11, pal_choice = NULL,
+                          label_chars = 46L, axis_scale = 1) {
   validate(need(!is.null(d) && nrow(d), "No GO BP results for this selection."))
   d <- head(d[order(d$p.adjust), ], topn)
-  d$Description <- factor(d$Description, levels = rev(d$Description))
+  d$full <- d$Description
+  lab <- shorten_lab(d$Description, label_chars)     # once: values and levels must agree
+  d$Description <- factor(lab, levels = rev(lab))
   ggplot(d, aes(FoldEnrichment, Description, size = Count, color = p.adjust,
-        text = paste0(Description, "<br>fold: ", FoldEnrichment, "<br>padj: ", p.adjust, "<br>genes: ", Count))) +
-    geom_point() + scale_color_viridis_c(option = "magma", direction = -1) +
-    theme_minimal(base_size = 11) +
+        text = paste0(full, "<br>fold: ", FoldEnrichment, "<br>padj: ", p.adjust, "<br>genes: ", Count))) +
+    geom_point() +
+    # colours[1] is the low-p.adjust end, so the most significant terms are the darkest.
+    # This replaces scale_color_viridis_c(option="magma", direction=-1), which did the
+    # opposite and made the significant points nearly invisible.
+    scale_color_gradientn(colours = cont_pal(pal_choice), na.value = "grey85") +
+    theme_minimal(base_size = base_size) +
+    theme(axis.text = element_text(size = rel(axis_scale))) +
     labs(x = "fold enrichment", y = NULL, color = "padj", size = "genes", title = ttl)
 }
-go_dotplot_df <- function(d, ttl, topn = 20)
-  ggplotly(go_dotplot_gg(d, ttl, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+go_dotplot_df <- function(d, ttl, topn = 20, ...)
+  ggplotly(go_dotplot_gg(d, ttl, topn, ...), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
 # static "all subclusters at once" overviews (faceted; renderPlot, low-memory) --
 # "All clusters" enrichment view: one full-size plot per subcluster, two per row
 # (server registers a renderPlot per subcluster id "cm_<kind>_all_<CMn>").
@@ -348,8 +363,8 @@ enr_sub_df <- function(kind, sub) {
 enr_gsea <- function(ct, tp) { d <- ENR$gsea
   validate(need(!is.null(d), "GSEA results are not in this data build."))
   d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
-enr_gsea_plot <- function(ct, tp, topn = 20)
-  gsea_barplot_df(enr_gsea(ct, tp), paste0("GSEA — ", ct, " ", tp), topn)
+enr_gsea_plot <- function(ct, tp, topn = 20, ...)
+  gsea_barplot_df(enr_gsea(ct, tp), paste0("GSEA — ", ct, " ", tp), topn, ...)
 # Split df-from-widget so downloads can reuse the frame (same for the three below).
 enr_gsea_table_df <- function(ct, tp) {
   d <- enr_gsea(ct, tp)
@@ -359,8 +374,8 @@ enr_gsea_table <- function(ct, tp) enr_dt(enr_gsea_table_df(ct, tp))
 enr_go <- function(ct, tp) { d <- ENR$go
   validate(need(!is.null(d), "GO results are not in this data build."))
   d[d$celltype == ct & d$timepoint == tp, , drop = FALSE] }
-enr_go_plot <- function(ct, tp, topn = 20)
-  go_dotplot_df(enr_go(ct, tp), paste0("GO BP enriched in KO-up genes — ", ct, " ", tp), topn)
+enr_go_plot <- function(ct, tp, topn = 20, ...)
+  go_dotplot_df(enr_go(ct, tp), paste0("GO BP enriched in KO-up genes — ", ct, " ", tp), topn, ...)
 enr_go_table_df <- function(ct, tp) {
   d <- enr_go(ct, tp)
   d[order(d$p.adjust), intersect(c("ID","Description","FoldEnrichment","p.adjust","Count","geneID"), names(d))]
@@ -381,7 +396,7 @@ enr_e2f_heat_gg <- function() {
 }
 enr_e2f_heat <- function() ggplotly(enr_e2f_heat_gg(), tooltip = "text") |> layout(margin = list(t = 40))
 # top TFs by |KO - WT| activity for a cell type (from ENR$tf)
-enr_tf_top_gg <- function(ct, topn = 20) {
+enr_tf_top_gg <- function(ct, topn = 20, base_size = 11, pal_choice = NULL, axis_scale = 1) {
   d <- ENR$tf
   validate(need(!is.null(d), "TF activity is not in this data build."))
   d <- d[d$celltype == ct, , drop = FALSE]
@@ -396,13 +411,14 @@ enr_tf_top_gg <- function(ct, topn = 20) {
   p <- ggplot(w, aes(diff, source, fill = diff > 0,
         text = paste0(source, "<br>KO: ", round(KO,3), "<br>WT: ", round(WT,3), "<br>KO-WT: ", round(diff,3)))) +
     geom_col() + geom_vline(xintercept = 0, color = "grey60") +
-    scale_fill_manual(values = c("TRUE" = "#c62828", "FALSE" = "#1565c0"), guide = "none") +
-    theme_minimal(base_size = 11) +
+    scale_fill_manual(values = setNames(updown_pal(pal_choice), c("TRUE", "FALSE")), guide = "none") +
+    theme_minimal(base_size = base_size) +
+    theme(axis.text = element_text(size = rel(axis_scale))) +
     labs(x = "KO - WT activity", y = NULL, title = paste0("Top TFs by |KO-WT| — ", ct))
   p
 }
-enr_tf_top <- function(ct, topn = 20)
-  ggplotly(enr_tf_top_gg(ct, topn), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
+enr_tf_top <- function(ct, topn = 20, ...)
+  ggplotly(enr_tf_top_gg(ct, topn, ...), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
 # log2FC heatmap: top genes (by max |LFC| across groups) x groups, fill = KO/WT log2FC
 lfc_heat <- function(de_list, topn = 22, ttl = NULL, fill_lab = "log2FC\n(KO/WT)") {
   de_list <- de_list[!vapply(de_list, is.null, logical(1))]
@@ -434,6 +450,53 @@ PALETTES_DISCRETE <- list(
   "Set2"      = c("#66C2A5","#FC8D62","#8DA0CB","#E78AC3","#A6D854","#FFD92F","#E5C494","#B3B3B3"),
   "Dark2"     = c("#1B9E77","#D95F02","#7570B3","#E7298A","#66A61E","#E6AB02","#A6761D","#666666"),
   "Viridis"   = NULL)   # NULL -> generated per-n via grDevices::hcl.colors below
+# ---- continuous palettes for significance-coloured plots --------------------
+# Written as explicit low->high ramps rather than viridis option+direction, because the
+# direction argument is what went wrong here: go_dotplot_gg had
+# scale_color_viridis_c(option="magma", direction=-1) on p.adjust, which put the PALE
+# YELLOW end on the SMALLEST p.adjust -- the most significant terms were drawn in the
+# least visible colour. Reported from a projector, but it was wrong on any display.
+#
+# Invariant for everything in this list: element 1 is the colour for the LOW end of the
+# mapped variable. Since these scales carry p.adjust, element 1 is what "most significant"
+# gets, so element 1 is always the darkest. Encoding that in the data makes it impossible
+# to reintroduce the bug by flipping a direction flag.
+PALETTES_CONTINUOUS <- list(
+  "Blue (significant = dark)"     = c("#08306b", "#2171b5", "#6baed6", "#c6dbef"),
+  "Red (significant = dark)"      = c("#67000d", "#cb181d", "#fb6a4a", "#fcbba1"),
+  "Magma (significant = dark)"    = c("#000004", "#51127c", "#b63679", "#fb8861"),
+  "Viridis (significant = dark)"  = c("#440154", "#31688e", "#35b779", "#8fd744"),
+  "Grey (print-safe)"             = c("#111111", "#555555", "#999999", "#cccccc"))
+cont_pal <- function(choice = NULL) {
+  if (is.null(choice) || !choice %in% names(PALETTES_CONTINUOUS))
+    choice <- names(PALETTES_CONTINUOUS)[1]
+  PALETTES_CONTINUOUS[[choice]]
+}
+# Up/down pairs for the diverging bar charts, high-contrast on a projector. As above, no
+# pale end: both directions have to be readable, not just the one you happen to care about.
+PALETTES_UPDOWN <- list(
+  "Red / blue"      = c("#b2182b", "#2166ac"),
+  "Orange / purple" = c("#b35806", "#542788"),
+  "Okabe-Ito"       = c("#D55E00", "#0072B2"),
+  "Grey (print-safe)" = c("#252525", "#969696"))
+updown_pal <- function(choice = NULL) {
+  if (is.null(choice) || !choice %in% names(PALETTES_UPDOWN))
+    choice <- names(PALETTES_UPDOWN)[1]
+  PALETTES_UPDOWN[[choice]]
+}
+# Long GO/pathway names are the other half of the "axis labels too large" complaint: at
+# 440 px a 90-character term eats the plot. Truncate on a word boundary where possible.
+shorten_lab <- function(x, chars = 46L) {
+  x <- as.character(x)
+  out <- ifelse(nchar(x) <= chars, x,
+                paste0(sub("\\s+\\S*$", "", substr(x, 1, chars)), "\u2026"))
+  # Two long terms sharing a prefix truncate to the same string, and a factor cannot carry
+  # duplicate levels -- "GO BP regulation of ..." twice is a real case, not a corner one.
+  # sep = " #" so the disambiguator reads as one, rather than looking like part of the term
+  # name. The full name is preserved in the hover text and in the downloaded table.
+  make.unique(out, sep = " #")
+}
+
 # named colour vector over `levs` for the chosen palette (recycles like pal_for)
 disc_pal <- function(levs, choice = "Default") {
   if (is.null(choice) || !choice %in% names(PALETTES_DISCRETE)) choice <- "Default"
@@ -608,16 +671,33 @@ pcdims_gg <- function(g, colvar, pal_choice = "Default", psize = 0.3) {
 # ---- publication "Figure options": reusable control block + export wiring -------
 # emits a namespaced (prefix_*) control set; `export` picks the download UI (vector
 # ggsave for ggplot panels, camera-button PNG for the WebGL UMAP).
-figure_controls <- function(prefix, export = c("ggplot","umap"), base = TRUE, palette = TRUE,
-                            rename = TRUE, labels = FALSE, default_base = 13) {
+# `palette` picks WHICH registry the selector offers: TRUE/"discrete" for categorical
+# fills, "continuous" for a significance ramp, "updown" for a two-direction bar chart,
+# FALSE for none. `export = "none"` emits options WITHOUT download buttons, for a plot that
+# already carries dl_fig_ui() above it -- emitting both would duplicate the input ids.
+figure_controls <- function(prefix, export = c("ggplot","umap","none"), base = TRUE,
+                            palette = TRUE, rename = TRUE, labels = FALSE,
+                            default_base = 13, axis = FALSE, labelchars = FALSE) {
   export <- match.arg(export); p <- function(s) paste0(prefix, "_", s)
+  pal_choices <- if (isFALSE(palette)) NULL
+    else switch(if (isTRUE(palette)) "discrete" else palette,
+                discrete = names(PALETTES_DISCRETE),
+                continuous = names(PALETTES_CONTINUOUS),
+                updown = names(PALETTES_UPDOWN), NULL)
   tagList(
     textInput(p("title"), "Title (blank = default)", ""),
     if (labels) checkboxInput(p("labels"), "Show cluster labels", TRUE),
     if (labels) sliderInput(p("labelsize"), "Label font size", 8, 28, 12, 1),
     if (base)   sliderInput(p("basesize"), "Base font size", 8, 24, default_base, 1),
+    # Axis text separately from base size: the projector complaint was specifically that
+    # the AXIS labels were too large, and scaling everything down to fix them shrinks the
+    # title and legend too.
+    if (axis)   sliderInput(p("axisscale"), "Axis label size (relative)", 0.5, 1.6, 1, 0.05),
+    # The other half of "labels too large": a 90-character GO term eats the panel. Hover
+    # and the download table keep the full name.
+    if (labelchars) sliderInput(p("labelchars"), "Truncate long term names at", 20, 90, 46, 2),
     checkboxInput(p("legend"), "Show legend", TRUE),
-    if (palette) selectInput(p("palette"), "Palette", names(PALETTES_DISCRETE)),
+    if (!is.null(pal_choices)) selectInput(p("palette"), "Palette", pal_choices),
     if (rename) tagList(tags$small("Rename categories (double-click a label cell):"),
                         DTOutput(p("renametab"))),
     hr(),
@@ -632,8 +712,8 @@ figure_controls <- function(prefix, export = c("ggplot","umap"), base = TRUE, pa
         downloadButton(p("dl_svg"), "SVG", class = "btn-sm btn-outline-secondary"),
         downloadButton(p("dl_png"), "PNG", class = "btn-sm btn-outline-secondary"),
         studio_btn(prefix)),
-    checkboxInput(p("export_on"), "Custom export size", FALSE),
-    conditionalPanel(sprintf("input.%s_export_on", prefix),
+    if (export != "none") checkboxInput(p("export_on"), "Custom export size", FALSE),
+    if (export != "none") conditionalPanel(sprintf("input.%s_export_on", prefix),
       if (export == "ggplot") tagList(
         div(style = "display:flex;gap:6px",
           numericInput(p("w"), "W (in)", 7, 1, 20, 0.5),
@@ -2532,7 +2612,21 @@ ui <- page_navbar(
       selectInput("enr_ct", "Cell type", choices = NULL),
       hr(), helpText("Pre-computed pathway/GO/TF enrichment of the KO-vs-WT signal ",
                      "(fgsea Hallmark/KEGG/E2F, GO biological process, decoupleR TF activity). ",
-                     strong("Descriptive only — n = 1."))),
+                     strong("Descriptive only — n = 1.")),
+      # export = "none": each plot already carries dl_fig_ui() above it, which holds the
+      # download buttons and the Figure Studio handoff. These accordions add the options
+      # those exports read, so what is projected, downloaded and sent to Figure Studio is
+      # the same figure.
+      accordion(open = FALSE, multiple = TRUE,
+        accordion_panel("GSEA figure options",
+          figure_controls("enrgsea", export = "none", palette = "updown", rename = FALSE,
+                          default_base = 12, axis = TRUE, labelchars = TRUE)),
+        accordion_panel("GO figure options",
+          figure_controls("enrgo", export = "none", palette = "continuous", rename = FALSE,
+                          default_base = 11, axis = TRUE, labelchars = TRUE)),
+        accordion_panel("TF figure options",
+          figure_controls("enrtf", export = "none", palette = "continuous", rename = FALSE,
+                          default_base = 11, axis = TRUE, labelchars = TRUE)))),
     navset_card_tab(
       nav_panel("GSEA pathways",
         dl_fig_ui("enrgsea"), plotlyOutput("enr_gsea_plot", height = "440px"),
@@ -5121,20 +5215,43 @@ server <- function(input, output, session) {
     updateSelectInput(session, "enr_ct", choices = cts,
                       selected = if ("Cardiomyocyte" %in% cts) "Cardiomyocyte" else cts[1])
   }
-  output$enr_gsea_plot <- renderPlotly({ req(input$enr_ct); enr_gsea_plot(input$enr_ct, input$enr_tp) })
+  output$enr_gsea_plot <- renderPlotly({ req(input$enr_ct); enr_gsea_plot(input$enr_ct, input$enr_tp,
+                            base_size = input$enrgsea_basesize %||% 12,
+                            pal_choice = input$enrgsea_palette,
+                            label_chars = input$enrgsea_labelchars %||% 46,
+                            axis_scale = input$enrgsea_axisscale %||% 1) })
   output$enr_gsea_tab  <- renderDT({ req(input$enr_ct); enr_gsea_table(input$enr_ct, input$enr_tp) })
-  output$enr_go_plot   <- renderPlotly({ req(input$enr_ct); enr_go_plot(input$enr_ct, input$enr_tp) })
+  output$enr_go_plot   <- renderPlotly({ req(input$enr_ct); enr_go_plot(input$enr_ct, input$enr_tp,
+                            base_size = input$enrgo_basesize %||% 11,
+                            pal_choice = input$enrgo_palette,
+                            label_chars = input$enrgo_labelchars %||% 46,
+                            axis_scale = input$enrgo_axisscale %||% 1) })
   output$enr_go_tab    <- renderDT({ req(input$enr_ct); enr_go_table(input$enr_ct, input$enr_tp) })
   output$enr_e2f_heat  <- renderPlotly(enr_e2f_heat())
-  output$enr_tf_top    <- renderPlotly({ req(input$enr_ct); enr_tf_top(input$enr_ct) })
+  output$enr_tf_top    <- renderPlotly({ req(input$enr_ct); enr_tf_top(input$enr_ct,
+                            base_size = input$enrtf_basesize %||% 11,
+                            pal_choice = input$enrtf_palette,
+                            axis_scale = input$enrtf_axisscale %||% 1) })
   register_fig(output, "enre2f", reactive(enr_e2f_heat_gg()), input)
-  register_fig(output, "enrtf",  reactive({ req(input$enr_ct); enr_tf_top_gg(input$enr_ct) }), input)
+  register_fig(output, "enrtf",  reactive({ req(input$enr_ct)
+    enr_tf_top_gg(input$enr_ct,
+                  base_size = input$enrtf_basesize %||% 11,
+                  pal_choice = input$enrtf_palette,
+                  axis_scale = input$enrtf_axisscale %||% 1) }), input)
   register_fig(output, "enrgsea", reactive({ req(input$enr_ct)
     gsea_barplot_gg(enr_gsea(input$enr_ct, input$enr_tp),
-                    paste0("GSEA — ", input$enr_ct, " ", input$enr_tp)) }), input)
+                    paste0("GSEA — ", input$enr_ct, " ", input$enr_tp),
+                    base_size = input$enrgsea_basesize %||% 12,
+                    pal_choice = input$enrgsea_palette,
+                    label_chars = input$enrgsea_labelchars %||% 46,
+                    axis_scale = input$enrgsea_axisscale %||% 1) }), input)
   register_fig(output, "enrgo", reactive({ req(input$enr_ct)
     go_dotplot_gg(enr_go(input$enr_ct, input$enr_tp),
-                  paste0("GO BP enriched in KO-up genes — ", input$enr_ct, " ", input$enr_tp)) }), input)
+                  paste0("GO BP enriched in KO-up genes — ", input$enr_ct, " ", input$enr_tp),
+                  base_size = input$enrgo_basesize %||% 11,
+                  pal_choice = input$enrgo_palette,
+                  label_chars = input$enrgo_labelchars %||% 46,
+                  axis_scale = input$enrgo_axisscale %||% 1) }), input)
 
   # ---- QC & normalization (embedded figures) ----
   figcard <- function(uri, title, desc) {
