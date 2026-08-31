@@ -322,23 +322,40 @@ gsea_barplot_gg <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "
 gsea_barplot_df <- function(d, ttl, topn = 20, up_lab = "up in KO", down_lab = "up in WT", ...)
   ggplotly(gsea_barplot_gg(d, ttl, topn, up_lab, down_lab, ...), tooltip = "text") |>
     layout(margin = list(l = 0, t = 40))
+# colour_by = "padj" keeps the significance ramp; "none" drops the colour aesthetic and
+# its legend entirely and draws every point in one colour. Worth having as an option
+# rather than a default: the terms are already ordered and filtered by significance, so on
+# a projector the gradient often buys nothing and the legend costs width the panel needs.
 go_dotplot_gg <- function(d, ttl, topn = 20, base_size = 11, pal_choice = NULL,
-                          label_chars = 46L, axis_scale = 1) {
+                          label_chars = 46L, axis_scale = 1, colour_by = c("padj", "none")) {
+  colour_by <- match.arg(colour_by)
   validate(need(!is.null(d) && nrow(d), "No GO BP results for this selection."))
   d <- head(d[order(d$p.adjust), ], topn)
   d$full <- d$Description
   lab <- shorten_lab(d$Description, label_chars)     # once: values and levels must agree
   d$Description <- factor(lab, levels = rev(lab))
-  ggplot(d, aes(FoldEnrichment, Description, size = Count, color = p.adjust,
-        text = paste0(full, "<br>fold: ", FoldEnrichment, "<br>padj: ", p.adjust, "<br>genes: ", Count))) +
-    geom_point() +
-    # colours[1] is the low-p.adjust end, so the most significant terms are the darkest.
-    # This replaces scale_color_viridis_c(option="magma", direction=-1), which did the
-    # opposite and made the significant points nearly invisible.
-    scale_color_gradientn(colours = cont_pal(pal_choice), na.value = "grey85") +
-    theme_minimal(base_size = base_size) +
+  tip <- paste0(d$full, "<br>fold: ", d$FoldEnrichment, "<br>padj: ", d$p.adjust,
+                "<br>genes: ", d$Count)             # padj stays in the hover either way
+  p <- if (identical(colour_by, "none")) {
+    # the darkest end of the chosen ramp, so the palette selector still means something
+    # and the points stay the most visible thing on the panel
+    ggplot(d, aes(FoldEnrichment, Description, size = Count, text = tip)) +
+      geom_point(colour = cont_pal(pal_choice)[1])
+  } else {
+    ggplot(d, aes(FoldEnrichment, Description, size = Count, color = p.adjust, text = tip)) +
+      geom_point() +
+      # colours[1] is the low-p.adjust end, so the most significant terms are the darkest.
+      # This replaces scale_color_viridis_c(option="magma", direction=-1), which did the
+      # opposite and made the significant points nearly invisible.
+      scale_color_gradientn(colours = cont_pal(pal_choice), na.value = "grey85")
+  }
+  # labs(color=) only when a colour aesthetic exists, else ggplot warns
+  # "Ignoring unknown labels" on every single render.
+  p <- p + theme_minimal(base_size = base_size) +
     theme(axis.text = element_text(size = rel(axis_scale))) +
-    labs(x = "fold enrichment", y = NULL, color = "padj", size = "genes", title = ttl)
+    labs(x = "fold enrichment", y = NULL, size = "genes", title = ttl)
+  if (identical(colour_by, "padj")) p <- p + labs(color = "padj")
+  p
 }
 go_dotplot_df <- function(d, ttl, topn = 20, ...)
   ggplotly(go_dotplot_gg(d, ttl, topn, ...), tooltip = "text") |> layout(margin = list(l = 0, t = 40))
@@ -681,7 +698,8 @@ pcdims_gg <- function(g, colvar, pal_choice = "Default", psize = 0.3) {
 # already carries dl_fig_ui() above it -- emitting both would duplicate the input ids.
 figure_controls <- function(prefix, export = c("ggplot","umap","none"), base = TRUE,
                             palette = TRUE, rename = TRUE, labels = FALSE,
-                            default_base = 13, axis = FALSE, labelchars = FALSE) {
+                            default_base = 13, axis = FALSE, labelchars = FALSE,
+                            colourby = FALSE) {
   export <- match.arg(export); p <- function(s) paste0(prefix, "_", s)
   pal_choices <- if (isFALSE(palette)) NULL
     else switch(if (isTRUE(palette)) "discrete" else palette,
@@ -700,6 +718,9 @@ figure_controls <- function(prefix, export = c("ggplot","umap","none"), base = T
     # The other half of "labels too large": a 90-character GO term eats the panel. Hover
     # and the download table keep the full name.
     if (labelchars) sliderInput(p("labelchars"), "Truncate long term names at", 20, 90, 46, 2),
+    if (colourby) radioButtons(p("colourby"), "Colour points by",
+                               c("Adjusted p-value" = "padj", "Nothing (single colour)" = "none"),
+                               selected = "padj"),
     checkboxInput(p("legend"), "Show legend", TRUE),
     if (!is.null(pal_choices)) selectInput(p("palette"), "Palette", pal_choices),
     if (rename) tagList(tags$small("Rename categories (double-click a label cell):"),
@@ -2627,7 +2648,7 @@ ui <- page_navbar(
                           default_base = 12, axis = TRUE, labelchars = TRUE)),
         accordion_panel("GO figure options",
           figure_controls("enrgo", export = "none", palette = "continuous", rename = FALSE,
-                          default_base = 11, axis = TRUE, labelchars = TRUE)),
+                          default_base = 11, axis = TRUE, labelchars = TRUE, colourby = TRUE)),
         accordion_panel("TF figure options",
           figure_controls("enrtf", export = "none", palette = "continuous", rename = FALSE,
                           default_base = 11, axis = TRUE, labelchars = TRUE)))),
@@ -2694,7 +2715,8 @@ ui <- page_navbar(
             # reader wants them consistent. register_fig()'s opts_prefix lets each keep its
             # own download id while reading these controls.
             figure_controls("cmsubenr", export = "none", palette = "continuous",
-                            rename = FALSE, default_base = 11, axis = TRUE, labelchars = TRUE)))),
+                            rename = FALSE, default_base = 11, axis = TRUE, labelchars = TRUE,
+                            colourby = TRUE)))),
       conditionalPanel("input.cm_tabs == 'variant'",
         selectInput("clu_var", "Clustering variant", choices = NULL),
         radioButtons("clu_mat", "Matrix for live markers",
@@ -4420,6 +4442,7 @@ server <- function(input, output, session) {
     list(base_size  = input$cmsubenr_basesize %||% 11,
          pal_choice = input$cmsubenr_palette,
          axis_scale = input$cmsubenr_axisscale %||% 1,
+         colour_by  = input$cmsubenr_colourby %||% "padj",
          label_chars = if (compact) min(lc, if ((input$cm_enr_perrow %||% "1") == "2") 26 else 38) else lc)
   }
   cm_sub_go_plot <- function(dir) { d <- cm_sub_go(dir)
@@ -4438,7 +4461,8 @@ server <- function(input, output, session) {
   # ---- GSEA: same source switch; up/down wording from the contrast ----
   cm_sub_gsea_dat <- reactive({ a <- cm_enr_a(); req(input$cm_enr_sub)
     enr_src_df("gsea", input$cm_enr_sub, a$ct, a$st) })
-  cm_sub_gsea_p <- reactive({ a <- cm_enr_a(); o <- cm_sub_opts(); o$pal_choice <- NULL
+  cm_sub_gsea_p <- reactive({ a <- cm_enr_a(); o <- cm_sub_opts()
+    o$pal_choice <- NULL; o$colour_by <- NULL      # bar chart: up/down pair, no ramp
     do.call(gsea_barplot_gg,
             c(list(cm_sub_gsea_dat(),
                    paste0("GSEA — ", input$cm_enr_sub, " · ", a$lab$label),
@@ -4480,7 +4504,7 @@ server <- function(input, output, session) {
       output[[paste0("cm_kogo_all_", cl)]] <- renderPlot(go_all("up"))
       output[[paste0("cm_kodn_all_", cl)]] <- renderPlot(go_all("down"))
       output[[paste0("cm_gsea_all_", cl)]] <- renderPlot({ a <- cm_enr_a()
-        o <- cm_sub_opts(TRUE); o$pal_choice <- NULL          # bar chart takes an up/down pair
+        o <- cm_sub_opts(TRUE); o$pal_choice <- NULL; o$colour_by <- NULL   # bar chart: up/down pair
         do.call(gsea_barplot_gg, c(list(enr_src_df("gsea", cl, a$ct, a$st), ttl, topn = 10,
                                         up_lab = a$lab$up, down_lab = a$lab$dn), o)) })
     })
@@ -5291,7 +5315,8 @@ server <- function(input, output, session) {
                             base_size = input$enrgo_basesize %||% 11,
                             pal_choice = input$enrgo_palette,
                             label_chars = input$enrgo_labelchars %||% 46,
-                            axis_scale = input$enrgo_axisscale %||% 1) })
+                            axis_scale = input$enrgo_axisscale %||% 1,
+                            colour_by = input$enrgo_colourby %||% "padj") })
   output$enr_go_tab    <- renderDT({ req(input$enr_ct); enr_go_table(input$enr_ct, input$enr_tp) })
   output$enr_e2f_heat  <- renderPlotly(enr_e2f_heat())
   output$enr_tf_top    <- renderPlotly({ req(input$enr_ct); enr_tf_top(input$enr_ct,
@@ -5317,7 +5342,8 @@ server <- function(input, output, session) {
                   base_size = input$enrgo_basesize %||% 11,
                   pal_choice = input$enrgo_palette,
                   label_chars = input$enrgo_labelchars %||% 46,
-                  axis_scale = input$enrgo_axisscale %||% 1) }), input)
+                  axis_scale = input$enrgo_axisscale %||% 1,
+                  colour_by = input$enrgo_colourby %||% "padj") }), input)
 
   # ---- QC & normalization (embedded figures) ----
   figcard <- function(uri, title, desc) {
