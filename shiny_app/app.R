@@ -2632,6 +2632,7 @@ ui <- page_navbar(
           figure_controls("enrtf", export = "none", palette = "continuous", rename = FALSE,
                           default_base = 11, axis = TRUE, labelchars = TRUE)))),
     navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("GSEA pathways",
         dl_fig_ui("enrgsea"), plotlyOutput("enr_gsea_plot", height = "440px"),
         dl_data_ui("enr_gsea_tab"), DTOutput("enr_gsea_tab", height = "360px")),
@@ -2722,7 +2723,21 @@ ui <- page_navbar(
           figure_controls("cmphase", palette = TRUE, rename = TRUE)),
         accordion_panel("Composition figure options",
           figure_controls("cmbar", palette = TRUE, rename = FALSE)))),
+    # fillable = FALSE on every panel of this tabset, and it is load-bearing.
+    #
+    # page_navbar() defaults fillable = TRUE, so each nav_panel body is a flex fill
+    # container and its children are fill items with min-height: 0. In panels with one
+    # child that is what you want -- the plot uses the viewport. These panels have four or
+    # five children (help text, a status alert, a control row, then the tabset holding the
+    # plot), and flex divides the available height among them. On a short or narrow window
+    # the plot's share collapses to a sliver, and because card_body also sets
+    # overflow: auto you get a ~60 px box with its own scrollbar rather than a figure.
+    #
+    # An explicit height= on the plot does NOT win that argument, which is why raising it
+    # from 340 to 420 px changed nothing. Opting the panel out of filling makes the
+    # heights authoritative again and lets the page scroll instead of compressing.
     navset_card_tab(id = "cm_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Subcluster map",
         helpText("Hover any cell to highlight all cells of its subcluster; move off to restore the full map.",
                  br(), "When split (res 0.2) is on, panels are coloured by subcluster and “colour by” is ignored."),
@@ -2796,6 +2811,7 @@ ui <- page_navbar(
               selectInput("cm_enr_sub", NULL, choices = NULL, width = "260px"))),
         conditionalPanel("input.cm_enr_mode == 'one'",
           navset_card_tab(
+            wrapper = function(...) card_body(..., fillable = FALSE),
             nav_panel("Identity GO",
               dl_fig_ui("cmsubidgo"), plotlyOutput("cm_sub_idgo_plot", height = "440px"),
               dl_data_ui("cm_sub_idgo_tab"), DTOutput("cm_sub_idgo_tab", height = "320px")),
@@ -2813,6 +2829,7 @@ ui <- page_navbar(
               radioButtons("cm_enr_perrow", "Plots per row", c("1" = "1", "2" = "2"),
                            selected = "1", inline = TRUE)),
           navset_card_tab(
+            wrapper = function(...) card_body(..., fillable = FALSE),
             nav_panel("Identity GO", uiOutput("cm_grid_idgo")),
             nav_panel("GO — up",     uiOutput("cm_grid_kogo")),
             nav_panel("GO — down",   uiOutput("cm_grid_kodn")),
