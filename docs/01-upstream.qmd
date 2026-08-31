@@ -4,6 +4,7 @@ engine: markdown
 tabs:
   - "QC & normalization"
   - "Annotation check"
+  - "PC dimensions"
 ---
 
 ## What you're looking at
@@ -141,6 +142,48 @@ PIP-seq library structure, or against a 10x whitelist, will find they match neit
 that is expected rather than alarming.
 
 ::: {.callout-note}
+## How many principal components? — the **PC dimensions** tab
+
+The gap listed above is now measured rather than left open. Both embeddings carry
+`dims = 1:30` into `FindNeighbors` and `RunUMAP` with no recorded justification, so the
+sweep in `our_analysis/04_integrate_annotate/pcdims_sweep.R` holds SCTransform, PCA and
+Harmony fixed and varies only that cut across 10, 30 and 50 — for the cardiomyocytes and
+for the whole heart.
+
+The two objects answer differently, and the difference is the point.
+
+**Cell-type structure is robust.** In the whole heart every annotated type stays a clean,
+separate island at all three cuts. The islands rotate and rearrange, but identity holds,
+so the cell-type calls do not depend on the PC choice.
+
+**CM subclusters are not.** The cardiomyocyte compartment is one continuous blob at every
+cut, and its subclusters are partitions of that continuum rather than discrete
+populations. The count moves with the PC cut — **7 at dims 10, 11 at 30, 12 at 50** at
+resolution 0.2 — and only **30 % of a cell's 30 nearest neighbours survive** going from 10
+PCs to 30. There are no natural boundaries to find, so any small numerical change moves
+the cuts.
+
+| | dims 1:10 | **dims 1:30** | dims 1:50 |
+|---|---|---|---|
+| CM subclusters (res 0.2) | 7 | **11** | 12 |
+| 30-NN retained vs dims 30 | 30 % | — | 51 % |
+| Cluster ARI vs dims 30 | 0.49 | — | 0.56 |
+| Share of top-50 PC variance | 73.4 % | 92.6 % | 100 % |
+
+The variance column is a share of what the **50 computed PCs** hold, not of total variance
+— `Stdev()` returns only the components that were computed, so the 50-PC figure is 100 %
+by construction and says nothing on its own.
+
+The tab reports neighbour retention rather than a raw distance, deliberately. The
+Procrustes RMSD the sweep also records is *n*-dependent: two unrelated embeddings of
+42,416 cells score 0.0069, not 1, so an unlabelled 0.003 reads as "almost identical" when
+it is 42 % of the way to unrelated.
+
+**What follows for reading the CM deep-dive:** treat subclusters as strata to compare
+within, not as cell types. "CM7 is a distinct population" is not supported; "KO differs
+from WT within CM7" is the kind of claim the stratification can carry.
+<span class="src">our_analysis/04_integrate_annotate/pcdims_sweep.R, pcdims_shape_metrics.R</span>
+
 ## One open question in the upstream notes
 
 `preprocessing_scripts/pipseeker_scripts.txt` also contains a **MAESTRO** configuration

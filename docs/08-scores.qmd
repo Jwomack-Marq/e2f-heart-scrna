@@ -4,6 +4,7 @@ engine: markdown
 tabs:
   - "Cell-cycle exit & ploidy"
   - "Maturation & metabolism"
+  - "Gene sets & sources"
 ---
 
 ## What you're looking at
@@ -174,3 +175,53 @@ Rscript shiny_app/build_fourgroup.R                  # the gene axes live in $ge
 
 docs/export.sh --only='cyc-|ploidy|mat-|genemap|score-coverage'
 ```
+
+## Where these gene sets came from — the **Gene sets & sources** tab
+
+Every score on this page is a mean over a gene list, so the lists are the method. Of the
+**46 gene sets this project uses, 7 are fetched from an external database and 38 are
+hand-curated** — typed into a script here with no citation, no version, and no record of
+why a gene is in or out. Grepping the repository for a DOI, PMID or reference inside a
+gene-set definition returns nothing.
+
+The seven with real provenance are the ones pulled from a package at runtime rather than
+typed: MSigDB Hallmark, KEGG_LEGACY and GTRD-TFT via `msigdbr`, GO BP via `org.Mm.eg.db`,
+CellChatDB, and Seurat's `cc.genes.updated.2019`. Everything else — the cell-type markers,
+E2F targets, maturation and metabolic panels behind the scores above — is ours.
+
+That is not a correctness claim either way. The genes are standard cardiac and cell-cycle
+markers; what is missing is any way to audit the **selection**. So the panels were
+benchmarked against published counterparts where one exists:
+
+| Panel | Reference | Ours covered |
+|---|---|---|
+| `prolif` | HALLMARK_G2M_CHECKPOINT | 16/17 (94 %) |
+| `glycolysis` | KEGG_GLYCOLYSIS_GLUCONEOGENESIS | 10/11 (91 %) |
+| `E2F_TARGETS` | HALLMARK_E2F_TARGETS | 20/29 (69 %) |
+| `faox` | KEGG_FATTY_ACID_METABOLISM | 9/14 (64 %) |
+| `ccexit` | HALLMARK_P53_PATHWAY | 5/8 (62 %) |
+| **`mat_mature` / `mat_immature`** | **none exists** | **—** |
+
+Most hold up once measured against the right reference, and the benchmark cuts both ways:
+HALLMARK_GLYCOLYSIS covers only 6/11 of the same glycolysis panel because *it* omits
+Gapdh, Hk1, Pfkm, Pfkl and Slc2a1. Hallmark sets are co-expression-derived rather than
+membership-curated, so scoring a metabolic panel against Hallmark alone penalises it for
+being more canonical, not less.
+
+Three caveats change how a score on this page should be read.
+
+- **The maturation panels have no published counterpart at all.** The maturation score
+  rests on a list with no external anchor. [Uosaki et al. 2015](https://doi.org/10.1016/j.celrep.2015.10.032)
+  is the atlas to reconcile them against; that has not been done.
+- **`sig_maturation`'s immature side contains Ccnd1, Mki67 and Top2a**, so it is partly a
+  cell-cycle score. Use `sig_maturation_nocc` for any argument involving cycling —
+  otherwise "less mature, therefore more cycling-competent" is circular.
+- **`faox` carries Cox6a2, Etfa, Ndufa4, Ppargc1a and Sdha**, which are OXPHOS rather than
+  fatty-acid oxidation. The panel is a deliberate FAO/OXPHOS blend and should not be
+  reported as pure FAO.
+
+The tab also flags panels that share a name but not their genes. The app's *CM maturation*
+dropdown holds 14 genes while the `sig_maturation` score it plots is computed from 19 —
+the same label meaning two different things, reported rather than silently reconciled,
+because choosing which list is correct is a biology call.
+<span class="src">our_analysis/05_analyses/gene_set_provenance.R, gene_set_benchmark.R</span>

@@ -1067,6 +1067,15 @@ gsp_ok  <- function() validate(need(!is.null(GSP), GSP_MSG))
 # the downstream numbers follow it. Markers, composition and phase are recomputed live
 # (presto is in the runtime image, ~1-3 s); pseudobulk DE and enrichment are precomputed
 # offline per variant because DESeq2 and clusterProfiler are not.
+# Immune cells that annotate.R labelled Cardiomyocyte (docs/05-cm-deepdive.qmd#cm12).
+# Surfaced rather than filtered: measured, excluding them moves the CM cycling fraction
+# 21.4% -> 21.3%, so exclusion machinery in every statistic would not be earning its
+# complexity. What IS wrong is a per-subcluster row, and being able to see which cells
+# they are is what makes that legible.
+ICN     <- app$immune_contam
+ICN_MSG <- paste("The immune-contamination flag isn't in this data build —",
+                 "run our_analysis/05_analyses/cm_immune_contamination.R,",
+                 "then build_immune_flag.R, and redeploy.")
 CLU     <- app$clusterings
 CLU_MSG <- paste("Clustering variants aren't in this data build —",
                  "run pcdims_sweep.R, cm_subcluster_analyze.R --variant=...,",
@@ -2567,7 +2576,10 @@ ui <- page_navbar(
                          "Cellular component" = "CC"), selected = "BP", inline = TRUE))),
       selectInput("cm_mapcolor", "Map: colour by",
                   c("Subcluster" = "subcluster", "Cell-cycle phase" = "Phase", "Cycling" = "cycling",
-                    "Genotype" = "genotype", "Timepoint" = "timepoint", "Gene" = "gene")),
+                    "Genotype" = "genotype", "Timepoint" = "timepoint", "Gene" = "gene",
+                    # only offered when the flag has been built, so an older bundle does not
+                    # present a colour-by that resolves to a missing column
+                    if (!is.null(app$immune_contam)) c("Immune contamination" = "immune_contam"))),
       conditionalPanel("input.cm_mapcolor == 'gene'",
         selectInput("cm_geneset", "Gene set", choices = GENE_SET_CHOICES, selected = "__all__"),
         selectizeInput("cm_gene", "Gene", choices = NULL, options = list(maxOptions = 50L))),
@@ -2624,7 +2636,7 @@ ui <- page_navbar(
             h5("DE heatmap — top genes × subclusters"),
             dl_fig_ui("cmlfcheat"), plotlyOutput("cm_lfcheat", height = "560px"),
             uiOutput("cm_lfcheat_note"))),
-      nav_panel("Cell cycle", plotOutput("cm_phase", height = "560px")),
+      nav_panel("Cell cycle", uiOutput("cm_icn_note"), plotOutput("cm_phase", height = "560px")),
       nav_panel("Composition (stacked bars)", value = "bars",
         helpText("Composition of each res-0.2 subcluster, broken down four ways — genotype (WT/KO), ",
                  "timepoint (P0/P7), cell-cycle phase, and cycling status. Each is its own plot; scroll to see all four."),
@@ -3629,6 +3641,21 @@ server <- function(input, output, session) {
             psize = 5, labels = (cb == "subcluster"))
   })
   register_fig(output, "cmmap", cm_map_gg_p, input)
+
+  # ---- immune-contamination note (app$immune_contam, from build_immune_flag.R) ----
+  output$cm_icn_note <- renderUI({
+    if (is.null(ICN)) return(NULL)
+    div(class = "alert alert-warning", style = "font-size:12px",
+        HTML(sprintf(paste0(
+          "<b>%d of these cells are immune cells, not cardiomyocytes.</b> They carry ",
+          "pan-leukocyte markers and were labelled Cardiomyocyte because annotate.R had no ",
+          "mast-cell or lymphocyte panel to assign them to. They cycle at <b>%.0f%%</b> against ",
+          "%.0f%% for the compartment, so a per-subcluster cycling row that is mostly these ",
+          "cells is not a cardiomyocyte number. Excluding them moves the compartment figure ",
+          "only %.1f%% &rarr; %.1f%%. Colour the map by <i>Immune contamination</i> to see them."),
+          ICN$n_flagged_bundle, ICN$cycling_flagged, ICN$cycling_all,
+          ICN$cycling_all, ICN$cycling_excl)))
+  })
 
   # ---- Clustering variants (app$clusterings, from build_clusterings.R) ----
   observe({
