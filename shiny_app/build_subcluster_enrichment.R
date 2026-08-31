@@ -172,10 +172,16 @@ out <- list(res = RES, variant = VARIANT,
             gsea        = bind(gsea_rows),
             identity_go = bind(id_rows))
 if (!is.na(VARIANT)) {
+  # NEVER write app$enrich$sub from a variant run. An earlier version aliased the
+  # "production" variant onto it, reasoning that dims 30 / res 0.2 IS production. It is
+  # not: the registry's cm_dims30_res0.2 is that recipe RE-RUN in this container, and
+  # ff4c193 measured ARI 0.68 between it and the shipped labelling -- 10 subclusters
+  # against 13, with CM3 meaning different cells in each. The alias therefore left the
+  # Subcluster enrichment tab showing one labelling's enrichment against another
+  # labelling's map, and the cluster dropdown listing ids the map does not have.
+  # app$enrich$sub belongs to app$cm$meta and only build_app_data.R's clustering may
+  # write it.
   app$enrich$sub_by_variant[[VARIANT]] <- out
-  # Production stays reachable at the address every existing panel already reads, so
-  # adding variants never moves the published numbers.
-  if (identical(VARIANT, app$clusterings$production)) app$enrich$sub <- out
 } else {
   app$enrich$sub <- out
 }

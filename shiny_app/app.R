@@ -3872,8 +3872,11 @@ server <- function(input, output, session) {
   })
   clu_enr_df <- reactive({
     v <- clu_v()
+    # Deliberately NO fallback to app$enrich$sub. That belongs to the shipped labelling in
+    # app$cm$meta, which is a different clustering from the registry's cm_dims30_res0.2
+    # even though both are "dims 30, res 0.2" (ARI 0.68, 13 subclusters against 11).
+    # Falling back would silently pair one labelling's enrichment with another's clusters.
     e <- app$enrich$sub_by_variant[[v$variant_id]]
-    if (is.null(e) && isTRUE(v$is_production)) e <- app$enrich$sub
     validate(need(!is.null(e) && !is.null(e$go),
                   "Enrichment has not been built for this variant — run build_subcluster_enrichment.R --variant=... and redeploy."))
     e$go
