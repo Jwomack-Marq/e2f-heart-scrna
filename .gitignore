@@ -83,6 +83,9 @@ our_analysis/results/tables/*descriptive.DE.csv
 our_analysis/results/tables/cm_subcluster_markers_*.csv
 our_analysis/results/tables/pseudotime_per_cell.csv
 our_analysis/results/tables/cm_objectmode_percell.csv.gz
+# per-gene cell-level rankings: ~11.5k genes x 3 strata per subcluster, same category
+# as the *descriptive.DE.csv tables above (rebuild: cm_subcluster_celllevel_de.R)
+our_analysis/results/tables/cm_subcluster_celllevel_*.csv
 our_analysis/results/tables/pcdims_*_percell.csv.gz
 our_analysis/results/tables/pathway_GO_BP_up_in_KO.csv
 our_analysis/results/tables/pathway_fgsea_hallmark_kegg_e2f.csv
