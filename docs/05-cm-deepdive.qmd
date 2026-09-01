@@ -137,11 +137,33 @@ celldex's `MouseRNAseqData`, a reference that does contain immune subtypes;
 `annotation_cluster_labels.csv` records `singleR = NA` for all 28 clusters because `celldex`
 was not installed and lines 12-13 and 33 skip it with a message.
 
-**The mundane reason there is no DE**, separately: the pseudobulk contrast aggregates cells
-into one sample per library × lane, needs 20 cells per sample and then two KO and two WT
-samples to estimate dispersion. Spread over eight possible samples, 99 cells clears the bar
-in **one WT sample and no KO samples**, so there is no contrast to fit. It is recorded as
-`skipped_too_few_or_unbalanced` rather than silently absent, which is how the gap was found.
+**The mundane reason there is no DE**, separately — and it is *not* that CM12 lacks KO
+cells. It has 36 of them against 63 WT, which is why the composition bars show it as about
+38 % KO. The pseudobulk contrast never looks at cells: it aggregates them into one sample
+per library × lane, needs **20 cells in each**, and then two KO and two WT surviving samples
+to estimate dispersion. Ninety-nine cells do not survive an eight-way split:
+
+| sample | cells | |
+|---|---|---|
+| P0KO lane1 | 10 | dropped |
+| P0KO lane6 | 10 | dropped |
+| P0WT lane1 | 18 | dropped — two cells short |
+| **P0WT lane6** | **21** | **passes** |
+| P7KO lane1 | 8 | dropped |
+| P7KO lane6 | 8 | dropped |
+| P7WT lane1 | 10 | dropped |
+| P7WT lane6 | 14 | dropped |
+
+One sample of eight. So `n_KO_samp = 0` in the summary table means *no KO pseudobulk sample
+reached 20 cells*, not *no KO cells* — a distinction worth spelling out, because the two
+readings sit next to each other in the app and look contradictory.
+
+It is a threshold effect, not an asymmetry: the largest KO samples hold 10 cells each, so a
+floor of 10 rather than 20 would give two KO and four WT samples and DESeq2 would run. It
+would also be running on 8–10 cells per sample, and on "replicates" that are the same animal
+sequenced twice (see [chapter 1](01-upstream.qmd)) — so it would produce numbers rather than
+evidence. The skip is recorded as `skipped_too_few_or_unbalanced` rather than silently
+absent, which is how the gap was noticed at all.
 
 **What this does and does not affect — measured, not assumed.** Flagging every
 pan-leukocyte-positive cell in the compartment (161 of 42,416, 0.38 %) and recomputing:

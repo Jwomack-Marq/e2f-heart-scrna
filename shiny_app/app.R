@@ -2789,6 +2789,17 @@ ui <- page_navbar(
         dl_fig_ui("cmbarcyc", "Download this panel"), plotOutput("cm_bar_cyc",   height = "300px")),
       nav_panel("Per-cluster summary", value = "summary",
         helpText("One row per res-0.2 subcluster: identity, composition, top marker & KO-vs-WT genes, and top pathways — scan all clusters without clicking through tabs. Sizes/percentages are from the displayed (sampled) cells."),
+        # n_KO_samp / n_WT_samp read as genotype counts and are not. Without this note a
+        # reader sees CM12 at n_KO_samp = 0 beside a composition bar showing it 38 % KO and
+        # reasonably concludes one of them is wrong; both are right.
+        helpText(style = "font-size:12px",
+                 HTML(paste0("<b>n_KO_samp / n_WT_samp are pseudobulk SAMPLES, not cells.</b> ",
+                 "The KO-vs-WT test aggregates cells into one sample per library &times; lane ",
+                 "(eight possible) and keeps only samples with &ge; 20 cells, then needs two per ",
+                 "genotype. So <code>n_KO_samp = 0</code> means no KO sample reached 20 cells &mdash; ",
+                 "not that the subcluster has no KO cells. CM12 is the clear case: 36 KO and 63 WT ",
+                 "cells, but spread ~9 per KO sample, so none clear the floor and the row is ",
+                 "<code>skipped_too_few_or_unbalanced</code>."))),
         DTOutput("cm_summary")),
       nav_panel("Top markers", value = "topmarkers",
         helpText("One row per res-0.2 subcluster: top identity markers (by z-scored mean expression) plus ",
