@@ -3030,8 +3030,9 @@ ui <- page_navbar(
                      "the universe was, how many terms came out, and which selection rule fired. ",
                      "Read this before concluding a direction is uninformative — an empty result ",
                      "can mean the list was too small to test."),
-            dl_data_ui("fg_enr_audit_tab"), DTOutput("fg_enr_audit_tab", height = "420px"))))))),
+            dl_data_ui("fg_enr_audit_tab"), DTOutput("fg_enr_audit_tab", height = "420px")))))))),
 
+  nav_menu("Scores & overlaps",
   nav_panel("Maturation ∩ P7 KO", layout_sidebar(
     sidebar = sidebar(width = 320,
       conditionalPanel("input.mi_tabs != 'candidates'",

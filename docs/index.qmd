@@ -72,9 +72,10 @@ the subject of [The cell atlas](02-atlas.qmd) and reappears in
 
 ## Where each app tab is documented
 
-The navbar has four menus: **Whole heart** (all cell types), **Cardiomyocytes** (the
-compartment deep-dive), **Methods & provenance** (diagnostics and where numbers came from),
-and **Help**.
+The navbar has five menus: **Whole heart** (all cell types), **Cardiomyocytes** (the
+compartment itself — subclusters, E2F, the four-group design), **Scores & overlaps**
+(quantities derived from those subclusters: module scores and gene-set intersections),
+**Methods & provenance** (diagnostics and where the numbers came from), and **Help**.
 
 | App tab | Chapter |
 |---|---|

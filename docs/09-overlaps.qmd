@@ -9,8 +9,8 @@ tabs:
 
 ## What you're looking at
 
-Three tabs that all do the same kind of thing: take two or three gene sets defined by
-different analyses and ask whether their overlap means anything.
+Three panels under **Scores & overlaps** that all do the same kind of thing: take two or
+three gene sets defined by different analyses and ask whether their overlap means anything.
 
 - **Maturation ∩ P7 KO** — the maturation axis crossed with the P7 KO response, as a
   quadrant map, an intersection table, and a candidate-gene view.
