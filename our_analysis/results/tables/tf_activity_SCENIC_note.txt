@@ -1,0 +1,1 @@
+Full SCENIC (GENIE3 co-expression + RcisTarget motif pruning + AUCell) needs ~1GB+ cisTarget feather DBs and long runtime; run via pySCENIC on the cluster if a motif-pruned regulon is required. Here: decoupleR ULM over CollecTRI regulons (literature/curated), which gives per-group TF activity including the E2F family.

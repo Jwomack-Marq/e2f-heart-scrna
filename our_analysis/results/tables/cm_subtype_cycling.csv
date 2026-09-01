@@ -1,0 +1,7 @@
+"timepoint","cm_subtype","genotype","n","pct_cycling"
+"P0","Atrial","KO",75,5.3
+"P0","Atrial","WT",209,10.5
+"P0","Ventricular","KO",12188,15.5
+"P0","Ventricular","WT",12810,16.6
+"P7","Ventricular","KO",10597,31.6
+"P7","Ventricular","WT",6537,25.6

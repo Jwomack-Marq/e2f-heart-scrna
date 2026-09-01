@@ -41,3 +41,68 @@ shiny_app/deck.body.html
 # generated deliverables: Excel workbooks + figures for collaborator requests
 # (rebuild: analysis/<date>_<name>/run.sh) — large and fully regenerable
 deliverables/
+
+# rendered meeting decks (rebuild: slides/render.sh) — the .qmd is the source.
+# slides/assets/ IS tracked: it is the deck's figures, and regenerating them needs
+# the git-ignored data bundle.
+slides/*.pptx
+slides/*.pdf
+
+# rendered methods book (rebuild: docs/render.sh) — build artifact, like the decks.
+# docs/assets/ and docs/_generated/ ARE tracked: they are the book's figures and
+# generated tables, and rebuilding them needs the git-ignored data bundle.
+docs/_site/
+# Quarto's incremental-render cache. It was tracked by accident: every render
+# rewrites the idx/ and xref/ entries, so it dirtied the tree on each build while
+# carrying nothing anyone reads. Verified disposable -- deleting it and running
+# docs/render.sh rebuilds the book and the cache with it.
+docs/.quarto/
+
+# The upstream analysis we received (original_Han_analysis/) — 4.3 GB of raw PIPseeker
+# output, Seurat objects and rendered reports. The ~2.4 MB of text files that carry the
+# PROVENANCE are deliberately NOT ignored: they are the record of how the data were made,
+# and they are what docs/01-upstream.qmd cites. That is the per-lane PIPseeker and STAR
+# stats (run_config.csv, metrics_summary.csv, matrix_stats.csv, barcode_stats.csv,
+# star/Log.final.out), the Scrublet per-barcode calls behind the doublet table
+# (predicted_doublets.csv, 1.9 MB of the 2.4), the PIPseeker and Scrublet scripts, and the
+# README. Everything heavy and regenerable-from-the-cluster is ignored.
+original_Han_analysis/raw_pipseeker_outputs/*/filtered_matrix/
+original_Han_analysis/raw_pipseeker_outputs/*/star/*
+!original_Han_analysis/raw_pipseeker_outputs/*/star/Log.final.out
+original_Han_analysis/raw_pipseeker_outputs/*/report.html
+original_Han_analysis/raw_pipseeker_outputs/*/*.png
+original_Han_analysis/processing/
+original_Han_analysis/results/
+original_Han_analysis/docs/
+
+# Our re-analysis pipeline (our_analysis/) — 16 GB. The scripts and 00_DOCS are the
+# record of how the bundle is made and are deliberately TRACKED; the multi-GB Seurat
+# objects, the raw PIPseeker copy, the rendered figures and the per-gene DE CSVs
+# (which the bundle now carries anyway, via build_linked_results.R) are ignored.
+our_analysis/processing/
+our_analysis/01_input/
+our_analysis/results/figures/
+our_analysis/results/markers/
+our_analysis/results/models/
+our_analysis/results/tables/*descriptive.DE.csv
+our_analysis/results/tables/cm_subcluster_markers_*.csv
+our_analysis/results/tables/pseudotime_per_cell.csv
+our_analysis/results/tables/cm_objectmode_percell.csv.gz
+# per-gene cell-level rankings: ~11.5k genes x 3 strata per subcluster, same category
+# as the *descriptive.DE.csv tables above (rebuild: cm_subcluster_celllevel_de.R)
+our_analysis/results/tables/cm_subcluster_celllevel_*.csv
+our_analysis/results/tables/pcdims_*_percell.csv.gz
+our_analysis/results/tables/pathway_GO_BP_up_in_KO.csv
+our_analysis/results/tables/pathway_fgsea_hallmark_kegg_e2f.csv
+our_analysis/results/tables/tf_activity_by_celltype_genotype.csv
+our_analysis/logs/
+our_analysis/_setup/
+# generated outputs: the shinylive/webR export (an entire R runtime), the app bundle
+# copy, and the rendered interactive report. All regenerable, none are sources.
+our_analysis/06_outputs/app/site/
+our_analysis/06_outputs/app/app_data.rds
+our_analysis/06_outputs/interactive/
+# the rendered pilot report, for the same reason slides/*.pptx and docs/_site/ are
+# ignored: it is a build artifact of 06_outputs/make_report.R, not a source.
+our_analysis/06_outputs/E2F_scRNA_pilot_report.html
+our_analysis/06_outputs/E2F_scRNA_pilot_report.pptx

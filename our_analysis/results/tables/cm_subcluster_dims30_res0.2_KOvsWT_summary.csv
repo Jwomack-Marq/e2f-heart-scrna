@@ -1,0 +1,12 @@
+"subcluster","n_cells","n_KO_samp","n_WT_samp","design","status","n_DE_absLFC_gt1","top_KO_up","top_KO_down"
+"CM0",11085,4,4,"~timepoint + condition","ok",166,"Gm29650,Gabbr2,Gm32815,Upk3b,Tcf4,Gm49918","Gm27733,Chac1,Tmem163,2310015A16Rik,Gm10457,Nptx2"
+"CM1",10493,4,4,"~timepoint + condition","ok",180,"Gabbr2,Tcf4,Adamts9,Ppfia2,Ralyl,Tafa2","Fcrls,Retnlg,1810009A15Rik,Gm11961,Alpl,Snord118"
+"CM2",4230,3,4,"~timepoint + condition","ok",280,"Hbb-bh1,Gm10640,Gm14296,Gabbr2,Gm12381,S100a8","Gm10451,Ano2,Ndp,B230206H07Rik,9130019P16Rik,Nr4a3"
+"CM3",4189,4,4,"~timepoint + condition","ok",81,"Gabbr2,Tcf4,Rhox5,Adamts9,Ralyl,1700016L21Rik","G530012D18Rik,Rtn4r,Cox20b,Nptx2,Sln,Acer2"
+"CM4",3481,4,4,"~timepoint + condition","ok",275,"Gabbr2,Tcf4,Gm10640,Camk2n2,Gm12381,Kcnmb1","Csta2,Ano2,2900052N01Rik,Tmem163,2310015A16Rik,P3h3"
+"CM5",3038,4,4,"~timepoint + condition","ok",175,"Gabbr2,Dscc1,Tcf4,Adamts9,Ralyl,Gm12381","Gm28981,Gm49003,Tmem163,Nptx2,Sorcs3,Smco1"
+"CM6",2256,4,4,"~timepoint + condition","ok",68,"Hbb-bh1,Gabbr2,Tcf4,Adamts9,Gm12381,Gm36723","Gm31508,B230206H07Rik,Itgb6,Tmem163,Nptx2,Acer2"
+"CM7",2007,2,2,"~condition","ok",215,"Ngp,Ltf,Gabbr2,Zfp616,Camp,Tcf4","Gm46606,Gm49192,Gm26916,Dock9,Myo16,Neu2"
+"CM8",1229,4,4,"~timepoint + condition","ok",87,"Cntn2,Gabbr2,Cd74,Ahsg,Cytl1,Cdo1","Ifitm6,S100a8,C5ar1,Clec7a,S100a9,Itgb2"
+"CM9",310,2,2,"~condition","ok",200,"Gabbr2,Tcf4,Gm11290,Ddit4l,Dpy19l2,Rtn1","Bmp10,Smim41,Cdh20,Gm34544,Smoc2,Itpr2"
+"CM10",98,0,1,NA,"skipped_too_few_or_unbalanced",NA,NA,NA

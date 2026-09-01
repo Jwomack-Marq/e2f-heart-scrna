@@ -5,9 +5,36 @@ services:
     container_name: e2f-heart-scrna
     ports:
       - "3838:3838"   # http://localhost:3838
+    environment:
+      # Figure Studio handoff. Both must be set for the "Figure Studio" buttons
+      # to appear; unset (the default outside compose) leaves the app unchanged.
+      # The base URL is what the BROWSER opens, so it is the host-side port.
+      FIGURE_STUDIO_BASE: "http://localhost:3939/"
+      HANDOFF_DIR: "/handoff"
     volumes:
       # The data bundle is git-ignored (~103 MB) and supplied at runtime, not baked in.
       # IMPORTANT: create shiny_app/app_data.rds on the host BEFORE `up` — if the file is
       # missing, Docker will create an empty directory here and the app will fail to read it.
       - ./shiny_app/app_data.rds:/srv/shiny-app/app_data.rds:ro
+      - figure-handoff:/handoff
     restart: unless-stopped
+
+  # Companion figure editor (separate repo: ../figure-studio). Clone it beside
+  # this one, or point `build` elsewhere. On the lab server both apps sit behind
+  # one nginx, so FIGURE_STUDIO_BASE is the path-relative "/figure-studio/"
+  # instead of a localhost URL.
+  figure-studio:
+    build: ../figure-studio
+    image: figure-studio:latest
+    container_name: figure-studio
+    ports:
+      - "3939:3838"   # http://localhost:3939
+    environment:
+      HANDOFF_DIR: "/handoff"
+    volumes:
+      - figure-handoff:/handoff
+    restart: unless-stopped
+
+volumes:
+  # throwaway figure handoffs (24 h TTL, pruned by both apps)
+  figure-handoff:

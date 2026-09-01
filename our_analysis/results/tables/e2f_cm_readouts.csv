@@ -1,0 +1,5 @@
+"timepoint","genotype","n_CM","cycling_fraction","E2F_target_score","mature_score","immature_score","median_nCount","median_nFeature"
+"P0","WT",4637,0.162,-0.012,2.5795,0.9547,10884,3225
+"P0","KO",5960,0.147,-0.0108,2.4317,1.094,10048,3233
+"P7","WT",1759,0.186,-0.0801,2.5705,0.2803,19021,4641
+"P7","KO",4641,0.19,-0.0514,2.6936,0.3814,9882,2893

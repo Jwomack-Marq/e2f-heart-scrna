@@ -1,0 +1,276 @@
+---
+title: "scRNA-seq analysis for mouse heart samples"
+output: html_document
+date: "2025-03-24"
+---
+
+
+```{r configuration, include = FALSE}
+# args <- commandArgs(TRUE)
+# samplename <- args[1]
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F)
+options(future.globals.maxSize = 16*1024^3)  # bounded brake, NOT Inf; matches our_analysis/_common.R.
+                                             # 3 GiB was below what SCTransform needs on the larger
+                                             # objects, and with plan("sequential") the cap can only
+                                             # refuse work, never prevent a transfer that happens.
+library(Seurat)
+library(dplyr)
+library(tibble)
+library(patchwork)
+library(dittoSeq)
+# MAESTRO is optional (used only for cell-type annotation). Guarded so the
+# pipeline runs without it.
+have.maestro <- requireNamespace("MAESTRO", quietly = TRUE)
+if (have.maestro) suppressMessages(library(MAESTRO))
+
+
+## parameters
+# Set `samplename` to one of P0WT, P0KO, P7WT, P7KO (or via env var SCRNA_SAMPLE
+# for batch runs) and re-knit to regenerate each merge.lanes.<group>.rds object.
+samplename <- Sys.getenv("SCRNA_SAMPLE", unset = "P0WT")
+# Output root for derived files (processing/ and results/ live under it). The
+# runner sets SCRNA_OUT_DIR="." so outputs land in our_analysis/. Defaults to ".".
+out.dir <- Sys.getenv("SCRNA_OUT_DIR", unset = ".")
+# Input root holding the raw PIPseeker sample folders. Defaults to 01_input/
+# (the copy of the raw matrices that lives inside our_analysis/).
+in.dir <- Sys.getenv("SCRNA_IN_DIR", unset = "01_input")
+cutoff.nFeature <- 1500       # minimum genes/cell
+# Max % mitochondrial reads. Generous on purpose: cardiomyocytes are genuinely
+# mito-rich, so an aggressive cutoff would wrongly discard real heart cells.
+# Inspect the per-lane percent.mt violins below and tune per sample if needed.
+cutoff.mt <- 20
+# Drop only the most extreme high-complexity barcodes (likely multiplets), as a
+# per-lane percentile so it self-scales. Heart cells can be large/high-RNA, so
+# keep this conservative.
+upper.nFeature.pctl <- 0.995
+# Portable working directory: when knitting, this chunk runs in the script's
+# folder (02_qc_lane_merge/), so ".." is the our_analysis root that holds 01_input/,
+# processing/ and results/. (When run via run_pipeline.R the runner sets the CWD.)
+knitr::opts_knit$set(root.dir = normalizePath(".."))
+path.lane1 <- file.path(in.dir, paste0(samplename, "_lane1/filtered_matrix/sensitivity_5/"))
+path.lane6 <- file.path(in.dir, paste0(samplename, "_lane6/filtered_matrix/sensitivity_5/"))
+
+doublet_lane1 <- read.csv(file = file.path(in.dir, paste0(samplename, "_lane1/predicted_doublets.csv")))
+doublet_lane6 <- read.csv(file = file.path(in.dir, paste0(samplename, "_lane6/predicted_doublets.csv")))
+
+
+RNAFilteringPlot.cust <- function(UMI_gene, UMI.cutoff = 1000, gene.number.cutoff = 500){
+  RCB_blue = "grey2"
+  RCB_red = "#B2182B"
+  RCB_3 = "seagreen1"
+  UMI_gene <- UMI_gene[,2:4]
+  par(mai = c(0.85, 0.85, 0.25, 0.25))
+  
+  doublet.df <- UMI_gene[which(UMI_gene[,3]  == "True"), ]
+  
+   plot(log10(UMI_gene[which(UMI_gene[,1] < UMI.cutoff | UMI_gene[,2] < gene.number.cutoff),1]+1),UMI_gene[which(UMI_gene[,1] < UMI.cutoff | UMI_gene[,2] < gene.number.cutoff),2],
+       xlim=c(2,log10(max(UMI_gene[,1])+1)+0.25), 
+       ylim=c(0,max(UMI_gene[,2])+150), pch='.',
+       col=RCB_red,ylab='Number of genes covered',xlab='Number of UMIs (log10)')
+  points(log10(UMI_gene[which(UMI_gene[,1] >= UMI.cutoff & UMI_gene[,2] >= gene.number.cutoff),1]+1),UMI_gene[which(UMI_gene[,1] >= UMI.cutoff & UMI_gene[,2] >= gene.number.cutoff),2],
+         pch='.',col=RCB_blue)
+  legend("topleft",c("High-quality cells","Low-quality cells"),col=c(RCB_blue,RCB_red),pch=20, bty = "n")
+  points(log10(doublet.df[,1] +1) , doublet.df[,2],  pch='.', col=RCB_3, cex=1.7)
+  
+  legend("topleft",c("High-quality cells","Low-quality cells","predicted doublet cells"),
+         col=c(RCB_blue,RCB_red, RCB_3),pch=20, bty = "n")
+  # dev.off()
+}
+```
+
+## Data input
+
+```{r}
+sample_lane1.counts <- Read10X(data.dir = path.lane1) 
+sample_lane6.counts <- Read10X(data.dir = path.lane6) 
+
+seurat.sample_lane1 <- CreateSeuratObject(counts = sample_lane1.counts);
+seurat.sample_lane6 <- CreateSeuratObject(counts = sample_lane6.counts);
+
+# Mitochondrial content (mouse mitochondrial genes are lower-case "mt-")
+seurat.sample_lane1[["percent.mt"]] <- PercentageFeatureSet(seurat.sample_lane1, pattern = "^mt-")
+seurat.sample_lane6[["percent.mt"]] <- PercentageFeatureSet(seurat.sample_lane6, pattern = "^mt-")
+
+seurat.sample_lane1$doublet <- doublet_lane1$predicted_doublets
+seurat.sample_lane6$doublet <- doublet_lane6$predicted_doublets
+seurat.sample_lane1$doublet_score <- doublet_lane1$doublet_scores
+seurat.sample_lane6$doublet_score <- doublet_lane6$doublet_scores
+
+# Robust logical doublet flag used for filtering (handles "True"/"False" strings
+# or TRUE/FALSE logicals coming out of read.csv).
+seurat.sample_lane1$is_doublet <- as.logical(as.character(doublet_lane1$predicted_doublets))
+seurat.sample_lane6$is_doublet <- as.logical(as.character(doublet_lane6$predicted_doublets))
+
+# Track lane of origin so downstream pseudobulk DE can aggregate per replicate.
+# (Confirm whether a lane corresponds to a distinct animal before treating these
+# as biological replicates.)
+seurat.sample_lane1$lane <- "lane1"
+seurat.sample_lane6$lane <- "lane6"
+
+
+print(paste0("There are ", ncol(sample_lane1.counts), " barcodes in sample ", samplename, "_lane 1"))
+print(paste0("There are ", ncol(sample_lane6.counts), " barcodes in sample ", samplename, "_lane 6"))
+seurat.sample_lane1
+seurat.sample_lane6
+rm(sample_lane1.counts, sample_lane6.counts)
+```
+
+## QC
+
+```{r, fig.width=8, fig.height=6}
+# RNAFilteringPlot(filepath = "~/Downloads/Projects/03737486_count_gene_stat.txt", 
+#                  MI.cutoff = 1000, gene.number.cutoff = 500, name="test")
+
+count_gene_stat.l1 <- seurat.sample_lane1@meta.data[,2:4] %>% rownames_to_column();
+count_gene_stat.l6 <- seurat.sample_lane6@meta.data[,2:4] %>% rownames_to_column();
+
+RNAFilteringPlot.cust(UMI_gene = count_gene_stat.l1, UMI.cutoff = 1500)
+RNAFilteringPlot.cust(UMI_gene = count_gene_stat.l6, UMI.cutoff = 1500)
+
+FeatureScatter(seurat.sample_lane1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+FeatureScatter(seurat.sample_lane6, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+
+```
+
+
+
+```{r filter}
+# Per-lane upper bound on gene count (extreme high-complexity barcodes ~ multiplets)
+max.nFeature.l1 <- quantile(seurat.sample_lane1$nFeature_RNA, upper.nFeature.pctl)
+max.nFeature.l6 <- quantile(seurat.sample_lane6$nFeature_RNA, upper.nFeature.pctl)
+
+# Filter: min genes, max genes, mito %, and REMOVE predicted doublets.
+# (The original code attached the doublet flag but never used it to filter.)
+sample_lane1.filter <- subset(seurat.sample_lane1,
+  subset = nFeature_RNA >= cutoff.nFeature & nFeature_RNA <= max.nFeature.l1 &
+           percent.mt <= cutoff.mt & is_doublet == FALSE)
+sample_lane6.filter <- subset(seurat.sample_lane6,
+  subset = nFeature_RNA >= cutoff.nFeature & nFeature_RNA <= max.nFeature.l6 &
+           percent.mt <= cutoff.mt & is_doublet == FALSE)
+
+cat(sprintf("lane1: kept %d of %d cells (removed %d doublets)\n",
+            ncol(sample_lane1.filter), ncol(seurat.sample_lane1), sum(seurat.sample_lane1$is_doublet, na.rm = TRUE)))
+cat(sprintf("lane6: kept %d of %d cells (removed %d doublets)\n",
+            ncol(sample_lane6.filter), ncol(seurat.sample_lane6), sum(seurat.sample_lane6$is_doublet, na.rm = TRUE)))
+
+sample_lane1.filter
+sample_lane6.filter
+
+VlnPlot(seurat.sample_lane1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(sample_lane1.filter, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+
+VlnPlot(seurat.sample_lane6, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+VlnPlot(sample_lane6.filter, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+```
+
+
+
+## merge two lanes
+
+```{r, fig.width=12, fig.height=6}
+rm(seurat.sample_lane1, seurat.sample_lane6)
+merge.sample <- merge(x = sample_lane1.filter, y = sample_lane6.filter,
+                      project= paste0("Han", samplename), merge.data = F)
+# Seurat v5 keeps the two lanes as separate count layers after merge(); join them
+# back into one layer so SCTransform/markers behave as in v4. (No-op on v4.)
+if (utils::packageVersion("SeuratObject") >= "5.0.0") merge.sample <- JoinLayers(merge.sample)
+saveRDS(merge.sample, file = file.path(out.dir, "processing", paste0("merge.lanes.", samplename, ".rds")))
+VlnPlot(merge.sample, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
+```
+
+
+
+## Finding neighbors and clustering
+
+```{r, fig.width=12, fig.height=6}
+rm(sample_lane1.filter, sample_lane6.filter)
+
+merge.sample <- SCTransform(merge.sample, method = "glmGamPoi", return.only.var.genes = FALSE)
+
+
+# resolution = 0.8
+merge.sample <- RunPCA(merge.sample, verbose = F) %>% 
+  FindNeighbors(dims= 1:30) %>%
+  FindClusters() %>% 
+  RunUMAP(reduction = "pca", dims = 1:30) 
+
+
+
+p1 <- dittoDimPlot(merge.sample, var = "orig.ident", reduction = "umap",
+             do.label=T, labels.highlight = F, size = 0.6, split.by = "orig.ident")
+p2 <- dittoDimPlot(merge.sample, var = "seurat_clusters", reduction = "umap",
+             do.label=T, labels.highlight = F, size = 0.6, split.by = "orig.ident")
+
+dittoDimPlot(merge.sample, var = "doublet", reduction = "umap",
+             do.label=T, labels.highlight = F, size = 0.6, split.by = "doublet")
+p1
+p2
+ggsave(file.path(out.dir, "results/figures", paste0(samplename, "cluster.umap.png")) )
+
+
+
+```
+
+
+## DEG
+
+Find all markers
+
+```{r, fig.width=12, fig.height=8}
+merge.sample <- PrepSCTFindMarkers(merge.sample)
+merge.sample <- SetIdent(merge.sample, value = "seurat_clusters")
+
+all.markers <- FindAllMarkers(merge.sample, verbose = F)
+all.markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1)
+
+top30 <- all.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+DoHeatmap(merge.sample, features = top30$gene) + NoLegend()
+
+
+# cls0.marker <- all.markers %>% filter(cluster == "0", p_val_adj <= 1e-100)
+# ggplot(data = cls0.marker, aes(x=pct.1, y=pct.2, fill = avg_log2FC)) + geom_point() 
+```
+
+## Cell type annotation
+
+```{r, celltype, fig.width=12, fig.height=6}
+if (have.maestro) {
+  data(mouse.all.droplet.TabulaMuris)
+  sig.mouse.heart <- mouse.all.droplet.TabulaMuris[grep("\\(Heart_and_Aorta\\)", mouse.all.droplet.TabulaMuris$cluster) ,]
+  # sig.mouse.heart$cluster <- gsub("\\(Heart_and_Aorta\\)", "", sig.mouse.heart$cluster)
+  anno.markers <- all.markers
+  rownames(anno.markers) <- NULL
+  colnames(anno.markers) <- c("p_val","avg_logFC","pct.1","pct.2","p_val_adj","cluster","gene")
+
+  merge.sample <- RNAAnnotateCelltype(RNA= merge.sample, genes = anno.markers,
+                                      signatures = sig.mouse.heart)
+
+  print(table(merge.sample$assign.ident))
+  DimPlot(merge.sample, group.by = "assign.ident", label = T)
+} else {
+  message("MAESTRO not installed -- skipping cell-type annotation (assign.ident).")
+}
+```
+
+
+
+
+
+
+
+
+```{r write-markers, eval=TRUE, include=FALSE}
+write.csv(top30, file = file.path(out.dir, "results/markers", paste0(samplename, ".cluster.top30.markers.csv")))
+write.csv(all.markers, file = file.path(out.dir, "results/markers", paste0(samplename, ".allmarkers.csv")))
+# saveRDS(merge.sample, file = file.path(out.dir, "processing", paste0("merge.", samplename, ".rds")))
+```
+

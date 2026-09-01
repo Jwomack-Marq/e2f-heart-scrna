@@ -12,6 +12,17 @@
 
 suppressMessages(library(openxlsx))
 
+# Conventions shared with the app (shiny_app/download_helpers.R): the caveat text,
+# the 3-significant-figure rule, the column widths and the 31-char sheet-name
+# guard. Sourced rather than copied so an emailed workbook and one downloaded
+# from the app cannot end up saying different things. The sheet-building below
+# stays bespoke -- it does conditional formatting and per-sheet freeze columns
+# that the app's generic writer does not need.
+HELPERS <- Sys.getenv("DL_HELPERS", "/repo/shiny_app/download_helpers.R")
+if (!file.exists(HELPERS)) HELPERS <- "shiny_app/download_helpers.R"
+stopifnot(file.exists(HELPERS))
+source(HELPERS)
+
 OUT <- "/out"
 de  <- readRDS(file.path(OUT, "de_tables.rds"))
 en  <- readRDS(file.path(OUT, "enrich.rds"))
@@ -57,22 +68,11 @@ colour_direction <- function(wb, name, df) {
       rule = sprintf('=="%s"', v), type = "expression",
       style = createStyle(bgFill = "#D6EAF8", fontColour = "#1B4F72"))
 }
-# Explicit widths for the big DE sheets. openxlsx's widths="auto" scans every cell
-# to size the column; across ~15 sheets of ~20,000 rows that is minutes of work for
-# a cosmetic result, and it makes the long sig_sets column unusably wide anyway.
-de_widths <- function(df) {
-  w <- rep(13, ncol(df))
-  w[names(df) == "gene"] <- 14
-  w[names(df) == "sig_sets"] <- 32
-  w[names(df) == "direction"] <- 11
-  w[names(df) %in% c("confounder", "log2FoldChange", "mito_encoded")] <- 15
-  w
-}
-sig3 <- function(df) {
-  for (nm in names(df)) if (is.numeric(df[[nm]]) && !nm %in% c("n_input","n_universe","Count"))
-    df[[nm]] <- signif(df[[nm]], 3)
-  df
-}
+# from download_helpers.R: explicit widths (openxlsx's "auto" scans every cell,
+# which across sheets of ~20,000 rows is minutes of work for a cosmetic result)
+# and the 3-significant-figure rule.
+de_widths <- dl_widths
+sig3      <- dl_signif
 go_cols <- c("cluster","stratum","direction","ontology","ID","Description","GeneRatio",
              "BgRatio","FoldEnrichment","pvalue","p.adjust","qvalue","Count","geneID",
              "n_input","n_universe","input_rule")
@@ -80,11 +80,10 @@ gsea_cols <- c("cluster","stratum","pathway","NES","pval","padj","size","leading
 
 pick <- function(df, cols) df[, intersect(cols, names(df)), drop = FALSE]
 
-CAVEATS <- c(
-  "n = 1 animal per genotype x timepoint. The two lanes per sample are the same library sequenced twice (technical, not biological, replicates). No contrast here has biological replication: the p-values come from a cell-level Wilcoxon test and are pseudoreplicated. Treat them as a RANKING, not as a hypothesis test.",
-  "The KO and WT animals are different sexes. Y-linked genes (Eif2s3y, Kdm5d, Uty, Ddx3y), Xist and Tsix therefore top every KO-vs-WT list. They are flagged in the 'confounder' column and are EXCLUDED from every GO and GSEA input list.",
-  "E2f7 and E2f8 mRNA are NOT reduced in the KO in this dataset - most likely a conditional allele that a 3'-biased assay cannot see. Do not read the E2f7/E2f8 rows as a knockdown check.",
-  "Differential expression runs on the bundle's genome-wide matrix (24,221 genes), which is downsampled to 8,026 cells. That is the only genome-wide matrix available without the upstream Seurat object, and GO needs a genome-wide gene space. The per-arm cell counts after downsampling are in the Summary sheet; CM5, CM7 and CM8 are thin (39-96 cells per arm).",
+# The five shared caveats, plus the two specific to this offline pipeline's
+# matrix choices. Kept in this order so the numbering in the README sheet is stable.
+CAVEATS <- c(DL_CAVEATS,
+  "Differential expression runs on the bundle's genome-wide matrix (24,221 genes), which is downsampled to 8,026 cells. That is the only genome-wide matrix available without the upstream Seurat object, and GO needs a genome-wide gene space. The per-arm cell counts are in the Summary sheet; CM5, CM7 and CM8 are thin (39-96 cells per arm).",
   "The 'lfc_fullcells' / 'padj_fullcells' columns re-run the SAME contrast on the curated 2,181-gene panel, which retains all cells at full depth. Where a gene is on that panel, those columns are the better-powered estimate; they are blank for the other ~22,000 genes.")
 
 # ---------------------------------------------------------------------------
