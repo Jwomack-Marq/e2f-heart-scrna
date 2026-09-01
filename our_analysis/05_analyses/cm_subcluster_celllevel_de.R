@@ -31,7 +31,6 @@
 this <- sub("^--file=", "", commandArgs(FALSE)[grep("^--file=", commandArgs(FALSE))])
 source(file.path(dirname(this), "_common.R"))
 suppressWarnings(suppressMessages(library(presto)))
-options(future.globals.maxSize = 16 * 1024^3)
 
 argval <- function(flag, default) {
   a <- grep(paste0("^", flag, "="), commandArgs(TRUE), value = TRUE)

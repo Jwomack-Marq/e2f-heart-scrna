@@ -30,11 +30,6 @@ this <- sub("^--file=", "", commandArgs(FALSE)[grep("^--file=", commandArgs(FALS
 source(file.path(dirname(this), "_common.R"))
 suppressWarnings(suppressMessages({ library(harmony); library(ggplot2); library(patchwork) }))
 
-# _common.R's 3 GiB brake is below what SCTransform needs on either object here; see the
-# note in cm_objectmode_check.R. plan() is sequential, so nothing is ever shipped to a
-# worker and the limit only refuses to run. Raised, still bounded, never Inf.
-options(future.globals.maxSize = 16 * 1024^3)
-
 OBJ <- local({
   a <- grep("^--object=", commandArgs(TRUE), value = TRUE)
   o <- if (length(a)) sub("^--object=", "", a[1]) else "cm"

@@ -36,18 +36,6 @@ this <- sub("^--file=", "", commandArgs(FALSE)[grep("^--file=", commandArgs(FALS
 source(file.path(dirname(this), "_common.R"))
 suppressWarnings(suppressMessages({ library(harmony); library(ggplot2); library(patchwork) }))
 
-# _common.R sets a 3 GiB future.globals.maxSize brake. SCTransform on the whole CM
-# compartment (42,416 cells) needs 3.35 GiB for its chunking closure and dies with
-# "total size of the 19 globals ... exceeds the maximum allowed size". The brake exists to
-# catch objects being shipped to parallel workers by accident -- but _common.R also sets
-# plan("sequential"), so there are no workers and nothing is ever transferred; the only
-# thing the limit does here is refuse to run. Raised, still bounded, never Inf.
-#
-# Worth flagging beyond this script: cm_subcluster_build.R sources the same _common.R and
-# runs the same SCTransform on the same cells, so it hits this too on Seurat 5.5.1. The
-# shipped object predates that and was built elsewhere.
-options(future.globals.maxSize = 16 * 1024^3)
-
 RES_SWEEP <- c(0.1, 0.2, 0.3, 0.4, 0.6)   # identical to cm_subcluster_build.R
 PC_DIMS   <- 1:30                         # identical to cm_subcluster_build.R
 SEED      <- 42L

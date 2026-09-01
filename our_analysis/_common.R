@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Shared helpers/gene-sets for the our_analysis step scripts (04_/05_/06_).
 # Source it via the tiny `_common.R` forwarder that sits in each step folder
-# (it walks up to find this file). Sequential future plan + 3 GiB brake (NEVER Inf).
+# (it walks up to find this file). Sequential future plan + a bounded future-globals brake.
 #
 # Paths are anchored on the `our_analysis/` root, located by walking up from the
 # running script until the `.projroot` sentinel file is found -- so scripts work
@@ -13,7 +13,19 @@ suppressWarnings(suppressMessages({
   library(future)
 }))
 future::plan("sequential")
-options(future.globals.maxSize = 3 * 1024^3)   # 3 GiB safety brake (not Inf)
+# 16 GiB, and the reasoning matters because the number was 3 GiB and that broke things.
+#
+# The limit exists to stop a large object being shipped to a parallel worker by accident.
+# But the line above sets a SEQUENTIAL plan: there are no workers and nothing is ever
+# transferred, so on this pipeline the check can only ever refuse to run something that
+# would have been fine. And it did -- SCTransform on the 42,416-cell cardiomyocyte
+# compartment needs 3.35 GiB for its chunking closure, so cm_subcluster_build.R died with
+# "the total size of the 19 globals ... exceeds the maximum allowed size" on any machine
+# with a clean environment. The shipped object predates that and was built elsewhere.
+#
+# Still bounded rather than Inf, per the original intent: if a future version of this
+# pipeline does go parallel, a runaway transfer should still hit a ceiling.
+options(future.globals.maxSize = 16 * 1024^3)
 
 # ---- paths -----------------------------------------------------------------
 .find_root <- function() {

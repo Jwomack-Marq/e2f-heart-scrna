@@ -7,8 +7,10 @@ date: "2025-04-25"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = F)
-options(future.globals.maxSize = 3*1024^3)   # 3 GiB cap: enough for SCTransform, but a SAFETY BRAKE
-                                             # so a runaway step errors instead of exhausting RAM. Do NOT set to Inf.
+options(future.globals.maxSize = 16*1024^3)  # bounded brake, NOT Inf; matches our_analysis/_common.R.
+                                             # 3 GiB was below what SCTransform needs on the larger
+                                             # objects, and with plan("sequential") the cap can only
+                                             # refuse work, never prevent a transfer that happens.
 library(Seurat)
 library(SeuratObject)
 # packageVersion("Seurat")

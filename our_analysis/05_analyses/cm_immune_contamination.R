@@ -28,7 +28,6 @@
 
 this <- sub("^--file=", "", commandArgs(FALSE)[grep("^--file=", commandArgs(FALSE))])
 source(file.path(dirname(this), "_common.R"))
-options(future.globals.maxSize = 16 * 1024^3)
 
 # Pan-leukocyte, deliberately broad: the contamination is not only mast cells, so a
 # mast-specific panel would miss the T cells in it. Ptprc alone is not enough -- ambient

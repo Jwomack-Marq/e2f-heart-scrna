@@ -31,9 +31,11 @@ Sys.setenv(SCRNA_IN_DIR  = "01_input")   # raw PIPseeker matrices (copied into o
 # multi-GB globals to parallel workers (the cause of the maxSizeOfObjects errors).
 suppressWarnings(suppressMessages(library(future)))
 future::plan("sequential")
-# 3 GiB safety brake (NOT Inf -- Inf is what caused the original crash). The Rmd
-# setup chunks set the same value; this keeps the runner consistent with it.
-options(future.globals.maxSize = 3 * 1024^3)
+# Bounded, NOT Inf -- Inf is what caused the original crash. Raised from 3 GiB to match
+# _common.R: 3 was below what SCTransform needs on the larger objects, and because the
+# plan above is sequential the limit can only ever refuse work, never save any. See the
+# note in _common.R for why that is safe here.
+options(future.globals.maxSize = 16 * 1024^3)
 
 if (!dir.exists("logs")) dir.create("logs")
 run_rmd <- function(rmd) {
