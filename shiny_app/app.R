@@ -2601,6 +2601,7 @@ ui <- page_navbar(
       hr(), helpText("KO-vs-WT differential expression within each cell type.",
                      br(), strong("p-axis ranks candidates only — not valid at n = 1."))),
     navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Volcano + table",
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
         layout_columns(col_widths = c(6, 6),
@@ -2684,6 +2685,7 @@ ui <- page_navbar(
                      strong("Not permutation-tested; descriptive, n = 1."), br(),
                      "A full CellChat/LIANA run would need the source Seurat objects.")),
     navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Sender × receiver heatmap",
         helpText("Interaction score aggregated (mean) over the ligand→receptor pairs in the chosen pathway."),
         dl_fig_ui("ccheat"), plotlyOutput("cc_heat", height = "540px")),
@@ -2907,6 +2909,7 @@ ui <- page_navbar(
         accordion_panel("E2f7/8 plot options", figure_controls("e2f", palette = TRUE, rename = TRUE)),
         accordion_panel("Fold-change options", figure_controls("e2ffc", palette = FALSE, rename = FALSE)))),
     navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("E2f7 / E2f8", plotOutput("e2f_expr", height = "560px")),
       nav_panel("Downstream targets — KO vs WT", plotOutput("e2f_fc", height = "560px"))))),
 
@@ -2973,6 +2976,7 @@ ui <- page_navbar(
         accordion_panel("Score figure options",
           figure_controls("fgscore", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "fg_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Group sizes", value = "counts",
         helpText("Cell counts and percentages for the four groups in every res-0.2 CM subcluster. ",
                  "The ", strong("underpowered"), " column names any arm too small to support DE ",
@@ -3011,6 +3015,7 @@ ui <- page_navbar(
                  br(), strong("Descriptive only — n = 1.")),
         uiOutput("fg_enr_note"),
         navset_card_tab(
+          wrapper = function(...) card_body(..., fillable = FALSE),
           nav_panel("GO — up",
             dl_fig_ui("fgenrup"), plotlyOutput("fg_enr_up_plot", height = "440px"),
             dl_data_ui("fg_enr_up_tab"), DTOutput("fg_enr_up_tab", height = "320px")),
@@ -3073,6 +3078,7 @@ ui <- page_navbar(
         accordion_panel("Candidate figure options",
           figure_controls("micand", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "mi_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Quadrant map", value = "quadrant",
         helpText("x: how strongly a gene marks mature (right) vs immature (left) cardiomyocytes. ",
                  "y: its P7 KO-vs-WT log2 fold change. The two shaded quadrants are the ones ",
@@ -3127,6 +3133,7 @@ ui <- page_navbar(
       accordion(open = FALSE, accordion_panel("Figure options",
         figure_controls("vn", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "vn_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Venn", value = "venn",
         uiOutput("vn_note"),
         plotOutput("vn_plot", height = "560px")),
@@ -3179,6 +3186,7 @@ ui <- page_navbar(
       accordion(open = FALSE, accordion_panel("Figure options",
         figure_controls("xc", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "xc_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Step 1 — WT P0→P7", value = "wt",
         helpText("Which genes in each curated category change between WT P0 and WT P7. ",
                  strong("log2FC > 0 means up at P7."), " These categories are small on ",
@@ -3233,6 +3241,7 @@ ui <- page_navbar(
       accordion(open = FALSE, accordion_panel("Figure options",
         figure_controls("cyc", palette = TRUE, rename = FALSE)))),
     navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("Score distributions",
         helpText("Proliferation, cytokinesis, cell-cycle-exit and polyploidization-proxy scores ",
                  "across genotype (WT vs KO), faceted by timepoint."),
@@ -3305,6 +3314,7 @@ ui <- page_navbar(
         accordion_panel("Violin figure options", figure_controls("mat", palette = TRUE, rename = FALSE)),
         accordion_panel("Cell-scatter figure options", figure_controls("matsc", palette = FALSE, rename = FALSE)))),
     navset_card_tab(id = "matt",
+      wrapper = function(...) card_body(..., fillable = FALSE),
       nav_panel("By four groups", value = "violin",
         plotOutput("mat_violin", height = "560px"),
         uiOutput("mat_score_def"),
@@ -3352,11 +3362,15 @@ ui <- page_navbar(
       dl_fig_ui("pcdmap", "Download figure (static)"),
       dl_data_ui("pcd_tab"),
       uiOutput("pcd_var")),
+    # card_body(fillable = FALSE): five children (header, verdict, plot, note, table) in a
+    # filling card body means flex divides the height and the plot's 430px loses. Same
+    # defect as the tabsets above.
     card(card_header(textOutput("pcd_label")),
-         uiOutput("pcd_verdict"),
-         plotOutput("pcd_map", height = "430px"),
-         div(style = "margin-top:10px", uiOutput("pcd_note")),
-         DTOutput("pcd_tab"))
+         card_body(fillable = FALSE,
+           uiOutput("pcd_verdict"),
+           plotOutput("pcd_map", height = "430px"),
+           div(style = "margin-top:10px", uiOutput("pcd_note")),
+           DTOutput("pcd_tab")))
   )),
 
   nav_panel("Gene sets & sources", layout_sidebar(
@@ -3371,6 +3385,7 @@ ui <- page_navbar(
          uiOutput("gsp_headline"),
          uiOutput("gsp_drift"),
          navset_card_tab(id = "gsp_tabs",
+           wrapper = function(...) card_body(..., fillable = FALSE),
            nav_panel("Registry", value = "reg",
              DTOutput("gsp_tab"),
              div(style = "margin-top:10px", uiOutput("gsp_caveats"))),
