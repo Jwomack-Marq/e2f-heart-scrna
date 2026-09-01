@@ -72,6 +72,10 @@ the subject of [The cell atlas](02-atlas.qmd) and reappears in
 
 ## Where each app tab is documented
 
+The navbar has four menus: **Whole heart** (all cell types), **Cardiomyocytes** (the
+compartment deep-dive), **Methods & provenance** (diagnostics and where numbers came from),
+and **Help**.
+
 | App tab | Chapter |
 |---|---|
 | UMAP explorer · Gene detail · Composition | [2 — The cell atlas](02-atlas.qmd) |

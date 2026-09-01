@@ -7,7 +7,7 @@ tabs:
 
 ## What you're looking at
 
-**Dev → Cell–cell signalling**: a sender × receiver heatmap of curated ligand→receptor
+**Whole heart → Cell–cell signalling**: a sender × receiver heatmap of curated ligand→receptor
 scores, viewable as WT, KO, or their difference, plus the interaction table behind it.
 
 ![Sender × receiver signalling, KO − WT](assets/commun-heat.svg){#fig-commun}

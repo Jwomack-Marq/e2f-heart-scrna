@@ -2534,6 +2534,13 @@ ui <- page_navbar(
   title = "E2F7/8 heart scRNA-seq", theme = bs_theme(version = 5, bootswatch = "flatly"),
   header = if (STUDIO_ON) studio_js(),
 
+  # Navbar grouping, and one coupling worth knowing before rearranging it again:
+  # tools/check_docs_coverage.py treats "^  nav_panel(" -- EXACTLY two spaces -- as a
+  # top-level tab, which is what stops it demanding a chapter for all ~60 nested panels.
+  # nav_menu() children are therefore deliberately NOT indented here. Re-indenting them
+  # would make the docs gate stop seeing them, and every chapter claiming one would then
+  # fail with "claims tab X, which is not a top-level tab in app.R".
+  nav_menu("Whole heart",
   nav_panel("UMAP explorer", layout_sidebar(
     sidebar = sidebar(width = 300,
       selectInput("color_by", "Colour cells by",
@@ -2584,7 +2591,6 @@ ui <- page_navbar(
         figure_controls("comp", palette = TRUE, rename = TRUE)))),
     card(full_screen = TRUE, card_header("Cell-type / state proportions"), plotOutput("comp", height = "560px")))),
 
-  nav_menu("Differential expression",
   nav_panel("DE by cell type", layout_sidebar(
     sidebar = sidebar(width = 300,
       radioButtons("ct_tp", "Timepoint", c("P0","P7"), inline = TRUE),
@@ -2663,7 +2669,25 @@ ui <- page_navbar(
       nav_panel("TF / regulon activity",
         helpText("E2F-family regulon activity across cell types (KO − WT), then the top TFs for the selected cell type."),
         dl_fig_ui("enre2f"), plotlyOutput("enr_e2f_heat", height = "380px"),
-        dl_fig_ui("enrtf"), plotlyOutput("enr_tf_top", height = "460px")))))),
+        dl_fig_ui("enrtf"), plotlyOutput("enr_tf_top", height = "460px"))))),
+
+  nav_panel("Cell–cell signalling", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("cc_tp", "Timepoint", c("P0","P7"), selected = "P7"),
+      selectInput("cc_pathway", "Pathway",
+                  choices = c("All" = "All", setNames(commun_pathways(), commun_pathways())),
+                  selected = if ("VEGF" %in% commun_pathways()) "VEGF" else "All"),
+      radioButtons("cc_metric", "Show",
+                   c("KO − WT (delta)" = "delta", "WT" = "WT", "KO" = "KO"), selected = "delta"),
+      hr(), helpText("Curated ligand → receptor scoring (mean ligand in the sender × mean receptor ",
+                     "in the receiver, on log-norm expression), focused on the E2F7/8 → Vegfa angiogenic axis. ",
+                     strong("Not permutation-tested; descriptive, n = 1."), br(),
+                     "A full CellChat/LIANA run would need the source Seurat objects.")),
+    navset_card_tab(
+      nav_panel("Sender × receiver heatmap",
+        helpText("Interaction score aggregated (mean) over the ligand→receptor pairs in the chosen pathway."),
+        dl_fig_ui("ccheat"), plotlyOutput("cc_heat", height = "540px")),
+      nav_panel("Interaction table", dl_data_ui("cc_tab"), DTOutput("cc_tab", height = "520px")))))),
 
   nav_menu("Cardiomyocytes",
   nav_panel("Cardiomyocyte deep-dive", layout_sidebar(
@@ -3197,26 +3221,7 @@ ui <- page_navbar(
                  " columns give the per-cluster KO log2FC so a union never hides which ",
                  "cluster carried a gene."),
         selectInput("xc_gene_cmp", "Comparison", choices = NULL, width = "520px"),
-        dl_data_ui("xc_genes"), DTOutput("xc_genes")))))),
-
-  nav_menu("Dev",
-  nav_panel("Cell–cell signalling", layout_sidebar(
-    sidebar = sidebar(width = 300,
-      selectInput("cc_tp", "Timepoint", c("P0","P7"), selected = "P7"),
-      selectInput("cc_pathway", "Pathway",
-                  choices = c("All" = "All", setNames(commun_pathways(), commun_pathways())),
-                  selected = if ("VEGF" %in% commun_pathways()) "VEGF" else "All"),
-      radioButtons("cc_metric", "Show",
-                   c("KO − WT (delta)" = "delta", "WT" = "WT", "KO" = "KO"), selected = "delta"),
-      hr(), helpText("Curated ligand → receptor scoring (mean ligand in the sender × mean receptor ",
-                     "in the receiver, on log-norm expression), focused on the E2F7/8 → Vegfa angiogenic axis. ",
-                     strong("Not permutation-tested; descriptive, n = 1."), br(),
-                     "A full CellChat/LIANA run would need the source Seurat objects.")),
-    navset_card_tab(
-      nav_panel("Sender × receiver heatmap",
-        helpText("Interaction score aggregated (mean) over the ligand→receptor pairs in the chosen pathway."),
-        dl_fig_ui("ccheat"), plotlyOutput("cc_heat", height = "540px")),
-      nav_panel("Interaction table", dl_data_ui("cc_tab"), DTOutput("cc_tab", height = "520px"))))),
+        dl_data_ui("xc_genes"), DTOutput("xc_genes"))))),
 
   nav_panel("Cell-cycle exit & ploidy", layout_sidebar(
     sidebar = sidebar(width = 300,
@@ -3318,6 +3323,7 @@ ui <- page_navbar(
         uiOutput("gm_geneinfo"),
         uiOutput("gm_method")))))),
 
+  nav_menu("Methods & provenance",
   nav_panel("Precomputed results", layout_sidebar(
     sidebar = sidebar(width = 340,
       helpText(strong("Computed upstream, linked here."), br(),
@@ -3372,7 +3378,7 @@ ui <- page_navbar(
              uiOutput("gsp_bench_note"),
              DTOutput("gsp_bench")),
            nav_panel("References", value = "refs",
-             uiOutput("gsp_refs")))))),
+             uiOutput("gsp_refs"))))))),
 
   nav_spacer(),
   nav_menu("Help",

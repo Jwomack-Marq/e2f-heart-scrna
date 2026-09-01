@@ -122,7 +122,7 @@ WT-programs tab hides `mt-` genes by default for the same reason.
 
 ## Precomputed results, linked rather than recomputed
 
-**Dev → Precomputed results** exposes 28 tables the upstream pipeline had already computed but
+**Methods & provenance → Precomputed results** exposes 28 tables the upstream pipeline had already computed but
 the app never carried. They are read from the bundle, so they cost the app nothing to display,
 and several are stronger than what the app computes for itself.
 

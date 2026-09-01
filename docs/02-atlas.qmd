@@ -9,7 +9,7 @@ tabs:
 
 ## What you're looking at
 
-The app's first three tabs. **UMAP explorer** colours ~30,000 cells by any gene or
+The first three panels under **Whole heart**. **UMAP explorer** colours ~30,000 cells by any gene or
 metadata column, optionally splitting into side-by-side panels. **Gene detail** shows
 one gene as a violin plot and a dot plot across any grouping. **Composition** stacks
 cell-type proportions across samples, genotypes or timepoints.

@@ -9,7 +9,8 @@ tabs:
 
 ## What you're looking at
 
-Two tabs under **Dev**. **Cell-cycle exit & ploidy** shows four module-score
+Two panels under **Cardiomyocytes** — both scores are cardiomyocyte-specific, which is
+why they sit there rather than with the all-cell-type views. **Cell-cycle exit & ploidy** shows four module-score
 distributions across genotype and timepoint, plus a proliferation-versus-cytokinesis
 scatter. **Maturation & metabolism** shows a maturation score across the four groups, a
 per-cell maturation-versus-metabolism plot, and a *Gene map* that places every gene on
