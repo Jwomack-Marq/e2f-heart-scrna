@@ -2838,8 +2838,10 @@ ui <- page_navbar(
           nav_panel("Composition & phase",
             div(style = "margin-top:10px", uiOutput("clu_sum_note")),
             layout_columns(col_widths = c(6, 6),
-              plotOutput("clu_comp",  height = "420px"),
-              plotOutput("clu_phase", height = "420px"))),
+              div(dl_fig_ui("clucomp",  "Download composition"),
+                  plotOutput("clu_comp",  height = "420px")),
+              div(dl_fig_ui("cluphase", "Download phase"),
+                  plotOutput("clu_phase", height = "420px")))),
           nav_panel("Markers (computed live)",
             div(style = "margin-top:10px", uiOutput("clu_mk_note")),
             dl_data_ui("clu_mk"), DTOutput("clu_mk")),
@@ -2847,8 +2849,9 @@ ui <- page_navbar(
             div(style = "margin-top:10px", uiOutput("clu_de_note")),
             dl_data_ui("clu_de"), DTOutput("clu_de")),
           nav_panel("Enrichment (precomputed)",
-            div(style = "margin-top:10px", uiOutput("clu_enr_note")), DTOutput("clu_enr")),
-          nav_panel("Cell cycle", DTOutput("clu_cyc")))),
+            div(style = "margin-top:10px", uiOutput("clu_enr_note")),
+            dl_data_ui("clu_enr"), DTOutput("clu_enr")),
+          nav_panel("Cell cycle", dl_data_ui("clu_cyc"), DTOutput("clu_cyc")))),
       nav_panel("Object-mode test", value = "objtest",
         uiOutput("objtest_verdict"),
         dl_fig_ui("objtestmap", "Download figure (static)"),
@@ -3912,18 +3915,24 @@ server <- function(input, output, session) {
       "%s — %d subclusters. Left: genotype composition. Right: cell-cycle phase. Both recomputed from the selected labelling.",
       v$label, v$n_clusters))
   })
-  output$clu_comp <- renderPlot({
+  clu_comp_p <- reactive({
     d <- clu_meta(); validate(need(nrow(d) && "genotype" %in% names(d), "No genotype column."))
     ggplot(d, aes(sub, fill = genotype)) + geom_bar(position = "fill") +
-      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL) +
+      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL,
+                        title = sprintf("Composition by genotype — %s", clu_v()$label)) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
-  output$clu_phase <- renderPlot({
+  clu_phase_p <- reactive({
     d <- clu_meta(); validate(need("Phase" %in% names(d), "No Phase column in this build."))
     ggplot(d[!is.na(d$Phase), ], aes(sub, fill = Phase)) + geom_bar(position = "fill") +
-      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL) +
+      theme_bw() + labs(x = NULL, y = "fraction", fill = NULL,
+                        title = sprintf("Cell-cycle phase — %s", clu_v()$label)) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
   })
+  output$clu_comp  <- renderPlot(clu_comp_p())
+  output$clu_phase <- renderPlot(clu_phase_p())
+  register_fig(output, "clucomp",  clu_comp_p,  input)
+  register_fig(output, "cluphase", clu_phase_p, input)
 
   # Precomputed halves: DESeq2 and clusterProfiler are not in the runtime image, so these
   # are looked up rather than computed, and say so when a variant has not been built.
@@ -5608,6 +5617,11 @@ server <- function(input, output, session) {
          df = function() clu_mk_df()),
     list(id = "clu_de", base = function() paste0("DE_", input$clu_var %||% "variant", "_", input$clu_cl %||% ""),
          df = function() clu_de_df()),
+    list(id = "clu_enr", base = function() paste0("enrichment_", input$clu_var %||% "variant"),
+         df = function() clu_enr_df()),
+    list(id = "clu_cyc", base = function() paste0("cellcycle_", input$clu_var %||% "variant"),
+         df = function() { v <- clu_v()
+           validate(need(!is.null(v$cellcycle), "No cell-cycle table for this variant.")); v$cellcycle }),
     list(id = "gsp_bench", base = "gene_set_benchmark", df = function() gsp_bench_df()),
     # Precomputed upstream results
     list(id = "lk_tab", base = function() paste0("linked_", input$lk_table %||% "result"),
