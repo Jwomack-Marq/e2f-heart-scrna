@@ -52,6 +52,11 @@ slides/*.pdf
 # docs/assets/ and docs/_generated/ ARE tracked: they are the book's figures and
 # generated tables, and rebuilding them needs the git-ignored data bundle.
 docs/_site/
+# Quarto's incremental-render cache. It was tracked by accident: every render
+# rewrites the idx/ and xref/ entries, so it dirtied the tree on each build while
+# carrying nothing anyone reads. Verified disposable -- deleting it and running
+# docs/render.sh rebuilds the book and the cache with it.
+docs/.quarto/
 
 # The upstream analysis we received (original_Han_analysis/) — 4.3 GB of raw PIPseeker
 # output, Seurat objects and rendered reports. The ~2.4 MB of text files that carry the
