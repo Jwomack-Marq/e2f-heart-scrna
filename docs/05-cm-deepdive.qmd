@@ -165,6 +165,24 @@ sequenced twice (see [chapter 1](01-upstream.qmd)) — so it would produce numbe
 evidence. The skip is recorded as `skipped_too_few_or_unbalanced` rather than silently
 absent, which is how the gap was noticed at all.
 
+**What the app shows instead.** Recording the skip in a table is not the same as surfacing
+it. Because CM12 had no entry in `sub_DE`, it was missing from the DE panel's subcluster
+dropdown altogether — so the panel did not read as "no result for CM12", it read as though
+CM12 did not exist. It is now offered, marked *not testable (ranking only)*, and selecting
+it swaps the volcano for a cell-level Wilcoxon ranking
+(`our_analysis/05_analyses/cm_subcluster_celllevel_de.R`, carried into the bundle by
+`shiny_app/build_celllevel_de.R`) with the sample counts that caused the skip stated above
+it.
+
+That ranking is **not** a test and the panel says so twice. All 36 KO cells come from two
+animals, so they are 36 measurements of two mice; Wilcoxon does not know that and reports
+significance in proportion to cell count. The p-values are pseudoreplicated and must not be
+quoted — the column to read is `auc`, the effect size that does not inflate with *n*. The
+downloaded file is named `celllevel_RANKING_not_a_test_...` so the caveat survives leaving
+the app. And since CM12 is immune contamination, any difference in it is a difference
+between *immune* cells: the genes that say so are flagged in `immune_gene`, and the panel
+warns against reading them as cardiomyocyte biology.
+
 **What this does and does not affect — measured, not assumed.** Flagging every
 pan-leukocyte-positive cell in the compartment (161 of 42,416, 0.38 %) and recomputing:
 the CM cycling fraction goes from **21.4 % to 21.3 %**. The flagged cells do cycle at

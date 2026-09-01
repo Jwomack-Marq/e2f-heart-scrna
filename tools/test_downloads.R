@@ -170,6 +170,27 @@ testServer(APPDIR, {
   note(if (is.data.frame(d)) "PASS" else "FAIL", "cm_d pooled",
        if (is.data.frame(d)) sprintf("%d rows", nrow(d)) else conditionMessage(d))
 
+  # cm_celllevel_tab is the one download the loop above cannot reach: it exists only for a
+  # subcluster pseudobulk could not test, and the loop runs with cm_sub = "CM2". Drive it
+  # here with a subcluster that has one, so it is tested rather than reported SKIP.
+  CLD <- parent.env(environment(xc_venn_p))$CELLDE
+  if (!length(CLD)) note("SKIP", "cm_celllevel_tab", "bundle predates build_celllevel_de.R")
+  else {
+    dl <- Filter(function(x) identical(x$id, "cm_celllevel_tab"), TABLE_DL)[[1]]
+    session$setInputs(cm_sub = names(CLD)[1], cm_hideconf = FALSE)
+    f <- tryCatch(dl$df(), error = function(e) e)
+    if (!is.data.frame(f)) note("FAIL", "cm_celllevel_tab",
+      if (inherits(f, "error")) conditionMessage(f) else "not a data.frame")
+    else note("PASS", "cm_celllevel_tab",
+              sprintf("%d rows x %d cols  -> %s", nrow(f), ncol(f), dl$base()))
+    # and it must refuse, not return a blank file, for a subcluster that has no ranking
+    session$setInputs(cm_sub = "CM2")
+    g <- tryCatch(dl$df(), error = function(e) e)
+    note(if (inherits(g, "shiny.silent.error")) "PASS" else "FAIL",
+         "cm_celllevel_tab guards", "req() on a subcluster with no ranking")
+    session$setInputs(cm_sub = "CM2")
+  }
+
   cat("\n== WT programs x KO clusters ==\n")
   # app.R's file-level helpers are one frame up from the server execution env.
   APP <- parent.env(environment(xc_venn_p))

@@ -33,6 +33,10 @@ meta  <- app$meta; expr <- app$expr; genes <- app$genes
 cmm   <- app$cm$meta; RES <- setdiff(app$cm$res, c("0.1", "0.3"))  # only expose res 0.2 in the app
 heat  <- app$heat; tabs <- app$tables; CONF <- app$confound
 ctDE  <- tabs$ct_DE; subDE <- tabs$sub_DE; subSum <- tabs$sub_summary; subType <- tabs$sub_subtype
+# Cell-level Wilcoxon rankings for the subclusters pseudobulk cannot test (build_celllevel_de.R).
+# Empty on a bundle built before that step; every use below tolerates that.
+CELLDE   <- app$cm_celllevel[["res0.2"]] %||% list()
+CELLDEMT <- app$cm_celllevel_meta[["res0.2"]] %||% list()
 figs  <- app$figs
 GI    <- app$geneinfo          # per-gene info table (NULL on an un-enriched build)
 ENR   <- app$enrich            # list(gsea, go, tf) of precomputed enrichment (may be NULL)
@@ -234,6 +238,18 @@ volc_lfc_ui <- function(id)
   sliderInput(id, "Colour genes at |log2FC| ≥", 0, 3, DE_LFC_CUT, 0.05)
 # optionally drop the sex/construct confounder genes (Xist, Y-genes, ROSA26) from a
 # DE frame before it reaches a volcano/table — n=1 makes these dominate the contrast.
+# Choices for the CM subcluster picker. A pure function of the two name sets so it can be
+# tested without standing up a session -- the ordering and the marking are the parts that
+# broke before (a subcluster with no pseudobulk table simply vanished from the list).
+cm_sub_choices <- function(tested, ranked_only, res = "0.2", label = sub_label) {
+  extra <- setdiff(ranked_only, tested)
+  subs  <- c(tested, extra)
+  subs  <- subs[order(as.integer(sub("CM", "", subs)))]
+  setNames(subs, vapply(subs, function(s) {
+    lab <- label(res, s)
+    if (s %in% extra) paste0(lab, "  \u2014 not testable (ranking only)") else lab
+  }, ""))
+}
 drop_conf <- function(d, hide) {
   if (isTRUE(hide) && !is.null(d) && "confounder" %in% names(d)) d <- d[!d$confounder, , drop = FALSE]
   d
@@ -2796,11 +2812,24 @@ ui <- page_navbar(
       nav_panel("DE (per subcluster)", value = "de",
         helpText("Hover a point for the gene & stats; click a point — or a table row — to highlight it and show its info below."),
         uiOutput("cm_de_note"),
-        fluidRow(
-          column(6, dl_fig_ui("cmvolc", "Download figure (static)"),
-                    plotlyOutput("cm_volcano", height = "440px")),
-          column(6, uiOutput("cm_pick_ui"), dl_data_ui("cm_detab"), DTOutput("cm_detab"))),
-        uiOutput("cm_geneinfo"),
+        uiOutput("cm_celllevel_note"),
+        # A subcluster pseudobulk could not test shows the cell-level ranking instead of a
+        # volcano. They are swapped rather than shown together on purpose: the two are not
+        # the same kind of result, and putting a ranking where a test normally sits invites
+        # exactly the reading the note above spends two paragraphs preventing.
+        conditionalPanel("output.cm_has_pb === false",
+          div(class = "mt-2",
+              h5("Cell-level ranking — KO vs WT cells, by |AUC − 0.5|"),
+              helpText(style = "font-size:12px",
+                       "Three strata: pooled, P0 and P7 — filter the ", tags$code("stratum"),
+                       " column. Top 300 genes per stratum."),
+              dl_data_ui("cm_celllevel_tab"), DTOutput("cm_celllevel_tab"))),
+        conditionalPanel("output.cm_has_pb === true",
+          fluidRow(
+            column(6, dl_fig_ui("cmvolc", "Download figure (static)"),
+                      plotlyOutput("cm_volcano", height = "440px")),
+            column(6, uiOutput("cm_pick_ui"), dl_data_ui("cm_detab"), DTOutput("cm_detab"))),
+          uiOutput("cm_geneinfo")),
         div(class = "mt-3",
             h5("DE heatmap — top genes × subclusters"),
             dl_fig_ui("cmlfcheat"), plotlyOutput("cm_lfcheat", height = "560px"),
@@ -3631,9 +3660,10 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE)
   # populate the DE subcluster picker once (only res 0.2 is exposed)
   local({
-    subs <- names(subDE[["res0.2"]])
-    subs <- subs[order(as.integer(sub("CM", "", subs)))]
-    ch <- setNames(subs, vapply(subs, function(s) sub_label("0.2", s), ""))
+    # A subcluster pseudobulk could not test has no sub_DE entry, so it was missing from
+    # this dropdown entirely -- CM12 did not read as "no result", it read as not existing.
+    ch   <- cm_sub_choices(names(subDE[["res0.2"]]), names(CELLDE))
+    subs <- unname(ch)
     # "All cardiomyocytes" exists only in the four-group grids -- subDE has no pooled-CM
     # entry. Offer it unconditionally and let cm_d() say so if it is picked while the
     # pooled comparison is selected, rather than making the option appear and disappear.
@@ -4152,13 +4182,29 @@ server <- function(input, output, session) {
       validate(need(!identical(input$cm_sub, "AllCM"),
         paste("Pooled KO-vs-WT was not computed over all cardiomyocytes together.",
               "Pick a subcluster, or one of the timepoint-specific comparisons.")))
+      # Nothing to plot for a subcluster pseudobulk skipped -- the cell-level panel takes
+      # over. req() rather than validate(): the message would render behind a hidden
+      # conditionalPanel where nobody would see it.
+      req(!cm_celllevel_on())
       subDE[["res0.2"]][[input$cm_sub]]
     } else fg_de(input$cm_sub, ct$key, input$cm_stratum %||% "G1", input$cm_grid %||% "de") })
+  # TRUE when the chosen subcluster has no pseudobulk table and we are showing the
+  # cell-level ranking instead. Only ever true for the pooled comparison: the four-group
+  # grids are a different pipeline with their own skip handling.
+  cm_celllevel_on <- reactive(is.null(cm_ct()) &&
+                              !is.null(input$cm_sub) &&
+                              input$cm_sub %in% names(CELLDE) &&
+                              is.null(subDE[["res0.2"]][[input$cm_sub]]))
+  output$cm_has_pb <- reactive(!cm_celllevel_on())
+  outputOptions(output, "cm_has_pb", suspendWhenHidden = FALSE)
+  cm_celllevel_d <- reactive({ req(cm_celllevel_on())
+    drop_conf(CELLDE[[input$cm_sub]], input$cm_hideconf) })
   cm_pick <- reactiveVal(NULL)
   cm_tab  <- reactive(de_table(drop_conf(cm_d(), input$cm_hideconf)))   # full table (selection never filters it)
   cm_dt_proxy <- DT::dataTableProxy("cm_detab")
   # Same caveats the Four-group tab prints, from the same helper.
   output$cm_de_note <- renderUI({ req(input$cm_sub); ct <- cm_ct()
+    if (cm_celllevel_on()) return(NULL)          # cm_celllevel_note says it instead
     if (is.null(ct))
       return(div(style = "font-size:13px;margin-bottom:6px",
                  HTML(if (identical(input$cm_sub, "AllCM"))
@@ -4193,6 +4239,46 @@ server <- function(input, output, session) {
                lfc_cut = input$cm_vlfc %||% DE_LFC_CUT, highlight = cm_pick()) })
   register_fig(output, "cmvolc", cm_volcano_gg, input)
   output$cm_detab   <- renderDT(de_datatable(cm_tab(), scroll = NULL))
+  # ---- the "not testable" case ---------------------------------------------
+  # Says why the usual result is absent, using the real sample counts off the pseudobulk
+  # summary rather than a remembered sentence, then offers the ranking with the caveat
+  # attached to it rather than buried in a help page.
+  output$cm_celllevel_note <- renderUI({ req(cm_celllevel_on())
+    cl <- input$cm_sub; m <- CELLDEMT[[cl]]
+    d  <- CELLDE[[cl]]; pooled <- d[d$stratum == "pooled", , drop = FALSE]
+    nko <- if (nrow(pooled)) pooled$n_KO_cells[1] else NA
+    nwt <- if (nrow(pooled)) pooled$n_WT_cells[1] else NA
+    imm <- sum(d$immune_gene[d$stratum == "pooled"], na.rm = TRUE)
+    div(
+      div(class = "alert alert-warning", style = "font-size:13px",
+        HTML(paste0(
+          "<b>", cl, " has no KO-vs-WT test.</b> The pseudobulk pipeline aggregates cells ",
+          "into one sample per library &times; lane, keeps samples with &ge; 20 cells, and ",
+          "needs two per genotype. ", cl, " has ",
+          if (!is.null(m)) paste0("<b>", m$n_cells, " cells</b> ") else "",
+          "spread thinly across the eight samples, so only ",
+          if (!is.null(m)) paste0(m$n_KO_samp + m$n_WT_samp) else "one",
+          " clear the floor &mdash; the row is <code>", 
+          if (!is.null(m)) m$status else "skipped_too_few_or_unbalanced",
+          "</code>. That is a statement about sample structure, <i>not</i> about the ",
+          "subcluster having no KO cells: it has ", nko, " KO and ", nwt, " WT cells."))),
+      div(class = "alert alert-danger", style = "font-size:13px",
+        HTML(paste0(
+          "<b>What is shown below is a RANKING, not a test.</b> It compares the ", nko,
+          " KO cells against the ", nwt, " WT cells directly (Wilcoxon, presto). Those KO ",
+          "cells come from two animals, so they are ", nko, " measurements of two mice, not ",
+          nko, " independent observations &mdash; exactly the pseudoreplication the ",
+          "pseudobulk design exists to avoid. <b>The p-values are overconfident and must ",
+          "not be quoted.</b> Rank by <code>auc</code> instead: it is the effect size that ",
+          "does not inflate with cell count (0.5 = no separation, 1.0 = perfect).",
+          if (imm > 0) paste0(
+            " Note also that ", cl, " is immune contamination (see the Cell cycle tab and ",
+            "docs 05-cm-deepdive), and ", imm, " of the ranked genes are immune markers ",
+            "&mdash; flagged in <code>immune_gene</code>. A difference here is a difference ",
+            "between <i>immune</i> cells and must not be read as cardiomyocyte biology.")
+            else ""))))
+  })
+  output$cm_celllevel_tab <- renderDT(de_datatable(cm_celllevel_d(), scroll = NULL))
   output$cm_pick_ui  <- renderUI(pick_banner(cm_pick(), "cm_clear"))
   output$cm_geneinfo <- renderUI(gene_info_card(cm_pick(), "cm_infoclose"))
   observeEvent(event_data("plotly_click", source = "cm_volcano"),
@@ -5637,6 +5723,15 @@ server <- function(input, output, session) {
            else paste0("DE_", ct$key, "_", input$cm_sub, "_", input$cm_stratum %||% "G1",
                        if (identical(input$cm_grid, "de2")) "_curated" else "") },
          df = function() drop_conf(cm_d(), input$cm_hideconf)),
+    # Filename says celllevel and RANKING so a downloaded file cannot be mistaken for a
+    # DE result once it is sitting on someone's desktop away from the warning above it.
+    list(id = "cm_celllevel_tab",
+         base = function() paste0("celllevel_RANKING_not_a_test_KOvsWT_", input$cm_sub),
+         # req() rather than an empty frame: the button only exists inside the
+         # conditionalPanel for a subcluster that HAS a ranking, so reaching here with any
+         # other selection means something is wrong and a blank CSV would hide it.
+         df = function() { req(input$cm_sub, input$cm_sub %in% names(CELLDE))
+                           drop_conf(CELLDE[[input$cm_sub]], input$cm_hideconf) }),
     list(id = "cm_summary", base = "cm_subcluster_summary_res0.2", df = function() cm_summary_df()),
     list(id = "cm_topmarkers", base = "cm_top_markers_res0.2", df = function() cm_topmarkers_df()),
     list(id = "cm_sub_idgo_tab", base = function() paste0("identity_GO_", input$cm_enr_sub),
