@@ -1,8 +1,8 @@
 # image	lab-server-e2f-heart-scrna-dev:latest
 # role	the deployed Shiny app
-# image_id	sha256:da99199ddf39a332a5dde443552eaf8439e4dd987de898d4add9c4b795e22c1f
-# image_created	2026-09-01T12:09:35.037459428-05:00
-# captured	2026-09-01T20:44:27Z by tools/capture_env.sh
+# image_id	sha256:d97ca50e60e8bcdf1767d88afec614bfd04677f0ca8e3dcce8c9f8b2df8a31d9
+# image_created	2026-09-01T16:07:23.280528316-05:00
+# captured	2026-09-01T21:08:26Z by tools/capture_env.sh
 # r_version	R version 4.5.1 (2025-06-13)
 # platform	x86_64-pc-linux-gnu
 # libpaths	/usr/local/lib/R/site-library : /usr/local/lib/R/library
