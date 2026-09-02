@@ -241,6 +241,19 @@ volc_lfc_ui <- function(id)
 # Choices for the CM subcluster picker. A pure function of the two name sets so it can be
 # tested without standing up a session -- the ordering and the marking are the parts that
 # broke before (a subcluster with no pseudobulk table simply vanished from the list).
+# Tab title for the gene-set checks panel, carrying a count badge when the duplicate-name
+# check has actually found something. Computed at UI build time from the static bundle,
+# which is fine because GSP never changes within a session.
+#
+# The badge exists so that relegating the drift banner to a tab does not hide a live
+# defect: the alert is one click away now, and without a visible marker nobody would know
+# to click. Zero vertical cost, which was the point of moving the banners.
+gsp_checks_title <- function(g = if (exists("GSP")) GSP else NULL) {
+  n <- tryCatch(sum(g$drift$drifted, na.rm = TRUE), error = function(e) 0L)
+  if (is.null(n) || !length(n) || is.na(n) || n < 1) return("Summary & checks")
+  tagList("Summary & checks",
+          tags$span(class = "badge bg-danger rounded-pill", style = "margin-left:6px", n))
+}
 cm_sub_choices <- function(tested, ranked_only, res = "0.2", label = sub_label) {
   extra <- setdiff(ranked_only, tested)
   subs  <- c(tested, extra)
@@ -3414,19 +3427,31 @@ ui <- page_navbar(
       selectInput("gsp_type", "Source", choices = NULL),
       textInput("gsp_find", "Find a gene", placeholder = "e.g. Myh6"),
       hr(), dl_data_ui("gsp_tab"), uiOutput("gsp_counts")),
+    # card_body(fillable = FALSE) around the card's children, for the same reason as the
+    # PC-dimensions panel above: a filling card body divides its height between the
+    # children by flex, and the tabset -- whose tables ask for 420px of scroll -- loses.
+    # The nav_panels inside already pass fillable = FALSE; that is not enough on its own,
+    # because what was being squeezed is the tabset itself, one level up.
     card(card_header("Gene sets and their provenance"),
-         uiOutput("gsp_headline"),
-         uiOutput("gsp_drift"),
-         navset_card_tab(id = "gsp_tabs",
-           wrapper = function(...) card_body(..., fillable = FALSE),
-           nav_panel("Registry", value = "reg",
-             DTOutput("gsp_tab"),
-             div(style = "margin-top:10px", uiOutput("gsp_caveats"))),
-           nav_panel("Benchmark vs published sets", value = "bench",
-             uiOutput("gsp_bench_note"),
-             DTOutput("gsp_bench")),
-           nav_panel("References", value = "refs",
-             uiOutput("gsp_refs"))))))),
+         card_body(fillable = FALSE,
+           navset_card_tab(id = "gsp_tabs", selected = "reg",
+             wrapper = function(...) card_body(..., fillable = FALSE),
+             # The two banners that used to sit above the tabset live here now. They cost
+             # ~150px of vertical space on every tab, which is what was crushing the
+             # tables. The drift check is a REAL defect report, not decoration, so moving
+             # it behind a click needs the badge in the tab title below -- otherwise an
+             # active error becomes invisible, which is worse than the crowding was.
+             nav_panel(title = gsp_checks_title(), value = "checks",
+               uiOutput("gsp_headline"),
+               uiOutput("gsp_drift")),
+             nav_panel("Registry", value = "reg",
+               DTOutput("gsp_tab"),
+               div(style = "margin-top:10px", uiOutput("gsp_caveats"))),
+             nav_panel("Benchmark vs published sets", value = "bench",
+               uiOutput("gsp_bench_note"),
+               DTOutput("gsp_bench")),
+             nav_panel("References", value = "refs",
+               uiOutput("gsp_refs")))))))),
 
   nav_spacer(),
   nav_menu("Help",
