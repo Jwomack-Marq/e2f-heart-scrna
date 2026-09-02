@@ -46,8 +46,22 @@ vals <- regmatches(nav, gregexpr('data-value="[a-z]+"', nav))[[1]]
 vals <- sub('.*"([a-z]+)"', '\\1', vals)
 cat(sprintf("    %s\n", paste(vals, collapse = " | ")))
 ok("four tabs, checks first",  identical(vals, c("checks","reg","bench","refs")))
-ok("Registry is the default",  grepl('<li class="active"> <a [^>]*data-value="reg"', seg))
-ok("checks tab is NOT default", !grepl('<li class="active"> <a [^>]*data-value="checks"', seg))
+# Which element carries "active" depends on the RENDER PATH, not the bslib version --
+# measured in one image, bslib 0.12.0, both ways. as.character() on the ui object (what
+# this test does) emits <li class="active"> with a bare <a>; the page Shiny actually
+# serves emits <li class="nav-item"> with <a class="nav-link active">. Accept either, so
+# the same assertion holds whether it is pointed at the tag tree or at a fetched page.
+active_tab <- function(nav) {
+  li <- regmatches(nav, gregexpr('<li[^>]*>.*?</li>', nav, perl = TRUE))[[1]]
+  v  <- vapply(li, function(x) sub('.*data-value="([a-z]+)".*', '\\1', x), "")
+  a  <- vapply(li, function(x) grepl('class="[^"]*\\bactive\\b', x), TRUE)
+  unname(v[a])
+}
+sel <- active_tab(nav)
+cat(sprintf("    active tab: %s\n", paste(sel, collapse = ",")))
+ok("exactly one tab is active",  length(sel) == 1)
+ok("Registry is the default",    identical(sel, "reg"))
+ok("checks tab is NOT default",  !identical(sel, "checks"))
 
 cat("\n== the crush fix: the body holding the tabset must not flex its children ==\n")
 # the card-body that directly contains the tabset
