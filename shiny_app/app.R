@@ -3956,13 +3956,17 @@ server <- function(input, output, session) {
     g$dims <- sort(unique(d$dims))
     g
   })
-  output$clu_map <- renderPlot({
-    g <- clu_map_g(); col <- input$clu_map_col %||% "cluster"
-    pcdims_gg(g, col, pal_choice = input$clu_map_pal %||% "Default")
-  })
-  register_fig(output, "clumap", reactive({
-    g <- clu_map_g(); pcdims_gg(g, input$clu_map_col %||% "cluster",
-                                pal_choice = input$clu_map_pal %||% "Default") }), input)
+  # req(), NOT `%||%`. selectInput starts with choices = NULL, and its value in that
+  # window is "" -- which `%||%` passes straight through, because it only catches NULL.
+  # pcdims_gg then does d[[""]] -> NULL and dies on "replacement has 0 rows". The PC
+  # dimensions panel above gets this right with req(), which treats "" as missing; this
+  # one did not, and the whole panel errored on first paint.
+  clu_map_p <- reactive({ g <- clu_map_g(); req(input$clu_map_col)
+    validate(need(input$clu_map_col %in% names(g$percell),
+                  "That colouring is not in the PC-dimension sweep for this build."))
+    pcdims_gg(g, input$clu_map_col) })
+  output$clu_map <- renderPlot(clu_map_p())
+  register_fig(output, "clumap", clu_map_p, input)
   observe({ g <- PCD$cm; req(g)
     updateSelectInput(session, "clu_map_col", choices = g$colby,
                       selected = isolate(input$clu_map_col) %||% "cluster") })

@@ -46,12 +46,29 @@ testServer(shinyAppFile("app.R"), {
   ok("single dims panel", identical(sort(unique(d$dims)), 50L))
   ok("42,416 cells",      nrow(d) == 42416)
 
-  cat("\n== every colour-by option renders ==\n")
+  cat("\n== every colour-by option actually DRAWS ==\n")
+  # This must force the plot to render to a device. testServer's output$clu_map does NOT
+  # draw -- it returns a descriptor -- so an earlier version of this test passed while the
+  # panel errored on first paint for every user. Build the ggplot and print it to a null
+  # PNG device: that is the step that executes pcdims_gg and would have caught it.
   session$setInputs(clu_map_scope = "all")
+  draws <- function() { f <- tempfile(fileext=".png")
+    r <- try({ grDevices::png(f, 900, 400); on.exit({grDevices::dev.off(); unlink(f)}, add=TRUE)
+               print(clu_map_p()); TRUE }, silent = TRUE)
+    isTRUE(r) }
   for (cb in c("cluster","genotype","timepoint","Phase")) {
     session$setInputs(clu_map_col = cb)
-    ok(paste("colour by", cb), !is.null(output$clu_map))
+    ok(paste("colour by", cb, "draws"), draws())
   }
+  cat("\n== the empty-selection window that broke it ==\n")
+  # selectInput's value is "" before its observe populates the choices. req() must hold
+  # the plot back rather than passing "" into pcdims_gg.
+  session$setInputs(clu_map_col = "")
+  r <- try(clu_map_p(), silent = TRUE)
+  ok("empty colour-by is held by req(), not passed through",
+     inherits(r, "try-error") && grepl("silent|argument", conditionMessage(attr(r,"condition"))) ||
+     inherits(attr(r,"condition"), "shiny.silent.error"))
+  session$setInputs(clu_map_col = "cluster")
   cat("\n== the note ==\n")
   h <- output$clu_map_note$html
   ok("renders",                       nchar(h) > 300)
