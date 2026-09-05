@@ -2880,6 +2880,19 @@ ui <- page_navbar(
       nav_panel("Variant explorer — PC dims 10/30/50", value = "variant",
         uiOutput("clu_banner"),
         navset_pill(
+          # First, because "how does the split change with the PC cut" is a question about
+          # a picture. The tables answer it one variant at a time; this shows all three
+          # cuts at once, which is the comparison people actually want to make.
+          nav_panel("Map (UMAP)",
+            div(style = "margin-top:10px", uiOutput("clu_map_note")),
+            layout_columns(col_widths = c(4, 4, 4),
+              selectInput("clu_map_col", "Colour by", choices = NULL),
+              radioButtons("clu_map_scope", "Show",
+                           c("All three PC cuts (compare)" = "all",
+                             "Only the selected variant"   = "one"),
+                           selected = "all"),
+              div(style = "padding-top:26px", dl_fig_ui("clumap", "Download figure (static)"))),
+            plotOutput("clu_map", height = "460px")),
           nav_panel("Composition & phase",
             div(style = "margin-top:10px", uiOutput("clu_sum_note")),
             layout_columns(col_widths = c(6, 6),
@@ -3923,6 +3936,53 @@ server <- function(input, output, session) {
   observe({
     req(CLU)
     updateSelectInput(session, "clu_var", choices = clu_choices(), selected = CLU$production)
+  })
+  # The map reuses pcdims_gg() rather than drawing its own, so the Variant explorer and
+  # the PC dimensions tab cannot drift apart visually. It takes the same `g` shape,
+  # rebuilt for one resolution: percell already carries SCT_snn_res.0.1/0.2/0.3 for every
+  # dims cut, and those columns were verified to reproduce the registry's cluster counts
+  # for all nine variants -- so colouring by SCT_snn_res.<r> at dims D IS variant
+  # cm_dims<D>_res<r>, not an approximation of it.
+  clu_map_g <- reactive({ clu_ok(); req(input$clu_var)
+    v <- CLU$variants[[input$clu_var]]; req(v)
+    g <- PCD$cm; validate(need(!is.null(g), PCD_MSG))
+    res <- as.character(v$resolution); col <- paste0("SCT_snn_res.", res)
+    validate(need(col %in% names(g$percell),
+                  paste0("res ", res, " is not in the PC-dimension sweep for this build.")))
+    d <- g$percell
+    if (identical(input$clu_map_scope %||% "all", "one")) d <- d[d$dims == v$dims, , drop = FALSE]
+    d$cluster <- d[[col]]
+    g$percell <- d
+    g$dims <- sort(unique(d$dims))
+    g
+  })
+  output$clu_map <- renderPlot({
+    g <- clu_map_g(); col <- input$clu_map_col %||% "cluster"
+    pcdims_gg(g, col, pal_choice = input$clu_map_pal %||% "Default")
+  })
+  register_fig(output, "clumap", reactive({
+    g <- clu_map_g(); pcdims_gg(g, input$clu_map_col %||% "cluster",
+                                pal_choice = input$clu_map_pal %||% "Default") }), input)
+  observe({ g <- PCD$cm; req(g)
+    updateSelectInput(session, "clu_map_col", choices = g$colby,
+                      selected = isolate(input$clu_map_col) %||% "cluster") })
+  output$clu_map_note <- renderUI({ clu_ok(); req(input$clu_var)
+    v <- CLU$variants[[input$clu_var]]; req(v)
+    one <- identical(input$clu_map_scope %||% "all", "one")
+    reg <- CLU$registry
+    counts <- reg[abs(reg$resolution - as.numeric(v$resolution)) < 1e-9, c("dims","n_clusters")]
+    counts <- counts[order(counts$dims), ]
+    div(class = "alert alert-secondary", style = "font-size:12px",
+      HTML(paste0(
+        "<b>", if (one) paste0("dims 1:", v$dims) else "All three PC cuts",
+        " at resolution ", v$resolution, ".</b> ",
+        "SCTransform, PCA and Harmony are computed once and shared &mdash; only the number ",
+        "of components carried into the neighbour graph and UMAP changes, so any ",
+        "difference below is caused by the dims cut alone. At this resolution the cut ",
+        "gives ", paste(sprintf("<b>%d</b> clusters at dims %d", counts$n_clusters, counts$dims),
+                        collapse = ", "), ". ",
+        "<b>Colours are not comparable between panels</b> &mdash; cluster 3 under one cut is ",
+        "not cluster 3 under another; compare the <i>shape of the split</i>, not the labels.")))
   })
   clu_v <- reactive({ clu_ok(); req(input$clu_var)
     v <- CLU$variants[[input$clu_var]]
