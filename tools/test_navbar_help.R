@@ -37,7 +37,7 @@ ok("other menus are NOT right-aligned",
    { j <- regexpr('data-value="Whole heart"', h, fixed=TRUE)
      stopifnot(j > 0); s2 <- substr(h, j, j + 400)
      !grepl('dropdown-menu-end', s2) })
-ok("variant tab renamed and findable", grepl("Variant explorer &mdash; PC dims 10/30/50|Variant explorer — PC dims 10/30/50", h))
+ok("variant tab renamed and findable", grepl("Variant explorer &mdash; PCA 10/30/50|Variant explorer — PCA 10/30/50", h))
 ok("PC dimensions panel cross-references it", grepl("Looking for how DE, GO and the subclusters change", h))
 ok("still 21 top-level nav_panels", TRUE)
 cat(sprintf("\n%s\n", if(FAIL==0) "ALL PASS" else paste(FAIL,"FAILURES")))

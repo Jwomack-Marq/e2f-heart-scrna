@@ -97,7 +97,8 @@ testServer(shinyAppFile("app.R"), {
   h <- output$clu_map_note$html
   ok("renders",                       nchar(h) > 300)
   ok("warns colours not comparable",  grepl("not comparable between panels", h))
-  ok("states cluster counts per cut", grepl("clusters at dims 10", h))
+  ok("states cluster counts per cut", grepl("clusters at PCA 10", h))
+  ok("uses PCA wording, not dims 1:n",  !grepl("dims 1:", h))
 })
 cat(sprintf("\n%s\n", if(FAIL==0) "ALL PASS" else paste(FAIL,"FAILURES")))
 if (FAIL) quit(status=1)

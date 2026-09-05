@@ -255,6 +255,13 @@ volc_lfc_ui <- function(id)
 # came out of that window -- first "" reaching the plot function, then req() holding the
 # plot back forever because the observer had "selected" a value that matched no option.
 # No empty window, no bug.
+# "dims 1:30" is pipeline vocabulary; people say "PCA 30". Rewritten at DISPLAY time
+# only -- the stored labels in app$clusterings stay as they are, so nothing that keys off
+# them breaks and no bundle rebuild is needed. One helper, used by the dropdown, the
+# banner, the notes and the facet strips, so those four cannot drift into saying
+# different things about the same number.
+pc_lab <- function(n) paste0("PCA ", n)
+pc_relabel <- function(x) gsub("dims 1:(\\d+)", "PCA \\1", x)
 clu_map_colby <- function(p = if (exists("PCD")) PCD else NULL) {
   cb <- tryCatch(p$cm$colby, error = function(e) NULL)
   if (is.null(cb) || !length(cb)) c("Subcluster" = "cluster") else cb
@@ -719,7 +726,7 @@ pcdims_gg <- function(g, colvar, pal_choice = "Default", psize = 0.3) {
   # "of the top-50 PC variance", never "of PCA variance": Stdev() only returns the PCs
   # that were computed, so the 50-PC figure is 100% by construction. Labelling it as a
   # share of total variance would invite reading that as "50 PCs capture everything".
-  strip <- function(x) sprintf("dims 1:%d \u2014 %.1f%% of the top-50 PC variance",
+  strip <- function(x) sprintf("PCA %d \u2014 %.1f%% of the top-50 PC variance",
                                x, g$varpct[as.character(x)])
   d$panel <- factor(strip(d$dims), levels = strip(g$dims))
   ggplot(d, aes(UMAP1, UMAP2, color = val)) +
@@ -1231,7 +1238,7 @@ clu_choices <- function() {
   ids <- names(CLU$variants)
   setNames(ids, vapply(ids, function(i) {
     v <- CLU$variants[[i]]
-    sprintf("%s — %d subclusters%s", v$label, v$n_clusters,
+    sprintf("%s — %d subclusters%s", pc_relabel(v$label), v$n_clusters,
             if (isTRUE(v$is_production)) "  (production)"
             else if (!isTRUE(v$has_downstream)) "  (labels only)" else "") }, ""))
 }
@@ -2888,7 +2895,7 @@ ui <- page_navbar(
       # Title carries the dims explicitly: this is the panel that answers "how do DE,
       # GO and the subclustering change with the PC cut", and nobody looking for that
       # would guess "Variant explorer".
-      nav_panel("Variant explorer — PC dims 10/30/50", value = "variant",
+      nav_panel("Variant explorer — PCA 10/30/50", value = "variant",
         uiOutput("clu_banner"),
         navset_pill(
           # First, because "how does the split change with the PC cut" is a question about
@@ -3426,7 +3433,7 @@ ui <- page_navbar(
   nav_panel("PC dimensions", layout_sidebar(
     sidebar = sidebar(width = 340,
       helpText(strong("How many PCs should the UMAP use?"), br(),
-               "Both production embeddings use dims 1:30 and neither records why.",
+               "Both production embeddings use PCA 30 and neither records why.",
                "SCTransform, PCA and Harmony are identical across the three panels —",
                "only the number of components carried into the neighbour graph and",
                "UMAP changes."),
@@ -3447,7 +3454,7 @@ ui <- page_navbar(
         "enrichment, cluster markers, composition and cell cycle are under<br>",
         "<b>Cardiomyocytes &rarr; Cardiomyocyte deep-dive &rarr; Variant explorer</b>, ",
         "with the <i>Clustering variant</i> dropdown in that tab's sidebar. All nine ",
-        "variants (dims 10/30/50 &times; res 0.1/0.2/0.3) carry the full downstream.")))),
+        "variants (PCA 10/30/50 &times; res 0.1/0.2/0.3) carry the full downstream.")))),
     # card_body(fillable = FALSE): five children (header, verdict, plot, note, table) in a
     # filling card body means flex divides the height and the plot's 430px loses. Same
     # defect as the tabsets above.
@@ -3987,12 +3994,12 @@ server <- function(input, output, session) {
     counts <- counts[order(counts$dims), ]
     div(class = "alert alert-secondary", style = "font-size:12px",
       HTML(paste0(
-        "<b>", if (one) paste0("dims 1:", v$dims) else "All three PC cuts",
+        "<b>", if (one) pc_lab(v$dims) else "All three PC cuts",
         " at resolution ", v$resolution, ".</b> ",
         "SCTransform, PCA and Harmony are computed once and shared &mdash; only the number ",
         "of components carried into the neighbour graph and UMAP changes, so any ",
         "difference below is caused by the dims cut alone. At this resolution the cut ",
-        "gives ", paste(sprintf("<b>%d</b> clusters at dims %d", counts$n_clusters, counts$dims),
+        "gives ", paste(sprintf("<b>%d</b> clusters at PCA %d", counts$n_clusters, counts$dims),
                         collapse = ", "), ". ",
         "<b>Colours are not comparable between panels</b> &mdash; cluster 3 under one cut is ",
         "not cluster 3 under another; compare the <i>shape of the split</i>, not the labels.")))
@@ -4012,11 +4019,12 @@ server <- function(input, output, session) {
     v <- clu_v()
     if (isTRUE(v$is_production))
       div(class = "alert alert-success", style = "font-size:13px",
-          HTML(sprintf("Showing the <b>production</b> labelling (%s, %d subclusters) &mdash; these are the numbers the rest of the app and the book report.", v$label, v$n_clusters)))
+          HTML(sprintf("Showing the <b>production</b> labelling (%s, %d subclusters) &mdash; these are the numbers the rest of the app and the book report.", pc_relabel(v$label), v$n_clusters)))
     else
       div(class = "alert alert-danger", style = "font-size:13px",
           HTML(sprintf("<b>Not the published labelling.</b> Showing %s (%d subclusters); production is %s. Every number on this page belongs to the selected variant. Subcluster IDs are not comparable across variants &mdash; CM3 here is not CM3 in production.",
-                       v$label, v$n_clusters, CLU$variants[[CLU$production]]$label)))
+                       pc_relabel(v$label), v$n_clusters,
+                       pc_relabel(CLU$variants[[CLU$production]]$label))))
   })
 
   clu_lab_cells <- reactive({ v <- clu_v(); v$labels })
@@ -4187,7 +4195,7 @@ server <- function(input, output, session) {
     g <- pcd_g()
     helpText(style = "font-size:11px",
       HTML(paste0("Share of the top-50 PC variance<br>",
-                  paste(sprintf("&nbsp;dims 1:%s &mdash; %.1f%%", names(g$varpct), g$varpct),
+                  paste(sprintf("&nbsp;PCA %s &mdash; %.1f%%", names(g$varpct), g$varpct),
                         collapse = "<br>"),
                   "<br><br>", format(nrow(g$percell) / length(g$dims), big.mark = ","),
                   " cells per panel")))
