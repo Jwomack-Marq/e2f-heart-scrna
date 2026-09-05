@@ -268,13 +268,38 @@ it carries `presto` and `Matrix` and nothing else:
 - **Precomputed offline:** pseudobulk KO-vs-WT DE and GO/GSEA, because DESeq2 and
   clusterProfiler are not in the runtime image.
 
-Three of the nine variants carry the full downstream; the rest are marked *(labels only)*
-and say so where a table would be. Selecting anything other than production shows a red
+**All nine variants now carry the full downstream** — pseudobulk KO-vs-WT DE, GO/GSEA and
+identity GO, cluster markers, subtype map, composition and cell cycle. (An earlier draft of
+this section said three did and the rest were *(labels only)*; that was true before the
+sweep was completed and is no longer.) Selecting anything other than production shows a red
 banner, and it says explicitly that **subcluster IDs are not comparable across variants** —
 CM3 under one labelling is not CM3 under another.
 
-One result is worth recording because it survives the whole exercise: **Gabbr2 is top
-KO-up in every testable subcluster of every variant** (7/7, 10/10, 11/11). That is a
-whole-compartment effect independent of the clustering, which is exactly the kind of claim
-that remains safe when the labels themselves are unstable.
+One caveat when comparing a number here against the rest of the app: the registry's
+"production" arm is `cm_dims30_res0.2` and it yields **11** subclusters, while the shipped
+res-0.2 clustering the other tabs are built on has **13** (CM0–CM12). Same dims, same
+resolution, different partition — the Louvain label instability documented above. The
+variant explorer's production arm is therefore a re-computation, not the shipped
+partition.
+
+One result survives the whole exercise, and **it is the opposite of what an earlier draft
+of this section concluded.** With all nine variants now tested, the complete set of genes
+significantly KO-up in *every* testable subcluster is, in each variant:
+
+| variant | universally KO-up |
+|---|---|
+| dims10 res 0.1 / 0.2 | Ddx3y, Eif2s3y, **Gabbr2**, Kdm5d, **Tcf4**, Uty |
+| dims10 res 0.3 | Ddx3y, Eif2s3y, **Gabbr2**, **Tcf4**, Uty |
+| dims30 res 0.1 / 0.2, dims50 res 0.1 | Ddx3y, Eif2s3y, **Gabbr2**, **Tcf4** |
+| dims30 res 0.3, dims50 res 0.2 / 0.3 | **Gabbr2**, **Tcf4** |
+
+In all nine clusterings that set is Gabbr2, Tcf4 and **Y-chromosome genes, and nothing
+else**; at the finest cuts it is exactly `{Gabbr2, Tcf4}`. The earlier draft read Gabbr2's
+clustering-independence as evidence that it is a safe, whole-compartment effect. That
+inference does not hold: `Ddx3y` and `Uty` have the identical property, and they are
+sex markers. Genotype is perfectly confounded with sex in this design, so a gene whose only
+distinction is that it moves everywhere is behaving like an animal-level difference, not
+like biology — the same reasoning this project already used to reject the `mt-` block
+(chapter 11, confound 5). Gabbr2 and Tcf4 should be treated as unresolved by this dataset,
+not as its most robust finding.
 <span class="src">our_analysis/05_analyses/cm_subcluster_analyze.R, shiny_app/build_clusterings.R</span>

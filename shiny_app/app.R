@@ -2874,7 +2874,10 @@ ui <- page_navbar(
                  "each cluster's top identity GO term, top KO-vs-WT GSEA pathway, and top KO-up / KO-down genes — ",
                  "a quick read on what each subcluster is doing biologically."),
         dl_data_ui("cm_topmarkers"), DTOutput("cm_topmarkers")),
-      nav_panel("Variant explorer", value = "variant",
+      # Title carries the dims explicitly: this is the panel that answers "how do DE,
+      # GO and the subclustering change with the PC cut", and nobody looking for that
+      # would guess "Variant explorer".
+      nav_panel("Variant explorer — PC dims 10/30/50", value = "variant",
         uiOutput("clu_banner"),
         navset_pill(
           nav_panel("Composition & phase",
@@ -3407,7 +3410,19 @@ ui <- page_navbar(
       hr(),
       dl_fig_ui("pcdmap", "Download figure (static)"),
       dl_data_ui("pcd_tab"),
-      uiOutput("pcd_var")),
+      uiOutput("pcd_var"),
+      # This panel answers the dims question for the EMBEDDING only. The per-dims DE,
+      # GO and subcluster tables live in a different tab, and someone arriving here is
+      # exactly the person looking for them -- so say where they are rather than
+      # letting them conclude the embedding is all that was compared.
+      hr(),
+      helpText(style = "font-size:12px", HTML(paste0(
+        "<b>Looking for how DE, GO and the subclusters change with dims?</b><br>",
+        "This panel compares the <i>embedding</i>. The per-dims KO-vs-WT tables, GO/GSEA ",
+        "enrichment, cluster markers, composition and cell cycle are under<br>",
+        "<b>Cardiomyocytes &rarr; Cardiomyocyte deep-dive &rarr; Variant explorer</b>, ",
+        "with the <i>Clustering variant</i> dropdown in that tab's sidebar. All nine ",
+        "variants (dims 10/30/50 &times; res 0.1/0.2/0.3) carry the full downstream.")))),
     # card_body(fillable = FALSE): five children (header, verdict, plot, note, table) in a
     # filling card body means flex divides the height and the plot's 430px loses. Same
     # defect as the tabsets above.
@@ -3454,7 +3469,11 @@ ui <- page_navbar(
                uiOutput("gsp_refs")))))))),
 
   nav_spacer(),
-  nav_menu("Help",
+  # align = "right": this menu sits after nav_spacer(), so it is pushed to the right
+  # edge, but a Bootstrap dropdown still opens LEFT-anchored by default -- the panel
+  # then runs off the right of the viewport and half of it is unreadable. "right"
+  # anchors the dropdown's right edge to the menu so it opens inward.
+  nav_menu("Help", align = "right",
   nav_panel("QC & normalization", div(style = "max-width:1000px;padding:8px 4px",
     uiOutput("qcfigs"),
     h5("Doublet rate by lane (numbers)"),
