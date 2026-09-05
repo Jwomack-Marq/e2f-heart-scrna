@@ -27,6 +27,30 @@ REG <- readRDS("app_data.rds")$clusterings$registry
 want_for <- function(res) { r <- REG[abs(REG$resolution - as.numeric(res)) < 1e-9, ]
                             as.integer(r$n_clusters[order(r$dims)]) }
 
+# --- the UI must ship a usable default -------------------------------------
+# Both failures in this panel were the same shape: the colour-by select had no valid
+# value at first paint. First that "" reached the plot function (error); then req() held
+# the plot back forever because the observer set selected="" which matched no option
+# (blank panel, no error -- worse). testServer does NOT apply UI defaults, so neither
+# case is reachable from the driving tests below. This checks the built markup instead.
+E <- new.env(parent = globalenv()); suppressWarnings(suppressMessages(sys.source("app.R", envir = E)))
+h <- gsub("\\s+", " ", as.character(E$ui))
+i <- regexpr('id="clu_map_col"', h, fixed = TRUE)
+stopifnot(i > 0)
+sel <- substr(h, i, i + 700)
+sel <- substr(sel, 1, regexpr("</select>", sel, fixed = TRUE))
+opts <- regmatches(sel, gregexpr('<option value="[^"]*"[^>]*>', sel))[[1]]
+cat("== the colour-by select, as built ==\n")
+cat(sprintf("    %d options; selected: %s\n", length(opts),
+    paste(sub('.*value="([^"]*)".*', "\\1", grep("selected", opts, value = TRUE)), collapse = ",")))
+ok("select has real options",        length(opts) >= 2)
+ok("exactly one is pre-selected",    sum(grepl("selected", opts)) == 1)
+ok("the default is not empty",       !any(grepl('value="" [^>]*selected|value=""[^>]*selected', opts)))
+ok("the default is 'cluster'",
+   identical(sub('.*value="([^"]*)".*', "\\1", grep("selected", opts, value = TRUE)), "cluster"))
+ok("clu_map_colby() degrades without the sweep",
+   identical(unname(E$clu_map_colby(NULL)), "cluster"))
+
 testServer(shinyAppFile("app.R"), {
   cat("== the map shows the selected variant's clustering, at all three cuts ==\n")
   for (v in c("cm_dims10_res0.2","cm_dims30_res0.2","cm_dims50_res0.3")) {

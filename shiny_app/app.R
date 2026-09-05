@@ -248,6 +248,17 @@ volc_lfc_ui <- function(id)
 # The badge exists so that relegating the drift banner to a tab does not hide a live
 # defect: the alert is one click away now, and without a visible marker nobody would know
 # to click. Zero vertical cost, which was the point of moving the banners.
+# Colour-by choices for the Variant explorer map. Static bundle data, so these are set
+# in the UI at build time rather than pushed in by an observe. That is not a style
+# preference: a selectInput built with choices = NULL holds the value "" until its
+# observer lands, "" is not NULL so `%||%` does not catch it, and both bugs in this panel
+# came out of that window -- first "" reaching the plot function, then req() holding the
+# plot back forever because the observer had "selected" a value that matched no option.
+# No empty window, no bug.
+clu_map_colby <- function(p = if (exists("PCD")) PCD else NULL) {
+  cb <- tryCatch(p$cm$colby, error = function(e) NULL)
+  if (is.null(cb) || !length(cb)) c("Subcluster" = "cluster") else cb
+}
 gsp_checks_title <- function(g = if (exists("GSP")) GSP else NULL) {
   n <- tryCatch(sum(g$drift$drifted, na.rm = TRUE), error = function(e) 0L)
   if (is.null(n) || !length(n) || is.na(n) || n < 1) return("Summary & checks")
@@ -2886,7 +2897,8 @@ ui <- page_navbar(
           nav_panel("Map (UMAP)",
             div(style = "margin-top:10px", uiOutput("clu_map_note")),
             layout_columns(col_widths = c(4, 4, 4),
-              selectInput("clu_map_col", "Colour by", choices = NULL),
+              selectInput("clu_map_col", "Colour by", choices = clu_map_colby(),
+                          selected = "cluster"),
               radioButtons("clu_map_scope", "Show",
                            c("All three PC cuts (compare)" = "all",
                              "Only the selected variant"   = "one"),
@@ -3967,9 +3979,6 @@ server <- function(input, output, session) {
     pcdims_gg(g, input$clu_map_col) })
   output$clu_map <- renderPlot(clu_map_p())
   register_fig(output, "clumap", clu_map_p, input)
-  observe({ g <- PCD$cm; req(g)
-    updateSelectInput(session, "clu_map_col", choices = g$colby,
-                      selected = isolate(input$clu_map_col) %||% "cluster") })
   output$clu_map_note <- renderUI({ clu_ok(); req(input$clu_var)
     v <- CLU$variants[[input$clu_var]]; req(v)
     one <- identical(input$clu_map_scope %||% "all", "one")
