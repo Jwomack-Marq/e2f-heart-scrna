@@ -1,0 +1,4 @@
+num_processed_reads,313972897
+num_reads_below_min_length,9682485
+num_reads_no_barcode_match,26830791
+num_output_reads,277459621

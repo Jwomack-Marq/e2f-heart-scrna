@@ -48,6 +48,29 @@ docker run --rm -p 3838:3838 \
 
 Open **http://localhost:3838**.
 
+## Figure Studio (the companion figure editor)
+
+Every downloadable figure also has a **Figure Studio** button, which hands the built
+plot to a separate app for publication styling — journal column widths in mm, per-element
+fonts, per-level colours, PDF/SVG/PNG/TIFF export. That app lives in its own repo
+(`figure-studio`), and its README is the contract of record for the handoff format.
+
+The button only appears when **both** env vars are set and the directory exists:
+
+| var | meaning |
+|---|---|
+| `FIGURE_STUDIO_BASE` | what the **browser** opens, e.g. `http://localhost:3939/` locally, `/figure-studio/` behind the lab nginx |
+| `HANDOFF_DIR` | a directory **both containers** mount; the app writes one `<token>.rds` per click there |
+
+Unset (plain `docker run`, rsconnect, `shiny::runApp`), the app is exactly as it was —
+no button, no observers. `docker compose up --build` wires both apps together, with the
+studio on **http://localhost:3939**; clone `figure-studio` beside this repo first.
+
+Handoff files are throwaway: both apps delete anything older than 24 h, so an old link
+lands on the studio's "expired" card rather than an error. The two images must carry the
+**same ggplot2 version** — a figspec is a serialized ggplot object and does not survive a
+version change (the studio says so plainly when it happens, but the fix is a rebuild).
+
 ## Changing the port
 
 Map any host port to the container's `3838`, e.g. serve on `8080`:

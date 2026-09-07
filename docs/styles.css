@@ -1,0 +1,23 @@
+/* Methods book -- small tweaks only; cosmo does the rest. */
+
+/* Parameter tables get a lot of use; keep them compact and monospaced where
+   they carry code identifiers. */
+table code { font-size: 0.85em; }
+.quarto-title-block .subtitle { color: #6c757d; }
+
+/* The "cited to source" convention: a file:line reference rendered as a
+   trailing source note, so a claim and its provenance sit together. */
+.src {
+  font-family: var(--bs-font-monospace);
+  font-size: 0.8em;
+  color: #6c757d;
+  white-space: nowrap;
+}
+
+/* Figure captions carry the export provenance line; keep them readable but
+   clearly subordinate to the figure. */
+figcaption { font-size: 0.88em; color: #495057; }
+
+/* Callouts used heavily for caveats -- tighten the vertical rhythm so a chapter
+   with four of them does not read as a wall of boxes. */
+div.callout { margin-top: 1rem; margin-bottom: 1rem; }

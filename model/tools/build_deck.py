@@ -143,7 +143,7 @@ def kobars():
 def pipeline():
     lanes = [
         dict(y=36, col="var(--s1)", src="OUR LAB",
-             lines=["10x · P0 + P7 · KO vs WT", "30,030 cells / 21,598 CM"],
+             lines=["PIP-seq · P0 + P7 · KO vs WT", "30,030 cells / 21,598 CM"],
              warn="⚠ 29 of 63 model genes in panel",
              proc=["shiny_app browser", "→ ko_export/*.csv"],
              give="MOTIVATION", sub="+ validation target"),

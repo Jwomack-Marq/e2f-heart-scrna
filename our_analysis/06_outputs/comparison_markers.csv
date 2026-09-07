@@ -1,0 +1,5 @@
+"condition","clusters_original","clusters_rerun","sigGenes_original","sigGenes_rerun","sigGene_jaccard","top30_overlap","top30_union"
+"P0WT",23,22,7848,14285,0.549,95,973
+"P0KO",24,23,12891,13646,0.91,313,969
+"P7WT",27,26,13327,15114,0.866,300,1172
+"P7KO",21,25,13012,14276,0.887,294,1004

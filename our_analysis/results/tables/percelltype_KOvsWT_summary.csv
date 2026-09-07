@@ -1,0 +1,15 @@
+"timepoint","celltype","n_cells","status","n_DE_absLFC_gt1","top_KO_up","top_KO_down"
+"P0","Cardiomyocyte",25282,"ok",492,"Gm29650,Mcpt2,Gm45910,Kcnv1,Cst9,Krtap13","Gm27733,2310015K22Rik,AC167036.2,Gzma,G530012D18Rik,Ccl21a"
+"P0","Endothelial",3955,"ok",167,"Gm29650,P2rx2,Ly6c2,Tafa2,Gm32834,Upk1b","G530012D18Rik,Gm27733,Gm42805,Cd74,Gm12718,C1qb"
+"P0","Epicardial",133,"skipped_unbalanced",NA,NA,NA
+"P0","Fibroblast",4387,"ok",177,"Defb33,Gm2861,Gm28561,Ren1,Sorcs3,Acan","Gm10745,Gm28932,Wdr88,Serpina3f,C1qb,Gm17268"
+"P0","Immune_Myeloid",542,"ok",55,"Chil1,Tafa2,G0s2,Pira2,Lcn2,Cstdc5","H2-Aa,Dock9,Sln,Firre,Ptprm,H2-Ab1"
+"P0","Mural_Pericyte",1163,"ok",130,"Grp,Fam107a,Ptchd4,Fmo2,Syk,Tafa2","Gm572,Angptl7,Gm12682,Rasef,Vaultrc5,Bc1"
+"P0","RBC",554,"ok",249,"Gm44129,Ccl4,Spef2,Gabbr2,Adamts5,Sox17","Mptx1,Stfa2l1,Phtf1,Stfa1,Cdkl4,Dock9"
+"P7","Cardiomyocyte",17134,"ok",685,"Cyp2d32-ps,Gm14296,Gm29650,Gm28615,2210418O10Rik,Gm9237","Cyp2d33-ps,Gm27733,Igkc,Gm10451,Prss34,Gm43057"
+"P7","Endothelial",2191,"ok",376,"Wnt16,Ltbp2,Atp12a,Gm14296,Chil5,Zfp125","Ccl21a,Il1b,Mfap4,Ly6d,Sprr1a,Sfrp2"
+"P7","Epicardial",10,"skipped_too_few",NA,NA,NA
+"P7","Fibroblast",2178,"ok",268,"S100a9,Stfa1,Cstdc4,S100a8,Retnlg,Gm14296","Ackr2,Gm572,Cyp2d32-ps,Sult2a6,Hmcn2,Grm3"
+"P7","Immune_Myeloid",484,"ok",180,"Adamts9,Gm10475,Gabbr2,Cxcl9,A930001M01Rik,Gm15697","Mamdc2,Ccl17,Cmah,Rnu3b3.1,Hbb-bt,Arg1"
+"P7","Mural_Pericyte",881,"ok",79,"Sost,Gm14296,Fbln5,Gabbr2,Gm11007,Osr1","Lrrc45,Serpinb9,Pcca,Col15a1,Mus81,Firre"
+"P7","RBC",23,"skipped_too_few",NA,NA,NA

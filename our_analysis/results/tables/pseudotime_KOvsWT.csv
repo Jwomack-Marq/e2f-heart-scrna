@@ -1,0 +1,5 @@
+"timepoint","genotype","n","median_pt","mean_pt","pct_late","NOTE"
+"P0","KO",12263,352.172,342.42,39.4,"descriptive (n=1, sex-confounded)"
+"P0","WT",13019,352.618,341.085,42.4,"descriptive (n=1, sex-confounded)"
+"P7","KO",10597,358.562,351.5,64.6,"descriptive (n=1, sex-confounded)"
+"P7","WT",6537,358.503,351.56,61.4,"descriptive (n=1, sex-confounded)"

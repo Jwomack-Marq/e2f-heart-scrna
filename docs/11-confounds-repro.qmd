@@ -1,0 +1,243 @@
+---
+title: "Confounds and reproducibility"
+engine: markdown
+tabs:
+  - "About / caveats"
+  - "Precomputed results"
+---
+
+## What you're looking at
+
+**Help → About / caveats** is the app's own statement of what this dataset is and what
+it cannot support. This chapter is the long form: each confound, what was done to
+measure rather than assume it, and how to rebuild every number in this book from the
+bundle.
+
+{{< include _includes/caveats.md >}}
+
+## Confound 1 — n = 1, and what that does to a p-value
+
+Four libraries, one animal each; the two lanes per sample are the same library sequenced
+twice. A cell-level Wilcoxon on 1,400 cells from one animal is answering "do these cells
+differ", and reporting it as "do these genotypes differ" is pseudoreplication. The
+consequences are visible rather than hidden:
+
+- p-values underflow to zero and are floored at `1e-300`, which is why volcano points
+  pin in a row at `-log10 p = 300` (`app.R:139`)
+- every table sorts by `|log2FC|`, never by p (`app.R:197`)
+- the volcano's y-axis is labelled "ranking only, n=1" in the plot itself
+  (`app.R:154`)
+
+There is no statistical repair for this inside the dataset. The fix is a replicated,
+sex-matched cohort of at least three animals per condition.
+
+## Confound 2 — sex
+
+{{< include _generated/tbl-confound.md >}}
+
+These seven genes are flagged `sex/construct` everywhere, plotted in grey, excluded from
+every enrichment input, and **never deleted from a DE table**. Leaving them visible is
+the point: they are the honest top of the KO-up list, and a table that quietly omitted
+them would look like a clean result.
+
+Because genotype and sex are perfectly confounded, no analysis in this project can
+separate "an effect of losing E2F7/8" from "a difference between a male and a female
+animal".
+
+## Confound 3 — the knockout is not visible in the transcript
+
+See [chapter 6](06-e2f.qmd), which exists for this. `E2f8` is detected in 10.2 % of
+KO-P7 cardiomyocytes versus 6.62 % of WT-P7 — higher, not lower.
+
+## Confound 4 — the FACS cycling sort
+
+The project notes put P7's cycling enrichment at 4.5–5.2× with P0 essentially
+unenriched, so the raw cycling fraction *rises* from P0 to P7 in this data while it
+*falls* in reality. Every temporal contrast therefore exists in a phase-matched G1
+stratum as well as a raw one ([chapter 7](07-fourgroup.qmd)).
+
+**The confound was then measured rather than inherited.** Inside the cardiomyocyte
+compartment of this bundle the WT cycling fraction goes 16.3 % → 25.0 % from P0 to P7, a
+ratio of **1.53×**, not 4.5–5.2× — the headline figure describes the sort applied to the
+whole heart, not the ratio within cardiomyocytes. Empirically the two strata barely
+disagree: G1-matched and raw log2FCs correlate at **r = 0.99** with a median absolute
+difference of **0.001**, and no cell-cycle gene moves more than 0.07 log2 units between
+them.
+<span class="src">analysis/2026-08-21_email/README.md — "Design decisions worth knowing"</span>
+
+The phase-matched stratum stays the default as cheap insurance. But the honest summary is
+that the two are not different biological answers, and a reader should not be told to
+distrust a raw table that is in fact fine.
+
+## Confound 5 — mitochondrial read fraction
+
+This one was not in the original project notes; it was found while preparing the
+collaborator deliverable, and it changes how the KO-up enrichment should be read.
+
+`mt-` genes appear in the KO-up list of **all seven** tested subclusters and in the
+KO-down list of **none**. Seven independently clustered populations do not agree that
+cleanly by biology; a one-directional shift of the whole `mt-` block is a read-fraction
+difference between libraries.
+
+**It is present in the libraries as sequenced.** PIPseeker reports a mitochondrial
+fraction per lane, upstream of every choice we made, and it already carries the pattern:
+
+{{< include _generated/tbl-mito-source.md >}}
+
+The knockout is *lower* than wild type at P0 and *higher* at P7 — the same direction and
+the same shape as the downstream measurement above, arrived at independently and before any
+filtering, normalisation or integration. The two lanes of each library agree to within
+0.03 percentage points, so this is a difference between libraries, not noise.
+
+That settles where the artefact comes from and where it does not. It is **not** something
+our pipeline introduced. It is also not an ambient-RNA effect of the kind an earlier draft
+of this book proposed: that argument rested on PIP-seq **v4**'s >10 % ambient load, and this
+run used **chemistry V**, which the same benchmark places under 5 % with every other kit
+tested. What remains is the plain reading — the four libraries differ in mitochondrial
+content, the KO-vs-WT difference reverses between the two timepoints, and any enrichment
+result carried by `mt-` genes inherits that.
+
+{{< include _generated/tbl-mito.md >}}
+
+The arithmetic, from `analysis/2026-08-21_email/05_mito_sensitivity.R`: in CM1 the
+mitochondrial share of log-normalised signal goes 1.35 % (WT-P7) → 1.71 % (KO-P7), a
+ratio of 1.27 = **+0.34 log2** — which matches the observed fold changes of the
+mitochondrial genes themselves (`mt-Nd1` +0.54, `mt-Nd2` +0.45, `mt-Cytb` +0.44). The
+reciprocal squeeze on all other genes is **−0.005 log2**, fifty times below the 0.25
+threshold, so the rest of the table is unaffected.
+
+The consequence is confined but severe:
+
+{{< include _generated/tbl-mito-go.md >}}
+
+Re-running GO with `mt-` genes removed from **both input and universe** costs CM1's
+KO-up result **all 61 of its terms**, and CM2's 71 of 73 — those terms *were* the
+mitochondrial block. The KO-down direction is untouched: CM1 keeps 422 of 423.
+
+**So**: the KO-down enrichment stands on its own; the KO-up "oxidative
+phosphorylation / electron transport / proton transport" result should be read as a
+library artefact until a replicated cohort says otherwise. Nothing was deleted from the
+DE tables — the rows are correct — but they carry a `mito_encoded` flag, and the
+WT-programs tab hides `mt-` genes by default for the same reason.
+
+## Precomputed results, linked rather than recomputed
+
+**Methods & provenance → Precomputed results** exposes 28 tables the upstream pipeline had already computed but
+the app never carried. They are read from the bundle, so they cost the app nothing to display,
+and several are stronger than what the app computes for itself.
+
+| Category | What is now reachable |
+|---|---|
+| Differential expression (full data) | WT and KO **P7-vs-P0 contrasts over all cardiomyocytes, every gene, no row gate** (20,228 and 20,789 genes) — the complete version of two of the four-group contrasts. Plus **pseudobulk DESeq2** for P0 and P7 |
+| Cell–cell communication | A full **CellChat** run with permutation testing, at pathway and sender × receiver level, for both timepoints |
+| Composition and cell cycle | **propeller** tests of cell-type and phase abundance — an actual statistical test where [chapter 2](02-atlas.qmd)'s Composition tab draws proportions with none |
+| Confounds and QC | Sex calls per sample, E2f7/E2f8 knockout verification, lane barcode overlap, both doublet callers |
+| Annotation | The **cluster → cell-type mapping**, the marker panel used, the confusion matrix and per-type recall |
+| Trajectory | Pseudotime validation and CM stage genes |
+
+Two of those close gaps this book previously recorded as open. The app's **Cell–cell
+signalling** tab scores 20 curated ligand–receptor pairs by hand with no significance test
+([chapter 10](10-signalling.qmd) explains why CellChat was ruled out) — but a CellChat run
+already existed, and is now linked beside it. And the cluster→cell-type mapping was listed in
+[chapter 1](01-upstream.qmd) as unrecoverable; it is now in the bundle.
+
+The same pass also **removed a completeness gap in the pooled DE tables.** `build_app_data.R`
+trimmed them at `baseMean ≥ 3`; `build_linked_results.R` re-reads the complete CSVs and keeps
+every row, taking the eleven cell-type tables from 172,877 to **181,026** rows (+4.7 %). A
+gene a reader looks up and cannot find no longer reads as "not measured" when the truth was
+"expressed too low to store".
+
+Cost of all of it: **+10 MB** on a 634 MB bundle, and no new computation in the app.
+
+```bash
+Rscript shiny_app/build_linked_results.R --probe   # inventory + sizes, writes nothing
+Rscript shiny_app/build_linked_results.R          # ingest + save
+```
+
+## What was verified, and how
+
+`analysis/2026-08-21_email/99_verify.R` asserts five things about the deliverable rather
+than trusting them:
+
+1. log2FC / AUC / p are **bit-identical** to `app$fourgroup$de` for the same
+   cluster × contrast × stratum
+2. arm sizes match `app$fourgroup$counts$n_in_de_matrix`
+3. all 24,221 genes are present in every ungated table
+4. the confounder flag matches `app$confound` exactly
+5. no confounder appears in any enriched GO term's gene list, and every term's gene list
+   is a subset of the input list
+
+Two more checks guard the app itself:
+
+- `tools/check_download_coverage.R` parses `app.R` and fails if any table or plot lacks a
+  download handler
+- `tools/test_downloads.R` runs the server under `shiny::testServer` and asserts that the
+  CM deep-dive and the Four-group tab return **identical** DE tables for the same
+  selection — if that fails, one of the two tabs is answering a different question than
+  its label claims
+
+And for this book, `tools/check_docs_coverage.py` asserts that all 18 app tabs are
+documented exactly once and that every referenced figure exists.
+
+## Provenance of a downloaded file
+
+Every table in the app downloads as CSV or multi-sheet XLSX, and every plot as
+PDF/SVG/PNG. The workbooks carry a caveat block (`DL_CAVEATS`,
+`shiny_app/download_helpers.R:21`) and a stamp inside the file, so a spreadsheet that
+has travelled through three inboxes still says what it is and what it cannot support.
+The same `download_helpers.R` is shared verbatim with the offline deliverable pipeline,
+so a file from the app and a file from `run.sh` are formatted identically.
+
+## Rebuilding everything
+
+The bundle is a build artifact — 119 MB, git-ignored, regenerated upstream. After
+`build_app_data.R` produces a new one, the in-repo builders run in this order (each is
+idempotent, backs up the bundle first, and the app guards absent slots with a "run the
+builder" message):
+
+```bash
+Rscript shiny_app/build_signature_scores.R --probe   # coverage gate, writes nothing
+Rscript shiny_app/build_signature_scores.R           # app$meta$sig_*, app$score_meta
+Rscript shiny_app/build_communication.R              # app$commun
+Rscript shiny_app/build_refmap.R                     # app$refmap
+Rscript shiny_app/build_subcluster_enrichment.R      # app$enrich$sub
+Rscript shiny_app/build_fourgroup.R --probe          # group sizes, writes nothing
+Rscript shiny_app/build_fourgroup.R                  # app$fourgroup (broad grid)
+Rscript shiny_app/build_fourgroup.R --de2            # second grid, curated panel
+Rscript shiny_app/build_fourgroup_enrichment.R --probe
+Rscript shiny_app/build_fourgroup_enrichment.R       # ~2 h, ~460 enrichGO calls
+# then: rsconnect::deployApp("shiny_app")
+```
+
+Order matters in two places: `build_fourgroup.R` consumes the `sig_*` columns, so it
+must follow `build_signature_scores.R`; and `--de2` must follow the main run or it is
+dropped by the next full rebuild.
+
+Then rebuild this book:
+
+```bash
+docs/export.sh        # figures + generated tables, bundle mounted read-only
+docs/render.sh        # -> docs/_site/index.html
+```
+
+{{< include _generated/tbl-stamp.md >}}
+
+## What is missing from this repository
+
+Two gaps a reviewer will find, both worth closing:
+
+**The upstream pipeline.** `build_app_data.R` and `00_DOCS/NORMALIZATION.md` live in a
+separate workspace, so the QC/normalisation/integration/clustering parameters listed in
+[chapter 1](01-upstream.qmd) are the complete citable set and the rest are recoverable
+only from there. Copying those two files in would close it.
+
+**An environment record.** There is no `renv.lock`, no `DESCRIPTION`, and no captured
+`sessionInfo()` for the analysis. Package versions are pinned only indirectly, by the two
+Dockerfiles (`Dockerfile` → `rocker/shiny:4.4.1`; `analysis/2026-08-21_email/Dockerfile`
+→ a p3m.dev noble snapshot of 2025-10-30, R 4.5.1). For a descriptive pilot this is
+survivable; for anything intended for publication it is the next thing to fix, because
+`clusterProfiler` and `msigdbr` results move between versions.
+
+### Everything this book exports
+
+{{< include _generated/_manifest.md >}}

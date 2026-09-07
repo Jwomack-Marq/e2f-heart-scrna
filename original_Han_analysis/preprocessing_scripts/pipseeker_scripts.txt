@@ -1,0 +1,114 @@
+###### P0 ######
+## Lane 1, P0KO ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data/01.RawData/P0KO/P0KO_CKDL250003756 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--output-path P0KO_lane1
+
+
+## Lane 6: P0KO ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data_Lane6/01.RawData/P0KO/P0KO_CKDL250003756 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 3 --max-sensitivity 5 \
+--output-path P0KO_lane6
+
+
+## Lane 1, P0WT ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data/01.RawData/P0WT/P0WT_CKDL250003755 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P0WT_lane1
+
+
+## Lane 6: P0WT ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data_Lane6/01.RawData/P0WT/P0WT_CKDL250003755 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P0WT_lane6
+
+###### P7 ######
+
+## Lane 1, P7KO ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data/01.RawData/P7KO/P7KO_CKDL250003754 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P7KO_lane1
+
+
+## Lane 6: P7KO ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data_Lane6/01.RawData/P7KO/P7KO_CKDL250003754 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P7KO_lane6
+
+
+## Lane 1, P7WT ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data/01.RawData/P7WT/P7WT_CKDL250003753 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P7WT_lane1
+
+
+## Lane 6: P7WT ##
+~/PIPseeker/pipseeker-v3.3.0-linux/pipseeker full \
+--fastq /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data_Lane6/01.RawData/P7WT/P7WT_CKDL250003753 \
+--star-index-path /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--chemistry V \
+--min-sensitivity 4 --max-sensitivity 5 \
+--output-path P7WT_lane6
+
+
+
+
+
+############################################################
+
+conda activate /projects/rpci/tliu4/miniconda3/envs/MAESTRO
+cd /projects/rpci/tliu4/jiaojiaozhou/Projects/2025_Han_scRNA
+
+# Step 1. Configure the MAESTRO workflow
+MAESTRO scrna-init \
+--platform 10x-genomics --species GRCm38 \
+--directory P0WT \
+--cores 32 --rseqc \
+--mapindex /user/jzhou54/Desktop/tliu4/db/genome/Refdata_scRNA_MAESTRO_GRCm38_1.2.2/GRCm38_STAR_2.7.6a \
+--whitelist /user/jzhou54/Desktop/tliu4/working_projects/Higgins_single-cells/MiceMammaryGland_Multiome/737K-arc-v1.txt \
+--barcode-start 1 --barcode-length 16 --umi-start 17 --umi-length 12 \
+--count-cutoff 1000 --gene-cutoff 500 --cell-cutoff 10 \
+--lisadir /user/jzhou54/Desktop/tliu4/db/lisa/mm10/mm10_1000_2.0.h5 \
+--signature mouse.all.droplet.TabulaMuris
+
+# Step 2. Configure the samples.json file
+
+MAESTRO samples-init \
+--assay_type scrna \
+--platform 10x-genomics --data_typ fastq \
+--data_dir /projects/rpci/tliu4/working_projects/2025_Han_scRNA/Raw_data/01.RawData/P0WT
+
+# Step 3. Run snakemake pipeline, using wrapToSlurm
+# snakemake -np
+~/wrapToSlurm -c MAESTRO -p 16 -m 64000 -e snakemake -j 16
+
+
+
+
+
+
+
+
+
+
+

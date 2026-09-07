@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# Image for the tricycle cell-cycle cross-check (05_analyses/cellcycle_tricycle.R).
+#
+# WHY A SEPARATE IMAGE. tricycle is a second, independent opinion on cell-cycle state,
+# and the point of running it is that it does NOT share machinery with what we already
+# did. Seurat's CellCycleScoring compares each cell against control gene sets drawn
+# from the SAME dataset, so its scores are relative to whatever else is in the object;
+# tricycle projects cells onto a FIXED reference embedding learned elsewhere (mouse
+# neurosphere, Zheng et al. 2022) and returns a continuous position rather than a
+# forced G1/S/G2M call. Installing it beside Seurat keeps both available in one
+# session so the comparison is on identical cells, identical normalisation.
+#
+# FROM e2f-seurat-full because the comparison needs Seurat (to read the objects and to
+# re-run CellCycleScoring on the same cells) AND SingleCellExperiment (tricycle's
+# input). e2f-seurat-full already carries both, plus org.Mm.eg.db and AnnotationDbi
+# for the symbol -> Ensembl mapping tricycle's reference needs.
+#
+# VERSION CAVEAT inherited from the base: this image does not reproduce the package
+# versions the shipped objects were built with. That is fine here and worth stating
+# plainly -- this script RE-SCORES both methods on the same cells inside this image,
+# so the comparison is internally consistent even though neither number is guaranteed
+# to equal the one in the shipped object.
+FROM e2f-seurat-full:latest
+
+# tricycle pulls circular (its angular statistics) and scater (its plotting helpers).
+# BiocManager::install() only WARNS on a failed package, so assert afterwards -- the
+# same trap the other Dockerfiles in this repo call out.
+RUN R -q -e 'BiocManager::install(c("tricycle","scater"), ask = FALSE, update = FALSE, Ncpus = 4); \
+      miss <- setdiff(c("tricycle","scater"), rownames(installed.packages())); \
+      if (length(miss)) stop("Bioconductor install failed for: ", paste(miss, collapse = ", "))'
+
+# Prove the reference data actually loads, not just that the package is on disk:
+# tricycle ships its neuroRef projection matrix as package data, and a partial install
+# that imports but cannot project would otherwise surface only at analysis time.
+RUN R -q -e 'suppressMessages(library(tricycle)); \
+      data(neuroRef, package = "tricycle"); \
+      stopifnot(is.data.frame(neuroRef) || is.matrix(neuroRef), nrow(neuroRef) > 100); \
+      cat("tricycle", as.character(packageVersion("tricycle")), \
+          "| neuroRef rows:", nrow(neuroRef), "\n")'

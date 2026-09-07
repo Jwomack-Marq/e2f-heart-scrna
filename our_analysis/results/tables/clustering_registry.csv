@@ -1,0 +1,10 @@
+"variant_id","object","dims","resolution","cluster_col","umap_reduction","n_clusters","harmony_var","source_script","created","is_production"
+"cm_dims10_res0.1","cm",10,0.1,"dims10_res0.1","umap.dims10",5,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims10_res0.2","cm",10,0.2,"dims10_res0.2","umap.dims10",7,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims10_res0.3","cm",10,0.3,"dims10_res0.3","umap.dims10",10,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims30_res0.1","cm",30,0.1,"dims30_res0.1","umap.dims30",7,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims30_res0.2","cm",30,0.2,"dims30_res0.2","umap.dims30",11,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",TRUE
+"cm_dims30_res0.3","cm",30,0.3,"dims30_res0.3","umap.dims30",16,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims50_res0.1","cm",50,0.1,"dims50_res0.1","umap.dims50",7,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims50_res0.2","cm",50,0.2,"dims50_res0.2","umap.dims50",12,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE
+"cm_dims50_res0.3","cm",50,0.3,"dims50_res0.3","umap.dims50",16,"orig.ident","our_analysis/04_integrate_annotate/pcdims_sweep.R","2026-08-29",FALSE

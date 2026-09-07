@@ -1,0 +1,34 @@
+"metric","scope","value"
+"n_ref_genes_matched","all",497
+"n_cells","all",58917
+"n_theta_assigned","all",58917
+"pct_staged","all",46.1259
+"pct_abstained","all",53.8741
+"kappa","all",0.8669
+"pct_concordance","all",95.1338
+"r_group_fractions","groups n>=100",0.9663
+"pct_cycling_seurat","all",25.3119
+"pct_cycling_tricycle","all",22.7982
+"marker_R2_min","all",0.397
+"marker_R2_max","all",0.619
+"r_cycling_ngene_tricycle","Cardiomyocyte P0",0.2194
+"r_cycling_ngene_seurat","Cardiomyocyte P0",0.1866
+"r_cycling_ngene_tricycle","Cardiomyocyte P7",0.1412
+"r_cycling_ngene_seurat","Cardiomyocyte P7",0.0748
+"r_cycling_ngene_tricycle","Endothelial P0",0.4066
+"r_cycling_ngene_seurat","Endothelial P0",0.3055
+"r_cycling_ngene_tricycle","Endothelial P7",0.3325
+"r_cycling_ngene_seurat","Endothelial P7",0.2608
+"r_cycling_ngene_tricycle","Fibroblast P0",0.4116
+"r_cycling_ngene_seurat","Fibroblast P0",0.3911
+"r_cycling_ngene_tricycle","Fibroblast P7",0.3215
+"r_cycling_ngene_seurat","Fibroblast P7",0.2975
+"cm_pct_cycling_raw","P0",15.1333
+"cm_pct_cycling_raw","P7",22.0672
+"cm_pct_cycling_depthmatched","P0",18.4578
+"cm_pct_cycling_depthmatched","P7",20.7084
+"pct_nonCM_detecting_sarcomere","Tnnt2/Myh6/Actc1",99.4546
+"n_cells","RBC",577
+"pct_cycling_tricycle","RBC",18.3709
+"pct_cycling_seurat","RBC",19.9307
+"pct_cycling_tricycle","Cardiomyocyte",17.9343
