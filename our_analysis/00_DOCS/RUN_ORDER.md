@@ -93,6 +93,8 @@ Rscript process each). See each file's header for its exact inputs/outputs.
 | `cell_cycle.R` | Phase composition; cycling fraction by cell type |
 | `cellcycle_ridge.R` | Cell-cycle score ridge plots |
 | `cellcycle_tricycle.R` | Independent cross-check of the phase calls: projects cells onto a fixed external reference cycle for a continuous position θ, plus depth and ambient-RNA controls. Agrees with `CellCycleScoring` (κ 0.87); both are depth-floored. Runs in `e2f-tricycle` (`Dockerfile.tricycle`) |
+| `cellcycle_tricycle_depthmatched.R` | Re-asks KO-vs-WT after binomially thinning both genotypes to one depth distribution per cell type × timepoint, then re-projecting through tricycle. At P7 the WT is the deeper library, so the raw gap *understates*: P7 CM KO−WT goes +3.4 → +4.1 points. Runs in `e2f-tricycle` |
+| `cm_cycling_investigate.R` | Advisor follow-up: are the two "cycling" CM subclusters two identities or one proliferating population split by phase? Marker Jaccard + phase composition per subcluster. Answer: one population — CM4 is 24 % S / 76 % G2M with no G1 |
 | `cm_subtypes.R` | Cardiomyocyte subtype labeling/composition |
 | `cm_subcluster_analyze.R` | KO-vs-WT DE per CM subcluster (resolution sweep) |
 | `trajectory_slingshot.R` | Pseudotime / CM maturation ordering |

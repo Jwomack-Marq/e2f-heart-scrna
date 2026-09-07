@@ -2963,6 +2963,38 @@ tri_depth_gg <- function(dd, bs = 13, ttl = NULL, sub = NULL) {
     theme_bw(base_size = bs) + theme(panel.grid.minor = element_blank())
 }
 
+# The KO-WT gap before and after both genotypes are thinned to one depth distribution.
+# Worth its own figure because the naive expectation -- "the confound inflates the effect" --
+# is the wrong way round here: at P7 the WILD TYPE is the deeper library, and depth inflates
+# the cycling call, so the raw comparison flatters the genotype with the LOWER number. An
+# arrow pointing away from zero means the raw estimate was understating the difference.
+tri_matched_gg <- function(m, bs = 13, ttl = NULL, sub = NULL) {
+  if (is.null(m) || !nrow(m)) return(ggplot() + theme_void())
+  d <- m[!is.na(m$gap_raw) & !is.na(m$gap_matched), , drop = FALSE]
+  if (!nrow(d)) return(ggplot() + theme_void())
+  d$label <- paste0(gsub("_", " ", d$celltype), " \u00b7 ", d$timepoint)
+  d <- d[order(d$gap_matched), , drop = FALSE]
+  d$label <- factor(d$label, levels = d$label)
+  d$verdict <- ifelse(sign(d$gap_matched) != sign(d$gap_raw), "changes sign",
+               ifelse(abs(d$gap_matched) > abs(d$gap_raw) + 0.05, "wider at matched depth",
+               ifelse(abs(d$gap_matched) < abs(d$gap_raw) - 0.05, "smaller at matched depth",
+                      "unchanged")))
+  pal <- c("wider at matched depth" = "#c62828", "smaller at matched depth" = "#1565c0",
+           "changes sign" = "#fb8c00", "unchanged" = "#78909c")
+  ggplot(d, aes(y = label)) +
+    geom_vline(xintercept = 0, colour = "grey50", linetype = 2) +
+    geom_segment(aes(x = gap_raw, xend = gap_matched, yend = label, colour = verdict),
+                 linewidth = 0.8,
+                 arrow = grid::arrow(length = grid::unit(0.16, "cm"), type = "closed")) +
+    geom_point(aes(x = gap_raw), colour = "grey40", size = 2) +
+    geom_point(aes(x = gap_matched, colour = verdict), size = 3) +
+    scale_colour_manual(values = pal, name = NULL) +
+    labs(title = ttl, subtitle = sub, y = NULL,
+         x = "KO \u2212 WT cycling fraction (percentage points)") +
+    theme_bw(base_size = bs) +
+    theme(panel.grid.minor = element_blank(), legend.position = "bottom")
+}
+
 # ---- the "how this was made" bodies, as free functions so they are testable ----
 tri_wheel_method_note <- function(colour_by = "tricycle_stage") method_note(
   HTML(paste0(
@@ -2995,6 +3027,24 @@ tri_geno_method_note <- function() method_note(
     strong("n = 1 animal per genotype × timepoint, and genotype is confounded with sex. "),
     "Nothing here is a hypothesis test; it is a description of four libraries.")),
   code = c("tri_wheel_gg()", "tri_theta_density_gg()", "cellcycle_tricycle.R"))
+
+tri_matched_method_note <- function() method_note(
+  HTML(paste0(
+    "Grey dot = the raw KO\u2212WT gap; coloured dot = the same gap after both genotypes ",
+    "are thinned to a common sequencing depth. Within each cell type \u00d7 timepoint, every ",
+    "cell is binomially downsampled toward the pointwise minimum of the two genotypes' ",
+    "depth distributions, the thinned counts are re-normalised, and <b>tricycle is asked ",
+    "again from scratch</b> \u2014 the cycling call is itself depth-sensitive, so ",
+    "re-labelling cells inside depth bins would not have removed the bias.<br><br>",
+    "<b>The confound runs the unintuitive way here.</b> At P7 the wild type is the deeper ",
+    "library, and depth inflates the cycling call, so the raw comparison flatters the ",
+    "genotype with the <i>lower</i> number. An arrow pointing away from zero therefore ",
+    "means the raw estimate was <i>understating</i> the difference, not exaggerating it.<br><br>",
+    "The <i>depth AUC</i> column in the table is the check that the matching worked: 0.5 ",
+    "means genotype can no longer be told from depth at all.<br><br>",
+    strong("Depth matching removes depth. "), "It cannot remove sex, animal or library, and ",
+    "n = 1 per group \u2014 so this is a better-controlled description, not a test.")),
+  code = c("cellcycle_tricycle_depthmatched.R", "tri_matched_gg()", "ko_signature_ml.R"))
 
 tri_vs_method_note <- function() method_note(
   HTML(paste0(
@@ -3904,7 +3954,13 @@ ui <- page_navbar(
         plotOutput("tri_geno", height = "560px"),
         dl_fig_ui("tridens", "Download density figure"),
         plotOutput("tri_dens", height = "340px"),
-        uiOutput("tri_geno_method")),
+        uiOutput("tri_geno_method"),
+        tags$hr(),
+        uiOutput("tri_match_note"),
+        dl_fig_ui("trimatch", "Download depth-matched figure"),
+        plotOutput("tri_match", height = "380px"),
+        dl_data_ui("tri_matchtab"), DTOutput("tri_matchtab"),
+        uiOutput("tri_match_method")),
       nav_panel("Composition & fractions", value = "comp",
         uiOutput("tri_comp_note"),
         dl_fig_ui("tricomp"),
@@ -6333,6 +6389,52 @@ server <- function(input, output, session) {
   register_fig(output, "tridens", tri_dens_p, input, opts_prefix = "tri")
   output$tri_geno_method <- renderUI(tri_geno_method_note())
 
+  # The same KO-vs-WT question asked again with the depth difference removed. Kept beside
+  # the raw fractions rather than in the confounds panel, because a reader who sees the raw
+  # gap should see immediately what happens to it -- not find out two tabs later.
+  TRI_MATCH_MSG <- paste("The depth-matched comparison isn't in this data build —",
+                         "run our_analysis/05_analyses/cellcycle_tricycle_depthmatched.R,",
+                         "then build_tricycle.R, and redeploy.")
+  tri_match_df <- reactive({
+    tri_ok()
+    m <- TRI$matched
+    validate(need(!is.null(m) && nrow(m), TRI_MATCH_MSG))
+    ct <- input$tri_ct %||% "All"
+    if (!identical(ct, "All") && ct %in% m$celltype) m <- m[m$celltype == ct, , drop = FALSE]
+    m[order(m$celltype, m$timepoint), , drop = FALSE]
+  })
+  tri_match_p <- reactive({
+    tri_ok()
+    validate(need(!is.null(TRI$matched) && nrow(TRI$matched), TRI_MATCH_MSG))
+    tri_matched_gg(TRI$matched, bs = input$tri_basesize %||% 13,
+                   ttl = "Does the KO-vs-WT difference survive matching on sequencing depth?",
+                   sub = paste0("Grey = raw; coloured = after thinning both genotypes to one ",
+                                "depth distribution. Away from zero = raw was understating it."))
+  })
+  output$tri_match <- renderPlot(apply_fig_opts(tri_match_p(), "tri", input))
+  register_fig(output, "trimatch", tri_match_p, input, opts_prefix = "tri")
+  output$tri_matchtab <- renderDT(enr_dt(tri_match_df(), scroll = "300px"))
+  output$tri_match_method <- renderUI(tri_match_method_note())
+
+  output$tri_match_note <- renderUI({
+    tri_ok(); m <- TRI$matched
+    if (is.null(m) || !nrow(m))
+      return(div(class = "alert alert-secondary", style = "font-size:13px", TRI_MATCH_MSG))
+    cm <- m[m$celltype == "Cardiomyocyte" & m$timepoint == "P7", ]
+    f <- function(x, d = 1) if (length(x) != 1 || is.na(x)) "\u2014" else formatC(x, format = "f", digits = d)
+    div(class = "alert alert-secondary", style = "font-size:13px;margin-top:10px",
+      HTML(sprintf(paste0("<b>At matched depth.</b> The confound here runs the ",
+                          "counter-intuitive way: at P7 the <i>wild type</i> is the deeper ",
+                          "library (%s vs %s median UMIs), and deeper sequencing inflates the ",
+                          "cycling call \u2014 so the raw comparison flatters the genotype with ",
+                          "the lower number. Thinning both to one depth distribution takes the ",
+                          "P7 cardiomyocyte gap from %s to %s points (depth AUC %s \u2192 %s, ",
+                          "where 0.5 means genotype can no longer be told from depth)."),
+                   f(cm$median_numi_WT_raw, 0), f(cm$median_numi_KO_raw, 0),
+                   f(cm$gap_raw), f(cm$gap_matched),
+                   f(cm$auc_depth_raw, 3), f(cm$auc_depth_matched, 3))))
+  })
+
   # ---- Composition & fractions ----
   tri_comp_p <- reactive({
     d <- tri_ct_full()
@@ -6579,6 +6681,9 @@ server <- function(input, output, session) {
     list(id = "tri_tab",
          base = function() paste0("tricycle_cycling_", input$tri_ct %||% "all"),
          df = function() tri_tab_df()),
+    list(id = "tri_matchtab",
+         base = function() paste0("tricycle_depthmatched_", input$tri_ct %||% "all"),
+         df = function() tri_match_df()),
     list(id = "tri_depthtab",
          base = function() paste0("tricycle_depth_quartiles_", input$tri_ct %||% "all"),
          df = function() tri_depth_tab()),

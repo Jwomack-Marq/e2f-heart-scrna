@@ -98,6 +98,38 @@ transcribe. The same ambient pool carries proliferation transcripts into every b
 the "RBC" population scores 18.4 % cycling by tricycle against cardiomyocytes' 17.9 % — at or
 above the number the whole question is about.
 
+### Depth is hiding the knockout effect, not creating it
+
+The natural worry is that (2) manufactures (1). It does not — it runs the other way, which is
+worth stating plainly because the intuition is so strongly the reverse.
+
+At P7 the **wild type is the deeper library**: median 20,022 UMIs against the knockout's
+12,412, a depth AUC of 0.29. Deeper sequencing inflates the cycling call. So the raw
+comparison is flattering the genotype with the *lower* number, and the raw gap is a
+conservative estimate rather than an inflated one.
+
+`cellcycle_tricycle_depthmatched.R` measures this rather than arguing it. Within each cell
+type × timepoint, every cell is binomially downsampled toward the pointwise minimum of the
+two genotypes' depth distributions — the same quantile-floor thinning `ko_signature_ml.R`
+uses, so the two analyses cannot disagree about what "depth-matched" means — the thinned
+counts are re-normalised, and **tricycle is asked again from scratch**. Re-labelling cells
+inside depth bins would not do: the cycling call is itself computed from depth-sensitive
+counts, so a cell carries its inflated label into its bin.
+
+![Grey dot = the raw KO−WT gap; coloured dot = the same gap after both genotypes are thinned to one depth distribution. Away from zero means the raw estimate was understating the difference.](assets/cc-matched.svg){#fig-cc-matched}
+
+Matching drives the depth AUC to 0.500 in every stratum, so genotype can no longer be told
+from depth at all. The gaps then move slightly *away* from zero almost everywhere:
+
+{{< include _generated/tbl-cc-matched.md >}}
+
+P7 cardiomyocytes go from **+3.4 to +4.1** points. The effect is small — the honest headline
+is "the difference survives depth matching and is marginally larger", not "depth was masking
+a big effect". P7 fibroblasts carry a much larger gap than cardiomyocytes do (+14.5 → +15.4),
+which is worth a look in its own right.
+
+Depth matching removes depth. It cannot remove sex, animal or library, and n = 1 per group.
+
 > **The honest reading.** It is not "Seurat was wrong and tricycle is right". It is that the
 > *absolute* cardiomyocyte cycling fraction is not resolvable above the ambient/depth floor in
 > this dataset, and neither method can fix that, because the problem is upstream of both.

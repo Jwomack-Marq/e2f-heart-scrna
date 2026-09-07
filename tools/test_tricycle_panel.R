@@ -113,6 +113,33 @@ mk("confusion matrix",      E$tri_confusion_gg(TRI$confusion))
 mk("marker peaks",          E$tri_peaks_gg(TRI$marker_peaks))
 mk("depth quartiles",       E$tri_depth_gg(E$tri_depth_df(c("Cardiomyocyte","Endothelial"))))
 
+cat("\n== the depth-matched KO-vs-WT comparison ==\n")
+M <- TRI$matched
+if (is.null(M)) {
+  cat("  [SKIP] no depth-matched table -- run cellcycle_tricycle_depthmatched.R\n")
+} else {
+  # The matching's own success criterion. Without this the raw-vs-matched arrows are just
+  # two numbers; 0.5 is what says genotype can no longer be told from depth at all.
+  cat(sprintf("   depth AUC after matching: %s\n",
+              paste(sprintf("%.3f", M$auc_depth_matched), collapse = ", ")))
+  ok("matching drove depth AUC to 0.5 in every stratum",
+     all(abs(M$auc_depth_matched - 0.5) < 0.01))
+  ok("and it was NOT already 0.5 before (so the match did work)",
+     any(abs(M$auc_depth_raw - 0.5) > 0.05))
+  cm7 <- M[M$celltype == "Cardiomyocyte" & M$timepoint == "P7", ]
+  cat(sprintf("   P7 cardiomyocytes: KO-WT %+.1f raw -> %+.1f matched (WT was the deeper library: %.0f vs %.0f UMIs)\n",
+              cm7$gap_raw, cm7$gap_matched, cm7$median_numi_WT_raw, cm7$median_numi_KO_raw))
+  # The finding worth pinning: at P7 the WT is deeper, depth inflates the cycling call, so
+  # the raw gap understates rather than exaggerates. If a rebuild ever flips this, the
+  # panel's prose ("raw was understating it") becomes a lie.
+  ok("at P7 the WT cardiomyocyte library is the deeper one",
+     cm7$median_numi_WT_raw > cm7$median_numi_KO_raw)
+  ok("so the P7 KO-WT gap does not shrink at matched depth",
+     cm7$gap_matched >= cm7$gap_raw - 0.05)
+  ok("gap stays positive (KO cycles more at P7)", cm7$gap_matched > 0)
+  mk("depth-matched gap figure", E$tri_matched_gg(M))
+}
+
 cat("\n== the depth confound is visible, which is why the panel exists ==\n")
 dd <- E$tri_depth_df("Endothelial")
 p0 <- dd[dd$timepoint == "P0", ]

@@ -14,6 +14,9 @@
 #
 #   Reads  results/tables/cellcycle_tricycle_{percell,vs_seurat_by_celltype,confusion,
 #                                             marker_peaks,depthmatched_cm,controls}.csv
+#          results/tables/cellcycle_tricycle_matched_genotype.csv  (optional; from
+#            cellcycle_tricycle_depthmatched.R -- the KO-vs-WT gap re-measured after
+#            binomially thinning both genotypes to one depth distribution)
 #   Writes app$tricycle           (all 58,917 cells + the summary tables)
 #          app$meta$tricycle_*    (3 columns, joined onto the ~30k downsample)
 #
@@ -43,6 +46,8 @@ confus   <- rd("confusion")
 peaks    <- rd("marker_peaks")
 depthm   <- rd("depthmatched_cm")
 controls <- rd("controls")
+# Optional: an un-run depth-matching step should leave the rest of the tab working.
+matched_gt <- rd("matched_genotype", required = FALSE)   # NB: `matched` is taken below
 
 # The embedding is the reason this build exists; without it the app can only draw cells on a
 # ring of constant radius, which asserts a confidence the measurement does not have.
@@ -84,6 +89,7 @@ app$tricycle <- list(
   marker_peaks = peaks,
   depthmatched = depthm,
   controls     = controls,
+  matched      = matched_gt,
   stage_levels = STAGE_LEVELS,
   not_staged   = NOT_STAGED,
   built        = as.character(Sys.time()))
@@ -124,6 +130,11 @@ if (!is.null(controls)) {
   print(controls[controls$metric %in% c("kappa","pct_concordance","r_group_fractions",
                                         "n_ref_genes_matched","pct_abstained"), ], row.names = FALSE)
 }
+if (!is.null(matched_gt)) {
+  cat("\n== KO-WT gap, raw vs at matched depth ==\n")
+  print(matched_gt[, c("celltype","timepoint","gap_raw","gap_matched",
+                       "auc_depth_raw","auc_depth_matched")], row.names = FALSE)
+} else cat("\n(no depth-matched table -- run cellcycle_tricycle_depthmatched.R for it)\n")
 
 cat("\nSaving app_data.rds (gzip) ...\n")
 saveRDS(app, "app_data.rds", compress = "gzip")

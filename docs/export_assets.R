@@ -956,6 +956,20 @@ if (is.null(TRI)) cat("  (no app$tricycle in this bundle -- run build_tricycle.R
              ttl = "Cycling fraction against sequencing depth",
              sub = "Nothing biological makes a cell likelier to be in S phase because it was sequenced deeper."),
            8.5, 3.8))
+  if (!is.null(TRI$matched)) {
+    step("cc-matched", "12", "KO-vs-WT gap, raw vs at matched sequencing depth",
+         fig("cc-matched", tri_matched_gg(TRI$matched,
+               ttl = "Does the KO-vs-WT difference survive matching on sequencing depth?",
+               sub = paste("Grey = raw; coloured = after thinning both genotypes to one depth",
+                           "distribution. Away from zero = raw was understating it.")), 8.5, 5))
+    step("tbl-cc-matched", "12", "the depth-matched KO-vs-WT table",
+         frag("tbl-cc-matched", TRI$matched[, c("celltype","timepoint","n_KO","n_WT",
+                "median_numi_KO_raw","median_numi_WT_raw","auc_depth_raw","auc_depth_matched",
+                "gap_raw","gap_matched")],
+              caption = paste("KO minus WT cycling fraction, before and after both genotypes are",
+                              "thinned to a common depth. `auc_depth_matched` at 0.5 is the check",
+                              "that genotype can no longer be told from depth.")))
+  }
   step("tbl-cc-bycelltype", "12", "both methods' cycling fractions, every group",
        frag("tbl-cc-bycelltype", TRI$by_celltype,
             caption = paste("Cycling fraction by both methods for every cell type x timepoint x",
