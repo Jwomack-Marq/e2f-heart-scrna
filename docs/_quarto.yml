@@ -40,6 +40,7 @@ book:
     - part: "Supporting analyses"
       chapters:
         - 10-signalling.qmd
+        - 12-cellcycle.qmd
         - 11-confounds-repro.qmd
 
 format:

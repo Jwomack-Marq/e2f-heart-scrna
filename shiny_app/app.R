@@ -92,7 +92,7 @@ genes_for_set <- function(set) if (is.null(set) || set == "__all__" || !set %in%
 
 has <- function(col, df = meta) col %in% names(df)
 CAT_COLS  <- Filter(has, c("celltype","genotype","timepoint","Phase","cycling","cm_subtype",
-                           "cm_subcluster","seurat_clusters"))
+                           "cm_subcluster","seurat_clusters","tricycle_stage","tricycle_cycling"))
 # per-cell module scores added by build_signature_scores.R (headline scores only;
 # absent columns drop out so an un-rebuilt bundle still loads).
 SCORE_COLS <- Filter(has, c("sig_prolif","sig_cytokinesis","sig_ccexit","sig_ploidy",
@@ -108,6 +108,8 @@ nice <- c(gene = "Gene expression", celltype = "Cell type", genotype = "Genotype
           sig_mat_immature_nocc = "Immature-CM program (cycle-free)",
           sig_prolif = "Proliferation score", sig_cytokinesis = "Cytokinesis score",
           sig_ccexit = "Cell-cycle exit score", sig_ploidy = "Polyploidization proxy",
+          tricycle_stage = "Cell-cycle stage (tricycle)", tricycle_cycling = "Cycling (tricycle)",
+          tricycle_theta = "Cell-cycle position θ (tricycle)",
           sig_maturation = "CM maturation score", sig_metabolic = "Metabolic maturation (FAO−glyc)",
           sig_glycolysis = "Glycolysis score", sig_faox = "Fatty-acid oxidation score",
           sig_mat_mature = "Mature-CM program", sig_mat_immature = "Immature-CM program")
@@ -1241,6 +1243,48 @@ clu_choices <- function() {
     sprintf("%s — %d subclusters%s", pc_relabel(v$label), v$n_clusters,
             if (isTRUE(v$is_production)) "  (production)"
             else if (!isTRUE(v$has_downstream)) "  (labels only)" else "") }, ""))
+}
+
+# ---- tricycle: the cell cycle as a POSITION rather than a label ------------
+# Seurat's Phase is an argmax over three scores, so it can only ever answer "G1, S or G2M"
+# and must answer even when the evidence is thin. tricycle projects each cell onto a fixed
+# reference cycle learned elsewhere and returns an angle -- which is what lets the app draw
+# an actual cycle, and lets a cell sit *between* phases instead of being rounded into one.
+TRI     <- app$tricycle
+TRI_MSG <- paste("The tricycle cell-cycle projection isn't in this data build —",
+                 "run our_analysis/05_analyses/cellcycle_tricycle.R,",
+                 "then build_tricycle.R, and redeploy.")
+tri_ok  <- function() validate(need(!is.null(TRI), TRI_MSG))
+
+# θ is CIRCULAR: 0 and 2π are the same position on the cycle. That is why it is absent from
+# CONT_COLS -- umap_cont()'s sequential ramp would paint two identical cell states as
+# opposite extremes. Everything below that colours by θ uses this closed loop instead, whose
+# first and last colours are deliberately the same so the seam at G1/G0 is invisible.
+THETA_PAL <- c("#4a3f8f", "#1565c0", "#00897b", "#7cb342", "#fdd835",
+               "#fb8c00", "#c62828", "#8e24aa", "#4a3f8f")
+scale_theta_c <- function(name = "θ") ggplot2::scale_colour_gradientn(
+  colours = THETA_PAL, limits = c(0, 2 * pi), name = name,
+  breaks = c(0, pi / 2, pi, 3 * pi / 2, 2 * pi),
+  labels = c("0\nG1/G0", "π/2\nS", "π\nG2", "3π/2\nM", "2π"))
+
+# The four canonical anchors. tricycle's reference puts G1/G0 at 0 and carries S -> G2 -> M
+# round to it; the marker-peak table is what checks that holds in OUR cells, and the wheel
+# draws both so a reader can see the correspondence rather than take it on faith.
+TRI_ANCHORS <- data.frame(
+  theta = c(0, pi / 2, pi, 3 * pi / 2),
+  label = c("G1/G0", "S", "G2", "M"), stringsAsFactors = FALSE)
+
+# Stage colours: the five real stages run around the cycle, and the abstentions are grey --
+# a stage the method declined to call must not look like a stage it called.
+TRI_STAGE_PAL <- c("G1.S" = "#1565c0", "S" = "#00897b", "G2" = "#7cb342",
+                   "G2.M" = "#fb8c00", "M.G1" = "#8e24aa", "(not staged)" = "#cfcfcf")
+
+# One number out of the controls table, by name, or NA. The app quotes kappa/concordance/the
+# ambient floor in prose; reading them from the run means the prose cannot drift from it.
+tri_ctrl <- function(metric, scope = "all") {
+  if (is.null(TRI) || is.null(TRI$controls)) return(NA_real_)
+  r <- TRI$controls[TRI$controls$metric == metric & TRI$controls$scope == scope, ]
+  if (!nrow(r)) NA_real_ else r$value[1]
 }
 
 FGE_MSG <- paste("Four-group enrichment isn't in this data build —",
@@ -2570,6 +2614,418 @@ gm_gene_note <- function(gene, panel = "avg") {
                   " scoring set — its position on that axis is partly circular."))))
 }
 
+# ---- tricycle: the cell cycle drawn as a cycle ------------------------------
+# Free functions, above the UI marker, because docs/export_assets.R sources this half of the
+# file and calls these directly to build the book's figures. A builder written as a server
+# reactive would have to be mirrored by hand there instead.
+
+# One slice of the 58,917-cell table. `maxn` thins for on-screen responsiveness ONLY; every
+# number this tab reports is computed on the full slice, never on the thinned one, so a
+# reader cannot be shown a percentage that depends on how many points fit in the panel.
+tri_slice <- function(celltype = "All", timepoint = "All", genotype = "All",
+                      maxn = 0L, seed = 42L) {
+  if (is.null(TRI)) return(NULL)
+  d <- TRI$percell
+  if (!identical(celltype, "All"))  d <- d[as.character(d$celltype)  == celltype,  , drop = FALSE]
+  if (!identical(timepoint, "All")) d <- d[as.character(d$timepoint) == timepoint, , drop = FALSE]
+  if (!identical(genotype, "All"))  d <- d[as.character(d$genotype)  == genotype,  , drop = FALSE]
+  if (maxn > 0L && nrow(d) > maxn) {
+    set.seed(seed); d <- d[sort(sample(nrow(d), maxn)), , drop = FALSE]
+  }
+  d
+}
+
+# The colour layer for whichever variable the wheel is painted by. Split out because the
+# wheel and the genotype facets must agree on it exactly -- two panels of the same cells
+# using two different colour languages is how a reader concludes they show different things.
+tri_colour_layer <- function(colour_by, pal_choice = "Default", levs = NULL) {
+  if (identical(colour_by, "tricycle_theta")) return(scale_theta_c())
+  if (identical(colour_by, "tricycle_stage"))
+    return(scale_colour_manual(values = TRI_STAGE_PAL, drop = FALSE, name = "stage"))
+  if (identical(colour_by, "tricycle_cycling"))
+    return(scale_colour_manual(values = c("FALSE" = "#cfcfcf", "TRUE" = "#c62828"),
+                               name = "cycling"))
+  if (identical(colour_by, "genotype"))
+    return(scale_colour_manual(values = c(WT = "#1565c0", KO = "#c62828"), name = "genotype"))
+  scale_colour_manual(values = disc_pal(levs %||% character(0), pal_choice),
+                      name = labof(colour_by))
+}
+
+# Fill counterpart of tri_colour_layer. The rose stacks, so it can only take a CATEGORICAL
+# variable -- continuous θ is already the angle there and colouring by it would be circular
+# in both senses.
+tri_fill_layer <- function(fill_by, pal_choice = "Default", levs = NULL) {
+  if (identical(fill_by, "tricycle_stage"))
+    return(scale_fill_manual(values = TRI_STAGE_PAL, drop = FALSE, name = "stage"))
+  if (identical(fill_by, "tricycle_cycling"))
+    return(scale_fill_manual(values = c("FALSE" = "#cfcfcf", "TRUE" = "#c62828"),
+                             name = "cycling"))
+  if (identical(fill_by, "genotype"))
+    return(scale_fill_manual(values = c(WT = "#1565c0", KO = "#c62828"), name = "genotype"))
+  if (identical(fill_by, "timepoint"))
+    return(scale_fill_manual(values = c(P0 = "#90caf9", P7 = "#1565c0"), name = "timepoint"))
+  scale_fill_manual(values = disc_pal(levs %||% character(0), pal_choice), name = labof(fill_by))
+}
+
+# THE WHEEL. x/y are tricycle's own 2D cycle space, not a polar re-plot of θ, and that is the
+# entire point: θ is atan2(y, x) and throws the RADIUS away. Distance from the origin is how
+# much cycle signal a cell actually has, so a cell with none lands in the middle instead of
+# being placed confidently on the rim. A ring with a hollow centre means the population is
+# cycling; a filled blob means it is not, and no threshold had to be chosen to say so.
+tri_wheel_gg <- function(d, colour_by = "tricycle_stage", psize = 0.45, bs = 13,
+                         show_anchors = TRUE, show_peaks = FALSE, pal_choice = "Default",
+                         facet = NULL, ttl = NULL, sub = NULL, rscale = "sqrt") {
+  if (is.null(d) || !nrow(d)) return(ggplot() + theme_void())
+  rr <- sqrt(d$tricycle_pc1^2 + d$tricycle_pc2^2)
+
+  # The radius is heavily right-skewed in this dataset -- half the cells sit inside r = 1.4
+  # while the cycling arm reaches past 10 -- because most cardiomyocytes here have little
+  # cycle signal. Plotted raw, the informative core collapses into a few pixels in the middle
+  # of a mostly empty frame. A square-root radius spreads that core out while leaving the
+  # ANGLE, which is the actual cell-cycle position, completely untouched and keeping the
+  # radial ORDER intact. It is a display choice, so it is named on the axis and switchable.
+  sq <- identical(rscale, "sqrt")
+  th <- d$tricycle_theta
+  rp <- if (sq) sqrt(rr) else rr
+  d$.wx <- rp * cos(th); d$.wy <- rp * sin(th)
+  rmax <- as.numeric(stats::quantile(rp, 0.995, na.rm = TRUE))
+  if (!is.finite(rmax) || rmax <= 0) rmax <- 1
+  axlab <- if (sq) "cycle space (\u221aradius \u00d7 angle \u03b8)" else "cycle space PC"
+
+  # Abstentions first so the staged cells draw ON TOP of them: the grey is context, and a
+  # painter's-algorithm accident that buries the answer under it would invert the message.
+  if (identical(colour_by, "tricycle_stage"))
+    d <- d[order(d$tricycle_stage != TRI$not_staged), , drop = FALSE]
+
+  p <- ggplot(d, aes(x = .wx, y = .wy))
+
+  if (show_anchors) {
+    a <- TRI_ANCHORS
+    a$x0 <- 0; a$y0 <- 0
+    a$x1 <- rmax * 1.04 * cos(a$theta); a$y1 <- rmax * 1.04 * sin(a$theta)
+    a$xl <- rmax * 1.22 * cos(a$theta); a$yl <- rmax * 1.22 * sin(a$theta)
+    p <- p +
+      geom_segment(data = a, aes(x = x0, y = y0, xend = x1, yend = y1),
+                   inherit.aes = FALSE, colour = "grey78", linewidth = 0.3, linetype = 2) +
+      geom_text(data = a, aes(x = xl, y = yl, label = label), inherit.aes = FALSE,
+                size = bs * 0.30, fontface = "bold", colour = "#37474f")
+  }
+
+  p <- p + geom_point(aes(colour = .data[[colour_by]]), size = psize, alpha = 0.55,
+                      stroke = 0)
+
+  # The measured marker peaks, drawn beside the canonical anchors rather than instead of
+  # them, so the reader can SEE that S genes peak before G2/M genes in these cells instead
+  # of being told the arc is trustworthy.
+  if (show_peaks && !is.null(TRI$marker_peaks) && nrow(TRI$marker_peaks)) {
+    mk <- TRI$marker_peaks
+    mk$theta <- mk$peak_theta_pi * pi
+    mk$x  <- rmax * 1.01 * cos(mk$theta); mk$y  <- rmax * 1.01 * sin(mk$theta)
+    mk$xe <- rmax * 1.08 * cos(mk$theta); mk$ye <- rmax * 1.08 * sin(mk$theta)
+    # Labels sit radially outside their tick and are anchored by the angle they sit at, so
+    # a gene at 3 o'clock reads leftwards and one at 9 o'clock rightwards. That is what a
+    # repel library would spend a dependency achieving on a layout this predictable.
+    mk$hj <- 0.5 - 0.5 * cos(mk$theta)
+    mk$vj <- 0.5 - 0.5 * sin(mk$theta)
+    p <- p +
+      geom_segment(data = mk, aes(x = x, y = y, xend = xe, yend = ye), inherit.aes = FALSE,
+                   colour = "#455a64", linewidth = 0.45) +
+      geom_text(data = mk, aes(x = xe, y = ye, label = gene, hjust = hj, vjust = vj),
+                inherit.aes = FALSE, size = bs * 0.23, colour = "#455a64")
+  }
+
+  p <- p + tri_colour_layer(colour_by, pal_choice, levels(factor(d[[colour_by]]))) +
+    coord_fixed(xlim = c(-rmax, rmax) * 1.3, ylim = c(-rmax, rmax) * 1.3) +
+    labs(title = ttl, subtitle = sub, x = axlab, y = NULL) +
+    theme_minimal(base_size = bs) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_line(colour = "grey94"),
+          axis.text = element_blank())
+  if (!is.null(facet)) p <- p + facet_grid(rows = vars(.data[[facet[1]]]),
+                                           cols = vars(.data[[facet[2]]]))
+  if (!identical(colour_by, "tricycle_theta"))
+    p <- p + guides(colour = guide_legend(override.aes = list(size = 3, alpha = 1)))
+  p
+}
+
+# THE CELL CYCLE DRAWN THE WAY IT IS TAUGHT: a clock face, G1/G0 at the top, running
+# clockwise through S, G2 and M, with each wedge as tall as the number of cells at that
+# position and coloured by the stage they were called. The wheel above is the measurement in
+# its own coordinates; this is the same θ arranged so that anyone who has seen a cell-cycle
+# diagram can read it without being told how. Both are shown because neither alone does the
+# job -- this one cannot express "no cycle signal", and the wheel expresses little else.
+tri_rose_gg <- function(d, nbins = 48L, bs = 13, show_abstain = TRUE, facet = NULL,
+                        fill_by = "tricycle_stage", pal_choice = "Default",
+                        ttl = NULL, sub = NULL) {
+  if (is.null(d) || !nrow(d)) return(ggplot() + theme_void())
+  # A stacked wedge needs a categorical fill; θ is the angle already.
+  if (!fill_by %in% names(d) || is.numeric(d[[fill_by]])) fill_by <- "tricycle_stage"
+  if (!show_abstain && identical(fill_by, "tricycle_stage"))
+    d <- d[d$tricycle_stage != TRI$not_staged, , drop = FALSE]
+  if (!nrow(d)) return(ggplot() + theme_void())
+
+  # θ is stored rounded, so a handful of cells land a hair past 2π and a hard limit would
+  # silently DROP them. They are at position zero -- wrap rather than discard.
+  th <- d$tricycle_theta %% (2 * pi)
+  br  <- seq(0, 2 * pi, length.out = nbins + 1L)
+  ctr <- (br[-1] + br[-length(br)]) / 2
+  d$.bin <- cut(th, breaks = br, include.lowest = TRUE)
+
+  # Wedge length is the SHARE of cells in the panel, not the count. The four groups differ in
+  # size by nearly 2x (P7 KO 10,597 cells vs P7 WT 6,537), so on raw counts the knockout's
+  # wedges would be longer than the wild type's before any biology entered -- which is
+  # precisely the comparison this figure exists to support, and precisely how it would
+  # mislead. Shares make the panels answer "what fraction of these cells are here".
+  # unique(): when the fill variable is ALSO a facet variable -- which is exactly the
+  # WT-vs-KO view this figure exists for -- naming it twice makes table() build a doubled
+  # cross-tab, and the per-panel denominator then comes out half of the truth, so every
+  # share is 2x. The bars still render and still look plausible, which is what makes it
+  # worth a line of comment.
+  keys <- unique(c(facet, ".bin", fill_by))
+  tb <- as.data.frame(table(d[keys]), stringsAsFactors = FALSE)
+  names(tb)[names(tb) == "Freq"] <- "n"
+  if (length(facet)) {
+    grp <- interaction(tb[facet], drop = FALSE)
+    tot <- tapply(tb$n, grp, sum)
+    den <- as.numeric(tot[as.character(grp)])
+  } else den <- sum(tb$n)
+  tb$share <- ifelse(den > 0, tb$n / den, 0)
+  tb$theta <- ctr[match(tb$.bin, levels(d$.bin))]
+  tb[[fill_by]] <- factor(tb[[fill_by]], levels = levels(factor(d[[fill_by]])))
+
+  p <- ggplot(tb, aes(x = theta, y = share, fill = .data[[fill_by]])) +
+    geom_col(width = (2 * pi) / nbins, colour = NA) +
+    coord_polar(theta = "x", start = 0, direction = 1) +
+    scale_x_continuous(limits = c(0, 2 * pi),
+                       breaks = c(0, pi / 2, pi, 3 * pi / 2),
+                       labels = c("G1 / G0", "S", "G2", "M")) +
+    # Square-root radius. ~70 % of cardiomyocytes sit in the G1/G0 pile, and on a linear
+    # axis that one spike is the entire figure -- every other phase renders as a stub too
+    # short to carry a colour. The sqrt keeps G1/G0 visibly dominant (which is the true
+    # headline) while making the rest of the cycle readable at all.
+    scale_y_sqrt() +
+    tri_fill_layer(fill_by, pal_choice, levels(factor(d[[fill_by]]))) +
+    labs(title = ttl, subtitle = sub, x = NULL, y = NULL) +
+    theme_minimal(base_size = bs) +
+    theme(axis.text.y = element_blank(), panel.grid.minor = element_blank(),
+          axis.text.x = element_text(face = "bold", size = bs * 0.95))
+  if (!is.null(facet)) p <- p + facet_grid(rows = vars(.data[[facet[1]]]),
+                                           cols = vars(.data[[facet[2]]]))
+  # The binned frame rides along so a test can assert "every panel sums to one" against the
+  # numbers themselves; read off the built plot they come back through the sqrt scale.
+  attr(p, "rose_data") <- tb
+  p
+}
+
+# θ as a density, which is the threshold-free way to ask "did this population leave the
+# cycle": cells that have exited pile up at 0/2π and the arc in between empties out. Drawn
+# with genotype as the contrast because that is the comparison the tab exists for.
+tri_theta_density_gg <- function(d, colour_by = "genotype", facet = "timepoint", bs = 13,
+                                 ttl = NULL, sub = NULL) {
+  if (is.null(d) || !nrow(d)) return(ggplot() + theme_void())
+  d$tricycle_theta <- d$tricycle_theta %% (2 * pi)   # see tri_rose_gg: wrap, do not drop
+  p <- ggplot(d, aes(x = tricycle_theta, colour = .data[[colour_by]])) +
+    annotate("rect", xmin = pi / 2, xmax = 3 * pi / 2, ymin = -Inf, ymax = Inf,
+             fill = "#c62828", alpha = 0.05) +
+    geom_density(linewidth = 0.9) +
+    scale_x_continuous(limits = c(0, 2 * pi),
+                       breaks = c(0, pi / 2, pi, 3 * pi / 2, 2 * pi),
+                       labels = c("0\nG1/G0", "π/2\nS", "π\nG2", "3π/2\nM", "2π")) +
+    labs(title = ttl, subtitle = sub, x = "cell-cycle position θ", y = "density",
+         colour = labof(colour_by)) +
+    theme_bw(base_size = bs) + theme(panel.grid.minor = element_blank())
+  if (identical(colour_by, "genotype"))
+    p <- p + scale_colour_manual(values = c(WT = "#1565c0", KO = "#c62828"))
+  if (!is.null(facet) && facet %in% names(d)) p <- p + facet_wrap(vars(.data[[facet]]))
+  p
+}
+
+# Stage composition. The abstentions are a BAR, not a gap: 54 % of cells are cells the method
+# declined to stage, and a plot that silently renormalised them away would be claiming a
+# confidence the run explicitly refused to express.
+tri_comp_gg <- function(d, xvar = "genotype", facet = "timepoint", bs = 13,
+                        show_abstain = TRUE, ttl = NULL, sub = NULL) {
+  if (is.null(d) || !nrow(d)) return(ggplot() + theme_void())
+  if (!show_abstain) d <- d[d$tricycle_stage != TRI$not_staged, , drop = FALSE]
+  if (!nrow(d)) return(ggplot() + theme_void())
+  ggplot(d, aes(x = .data[[xvar]], fill = tricycle_stage)) +
+    geom_bar(position = "fill", width = 0.72) +
+    scale_fill_manual(values = TRI_STAGE_PAL, drop = FALSE, name = "stage") +
+    scale_y_continuous(labels = function(x) paste0(100 * x, "%")) +
+    facet_wrap(vars(.data[[facet]])) +
+    labs(title = ttl, subtitle = sub, x = NULL, y = "share of cells") +
+    theme_minimal(base_size = bs) +
+    theme(panel.grid.major.x = element_blank())
+}
+
+# The method comparison. Points on the dashed line are groups the two methods agree about;
+# the question this answers is whether the app's Phase-based numbers elsewhere are an
+# artifact of Seurat's scoring, and the answer visible here is that they are not.
+tri_vs_gg <- function(tab, min_n = 100, bs = 13, label = TRUE, ttl = NULL, sub = NULL) {
+  if (is.null(tab) || !nrow(tab)) return(ggplot() + theme_void())
+  d <- tab[tab$n >= min_n, , drop = FALSE]
+  if (!nrow(d)) return(ggplot() + theme_void())
+  p <- ggplot(d, aes(pct_cycling_seurat, pct_cycling_tricycle)) +
+    geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey55") +
+    geom_point(aes(size = n, colour = timepoint), alpha = 0.85) +
+    scale_colour_manual(values = c(P0 = "#90caf9", P7 = "#1565c0")) +
+    labs(title = ttl, subtitle = sub, x = "% cycling — Seurat (S/G2M)",
+         y = "% cycling — tricycle (θ arc)", size = "cells") +
+    theme_bw(base_size = bs)
+  # check_overlap drops a label rather than letting two collide illegibly; the point it
+  # belongs to stays on the plot either way, and the table below carries every row.
+  if (label) p <- p + geom_text(aes(label = celltype), size = bs * 0.25, colour = "#37474f",
+                                hjust = -0.15, vjust = -0.4, check_overlap = TRUE)
+  p
+}
+
+# Seurat phase against tricycle stage, cell by cell. The "(not staged)" column is the one
+# worth reading: those are cells Seurat gave a confident phase to and tricycle would not.
+tri_confusion_gg <- function(cm, bs = 13, ttl = NULL, sub = NULL) {
+  if (is.null(cm) || !nrow(cm)) return(ggplot() + theme_void())
+  m <- cm
+  rn <- if (!is.null(rownames(m)) && !identical(rownames(m), as.character(seq_len(nrow(m)))))
+    rownames(m) else as.character(m[[1]])
+  num <- vapply(m, is.numeric, TRUE)
+  m <- m[, num, drop = FALSE]
+  long <- do.call(rbind, lapply(seq_len(nrow(m)), function(i) data.frame(
+    seurat = rn[i], tricycle = names(m), n = as.numeric(m[i, ]), stringsAsFactors = FALSE)))
+  long$seurat <- factor(long$seurat, levels = c("G1", "S", "G2M"))
+  lev <- intersect(c("G1.S", "S", "G2", "G2.M", "M.G1", "(not staged)"), unique(long$tricycle))
+  long$tricycle <- factor(long$tricycle, levels = lev)
+  long$frac <- ave(long$n, long$seurat, FUN = function(x) x / sum(x))
+  ggplot(long, aes(tricycle, seurat, fill = frac)) +
+    geom_tile(colour = "white", linewidth = 1) +
+    geom_text(aes(label = format(n, big.mark = ",")), size = bs * 0.24, colour = "#263238") +
+    scale_fill_gradient(low = "white", high = "#1565c0", labels = scales::percent,
+                        name = "row share") +
+    labs(title = ttl, subtitle = sub, x = "tricycle stage", y = "Seurat phase") +
+    theme_minimal(base_size = bs) + theme(panel.grid = element_blank())
+}
+
+# CONTROL 1, as a picture: where each canonical marker peaks around θ. S-phase genes peaking
+# before G2/M genes is what earns the right to call the 0.5π-1.5π arc "cycling" at all.
+tri_peaks_gg <- function(pk, bs = 13, ttl = NULL, sub = NULL) {
+  if (is.null(pk) || !nrow(pk)) return(ggplot() + theme_void())
+  d <- pk[order(pk$peak_theta_pi), , drop = FALSE]
+  d$gene <- factor(d$gene, levels = d$gene)
+  d$role <- ifelse(d$gene %in% c("Mcm2", "Pcna", "Rrm2"), "S phase", "G2 / M")
+  ggplot(d, aes(peak_theta_pi, gene, colour = role)) +
+    geom_segment(aes(x = 0, xend = peak_theta_pi, yend = gene), linewidth = 0.5) +
+    geom_point(aes(size = R2)) +
+    scale_colour_manual(values = c("S phase" = "#00897b", "G2 / M" = "#fb8c00")) +
+    scale_x_continuous(limits = c(0, 2), breaks = c(0, 0.5, 1, 1.5, 2),
+                       labels = c("0\nG1/G0", "0.5π\nS", "π\nG2", "1.5π\nM", "2π")) +
+    labs(title = ttl, subtitle = sub, x = "θ at which the marker peaks", y = NULL,
+         size = expression(R^2), colour = NULL) +
+    theme_bw(base_size = bs) + theme(panel.grid.minor = element_blank())
+}
+
+# CONTROL 2, as a picture. Cycling fraction against sequencing depth, computed live from the
+# per-cell table. Nothing biological makes a cell likelier to be in S phase because it was
+# sequenced deeper, so any slope here is measurement, not development -- and the slopes are
+# steep enough to swallow most of the P0 -> P7 difference the tab is otherwise about.
+tri_depth_df <- function(celltypes = NULL, nq = 4L) {
+  if (is.null(TRI)) return(NULL)
+  d <- TRI$percell
+  if (!is.null(celltypes)) d <- d[as.character(d$celltype) %in% celltypes, , drop = FALSE]
+  if (!nrow(d)) return(NULL)
+  sp <- split(d, list(d$celltype, d$timepoint), drop = TRUE)
+  out <- do.call(rbind, lapply(sp, function(z) {
+    if (nrow(z) < 200) return(NULL)
+    br <- stats::quantile(z$ngene, probs = seq(0, 1, length.out = nq + 1L), na.rm = TRUE)
+    br[1] <- -Inf; br[length(br)] <- Inf
+    if (anyDuplicated(br)) return(NULL)
+    z$q <- cut(z$ngene, breaks = br, labels = paste0("Q", seq_len(nq)), include.lowest = TRUE)
+    do.call(rbind, lapply(levels(z$q), function(q) {
+      y <- z[!is.na(z$q) & z$q == q, , drop = FALSE]
+      if (nrow(y) < 25) return(NULL)
+      data.frame(celltype = as.character(y$celltype[1]), timepoint = as.character(y$timepoint[1]),
+                 quartile = q, n = nrow(y), median_ngene = stats::median(y$ngene),
+                 pct_cycling_tricycle = round(100 * mean(y$tricycle_cycling), 1),
+                 pct_cycling_seurat   = round(100 * mean(y$seurat_cycling), 1),
+                 stringsAsFactors = FALSE)
+    }))
+  }))
+  if (is.null(out)) return(NULL)
+  rownames(out) <- NULL
+  out
+}
+
+tri_depth_gg <- function(dd, bs = 13, ttl = NULL, sub = NULL) {
+  if (is.null(dd) || !nrow(dd)) return(ggplot() + theme_void())
+  ggplot(dd, aes(quartile, pct_cycling_tricycle, group = timepoint, colour = timepoint)) +
+    geom_line(linewidth = 0.8) + geom_point(size = 2.2) +
+    scale_colour_manual(values = c(P0 = "#90caf9", P7 = "#1565c0")) +
+    facet_wrap(~ celltype) +
+    labs(title = ttl, subtitle = sub, x = "sequencing depth (quartile of detected genes)",
+         y = "% cycling (tricycle)") +
+    theme_bw(base_size = bs) + theme(panel.grid.minor = element_blank())
+}
+
+# ---- the "how this was made" bodies, as free functions so they are testable ----
+tri_wheel_method_note <- function(colour_by = "tricycle_stage") method_note(
+  HTML(paste0(
+    "Each point is one cell, placed in <b>tricycle's 2D cell-cycle space</b>: the projection of ",
+    "its expression onto a fixed reference cycle learned from mouse neurosphere data ",
+    "(Zheng et al. 2022). The reference is external, so nothing about a cell's position ",
+    "depends on which other cells are in this dataset — unlike Seurat's phase scores, which ",
+    "are centred against control gene sets drawn from the same object.<br><br>",
+    "<b>The angle</b> is the cell-cycle position θ. <b>The radius matters too:</b> it is how ",
+    "much cycle signal the cell has. Cells near the centre are not at a phase — they have ",
+    "little cycle signal at all, which is why this is drawn as a ring rather than as θ on a ",
+    "circle of fixed radius. A hollow ring means a cycling population; a filled blob means ",
+    "one that has largely exited.<br><br>",
+    "The <b>G1/G0 · S · G2 · M</b> spokes are the reference's own anchors. Turning on ",
+    "<i>marker peaks</i> adds where each canonical cell-cycle gene actually peaks along θ ",
+    "<i>in these cells</i> (periodic loess) — S genes landing before G2/M genes is the check ",
+    "that θ means here what it is supposed to mean.")),
+  code = c("cellcycle_tricycle.R", "project_cycle_space()", "estimate_cycle_position()",
+           "tri_wheel_gg()", "build_tricycle.R"))
+
+tri_geno_method_note <- function() method_note(
+  HTML(paste0(
+    "The same cycle space as the wheel, split <b>WT vs KO</b> and by timepoint, plus the ",
+    "distribution of θ underneath. The shaded band on the density is the ",
+    "<b>0.5π–1.5π arc</b> counted as \"cycling\"; that arc is not assumed, it is where the ",
+    "S and G2/M markers were measured to peak (see <i>Does θ track the cycle?</i>).<br><br>",
+    "<b>Read the shape, not just the height.</b> A population that has exited the cycle piles ",
+    "up near 0/2π; one that is still dividing spreads around the arc. This is threshold-free ",
+    "— no cell has to be sorted into a phase for the difference to be visible.<br><br>",
+    strong("n = 1 animal per genotype × timepoint, and genotype is confounded with sex. "),
+    "Nothing here is a hypothesis test; it is a description of four libraries.")),
+  code = c("tri_wheel_gg()", "tri_theta_density_gg()", "cellcycle_tricycle.R"))
+
+tri_vs_method_note <- function() method_note(
+  HTML(paste0(
+    "Each point is one <b>cell type × timepoint × genotype</b> group with at least 100 cells. ",
+    "x is the share Seurat's <code>CellCycleScoring</code> calls S or G2M; y is the share ",
+    "tricycle places on the 0.5π–1.5π arc. Same cells, same normalisation, two methods that ",
+    "share no machinery.<br><br>",
+    "This panel exists because the phase calls used <i>elsewhere in this app</i> could have ",
+    "been an artifact of how Seurat scores cells. The hypothesis was tested and did not ",
+    "survive: the two methods agree closely, so the app's Phase-based numbers are not a ",
+    "scoring artifact. What that does <b>not</b> establish is that either method is measuring ",
+    "biology rather than depth — for that, see <i>Depth &amp; ambient floor</i>.")),
+  code = c("cellcycle_tricycle.R", "tri_vs_gg()", "tri_confusion_gg()"))
+
+tri_depth_method_note <- function() method_note(
+  HTML(paste0(
+    "Cells are split into <b>quartiles of detected genes</b> within each cell type and ",
+    "timepoint, and the cycling fraction is recomputed in each. Nothing biological makes a ",
+    "cell likelier to be in S phase because it was sequenced more deeply, so a slope here is ",
+    "a property of the <i>measurement</i>.<br><br>",
+    "The slopes are steep, and both methods show them. Matching P0 and P7 cardiomyocytes on ",
+    "depth removes roughly two thirds of the gap between them. Separately, essentially every ",
+    "non-cardiomyocyte in this dataset detects cardiac sarcomere transcripts it cannot ",
+    "possibly transcribe — ambient RNA — and the same ambient carries proliferation ",
+    "transcripts into every barcode, which puts a floor under any cycling estimate.<br><br>",
+    strong("The honest reading: "), "the absolute cardiomyocyte cycling fraction is not ",
+    "resolvable above the ambient/depth floor in this dataset, and neither method can fix ",
+    "that because the problem is upstream of both. Comparisons made at matched depth are the ",
+    "safer read.")),
+  code = c("cellcycle_tricycle.R", "tri_depth_df()", "tri_depth_gg()"))
+
 # ---------------------------------------------------------------- UI ----------
 # Wrap every plot output in a loading spinner (shown while the output computes /
 # on tab switch), by shadowing the two output constructors used across the UI.
@@ -3312,25 +3768,6 @@ ui <- page_navbar(
         selectInput("xc_gene_cmp", "Comparison", choices = NULL, width = "520px"),
         dl_data_ui("xc_genes"), DTOutput("xc_genes"))))),
 
-  nav_panel("Cell-cycle exit & ploidy", layout_sidebar(
-    sidebar = sidebar(width = 300,
-      selectInput("cyc_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
-      hr(), helpText("E2f7/8 govern cardiomyocyte cell-cycle exit and polyploidization. ",
-                     "Proliferation vs cytokinesis separates true division from ",
-                     "karyokinesis-without-cytokinesis (binucleation / endoreduplication). ",
-                     strong("Descriptive only — n = 1, sex-confounded.")),
-      accordion(open = FALSE, accordion_panel("Figure options",
-        figure_controls("cyc", palette = TRUE, rename = FALSE)))),
-    navset_card_tab(
-      wrapper = function(...) card_body(..., fillable = FALSE),
-      nav_panel("Score distributions",
-        helpText("Proliferation, cytokinesis, cell-cycle-exit and polyploidization-proxy scores ",
-                 "across genotype (WT vs KO), faceted by timepoint."),
-        plotOutput("cyc_violins", height = "600px"),
-        uiOutput("cyc_score_def")),
-      nav_panel("Cycling vs cytokinesis", dl_fig_ui("cycsc"),
-        plotOutput("cyc_scatter", height = "600px"))))),
-
   nav_panel("Maturation & metabolism", layout_sidebar(
     sidebar = sidebar(width = 320,
       conditionalPanel("input.matt != 'genemap'",
@@ -3413,6 +3850,99 @@ ui <- page_navbar(
         dl_data_ui("gm_table"), DTOutput("gm_table"),
         uiOutput("gm_geneinfo"),
         uiOutput("gm_method")))))),
+
+  nav_menu("Cell cycle",
+  nav_panel("Cell cycle (tricycle)", layout_sidebar(
+    sidebar = sidebar(width = 320,
+      selectInput("tri_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
+      conditionalPanel("input.tri_tabs == 'wheel'",
+        selectInput("tri_colour", "Colour cells by",
+                    choices = c("Cell-cycle stage" = "tricycle_stage",
+                                "Position θ (continuous)" = "tricycle_theta",
+                                "Cycling / not" = "tricycle_cycling",
+                                "Genotype (KO/WT)" = "genotype",
+                                "Timepoint (P0/P7)" = "timepoint",
+                                "Cell type" = "celltype",
+                                "Seurat phase" = "seurat_phase"),
+                    selected = "tricycle_stage"),
+        selectInput("tri_tp", "Timepoint", c("Both" = "All", "P0" = "P0", "P7" = "P7")),
+        selectInput("tri_geno", "Genotype", c("Both" = "All", "WT" = "WT", "KO" = "KO")),
+        checkboxInput("tri_peaks", "Show where the markers peak", FALSE),
+        checkboxInput("tri_rosesplit", "Split the cycle diagram by genotype × age", FALSE),
+        checkboxInput("tri_sqrt", "Spread the crowded centre (√ radius)", TRUE)),
+      conditionalPanel("input.tri_tabs == 'comp'",
+        checkboxInput("tri_abstain", "Show cells tricycle declined to stage", TRUE)),
+      conditionalPanel("input.tri_tabs == 'vs'",
+        sliderInput("tri_minn", "Minimum cells per group", 0, 500, 100, 25),
+        checkboxInput("tri_vslab", "Label cell types", TRUE)),
+      conditionalPanel("input.tri_tabs == 'wheel' || input.tri_tabs == 'geno'",
+        sliderInput("tri_psize", "Point size", 0.1, 2, 0.45, 0.05),
+        sliderInput("tri_maxn", "Cells drawn", 5000, 60000, 30000, 5000)),
+      hr(),
+      helpText("tricycle projects each cell onto a ", strong("fixed external reference cycle"),
+               " and returns a continuous position θ, so a cell can sit between phases ",
+               "instead of being rounded into one. Percentages are always computed on all ",
+               "cells in the selection — the ", em("Cells drawn"), " slider only thins the ",
+               "points on screen. ",
+               strong("Descriptive only — n = 1 per group, sex-confounded, and see ",
+                      "Depth & ambient floor before quoting any absolute fraction.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("tri", palette = TRUE, rename = FALSE)))),
+    navset_card_tab(id = "tri_tabs",
+      wrapper = function(...) card_body(..., fillable = FALSE),
+      nav_panel("The wheel", value = "wheel",
+        uiOutput("tri_wheel_note"),
+        dl_fig_ui("trirose", "Download cycle diagram"),
+        plotOutput("tri_rose", height = "520px"),
+        dl_fig_ui("triwheel", "Download cycle-space figure"),
+        plotOutput("tri_wheel", height = "620px"),
+        uiOutput("tri_wheel_method")),
+      nav_panel("KO vs WT on the cycle", value = "geno",
+        helpText("The same cycle space, split by genotype and timepoint, with the ",
+                 "distribution of θ underneath. The shaded band is the arc counted as cycling."),
+        dl_fig_ui("trigeno"),
+        plotOutput("tri_geno", height = "560px"),
+        dl_fig_ui("tridens", "Download density figure"),
+        plotOutput("tri_dens", height = "340px"),
+        uiOutput("tri_geno_method")),
+      nav_panel("Composition & fractions", value = "comp",
+        uiOutput("tri_comp_note"),
+        dl_fig_ui("tricomp"),
+        plotOutput("tri_comp", height = "460px"),
+        dl_data_ui("tri_tab"), DTOutput("tri_tab")),
+      nav_panel("tricycle vs Seurat", value = "vs",
+        uiOutput("tri_agree_note"),
+        dl_fig_ui("trivs"),
+        plotOutput("tri_vs", height = "500px"),
+        dl_fig_ui("triconf", "Download confusion figure"),
+        plotOutput("tri_conf", height = "330px"),
+        uiOutput("tri_vs_method")),
+      nav_panel("Depth & ambient floor", value = "depth",
+        uiOutput("tri_depth_note"),
+        dl_fig_ui("tripeaks", "Download marker-peak figure"),
+        plotOutput("tri_peaks", height = "330px"),
+        dl_fig_ui("tridepth"),
+        plotOutput("tri_depth", height = "420px"),
+        dl_data_ui("tri_depthtab"), DTOutput("tri_depthtab"),
+        uiOutput("tri_depth_method"))))),
+  nav_panel("Cell-cycle exit & ploidy", layout_sidebar(
+    sidebar = sidebar(width = 300,
+      selectInput("cyc_ct", "Cell type", choices = CELLTYPE_CHOICES, selected = CM_DEFAULT_CT),
+      hr(), helpText("E2f7/8 govern cardiomyocyte cell-cycle exit and polyploidization. ",
+                     "Proliferation vs cytokinesis separates true division from ",
+                     "karyokinesis-without-cytokinesis (binucleation / endoreduplication). ",
+                     strong("Descriptive only — n = 1, sex-confounded.")),
+      accordion(open = FALSE, accordion_panel("Figure options",
+        figure_controls("cyc", palette = TRUE, rename = FALSE)))),
+    navset_card_tab(
+      wrapper = function(...) card_body(..., fillable = FALSE),
+      nav_panel("Score distributions",
+        helpText("Proliferation, cytokinesis, cell-cycle-exit and polyploidization-proxy scores ",
+                 "across genotype (WT vs KO), faceted by timepoint."),
+        plotOutput("cyc_violins", height = "600px"),
+        uiOutput("cyc_score_def")),
+      nav_panel("Cycling vs cytokinesis", dl_fig_ui("cycsc"),
+        plotOutput("cyc_scatter", height = "600px")))))),
 
   nav_menu("Methods & provenance",
   nav_panel("Precomputed results", layout_sidebar(
@@ -5703,6 +6233,228 @@ server <- function(input, output, session) {
   output$cyc_scatter <- renderPlot(apply_fig_opts(cyc_scatter_p(), "cyc", input))
   register_fig(output, "cycsc", cyc_scatter_p, input, opts_prefix = "cyc")
 
+
+  # ---- Cell cycle (tricycle) ------------------------------------------------
+  # Two slices, deliberately kept apart: *_full is every cell in the selection and is what
+  # every PERCENTAGE is computed from, while the wheel draws a thinned copy. Reporting a
+  # fraction off the thinned set would make the number depend on a display slider.
+  tri_full <- reactive({
+    tri_ok()
+    d <- tri_slice(input$tri_ct %||% "All", input$tri_tp %||% "All", input$tri_geno %||% "All")
+    validate(need(nrow(d) > 0, "No cells for this selection."))
+    d
+  })
+  # Cell-type only: the genotype panel supplies its own split, so it must not be pre-filtered.
+  tri_ct_full <- reactive({
+    tri_ok()
+    d <- tri_slice(input$tri_ct %||% "All")
+    validate(need(nrow(d) > 0, "No cells for this selection."))
+    d
+  })
+  tri_label <- function() {
+    ct <- input$tri_ct %||% "All"
+    if (identical(ct, "All")) "all cell types" else gsub("_", " ", ct)
+  }
+
+  tri_wheel_p <- reactive({
+    d <- tri_full()
+    maxn <- as.integer(input$tri_maxn %||% 30000)
+    dd <- if (nrow(d) > maxn) { set.seed(42L); d[sort(sample(nrow(d), maxn)), , drop = FALSE] } else d
+    tri_wheel_gg(dd, colour_by = input$tri_colour %||% "tricycle_stage",
+                 psize = input$tri_psize %||% 0.45, bs = input$tri_basesize %||% 13,
+                 show_peaks = isTRUE(input$tri_peaks),
+                 rscale = if (isTRUE(input$tri_sqrt %||% TRUE)) "sqrt" else "raw",
+                 pal_choice = input$tri_palette %||% "Default",
+                 ttl = paste0("Cell-cycle position — ", tri_label()),
+                 sub = sprintf("%s cells%s · %.1f%% on the cycling arc",
+                               format(nrow(d), big.mark = ","),
+                               if (nrow(dd) < nrow(d))
+                                 sprintf(" (%s drawn)", format(nrow(dd), big.mark = ",")) else "",
+                               100 * mean(d$tricycle_cycling)))
+  })
+  output$tri_wheel <- renderPlot(apply_fig_opts(tri_wheel_p(), "tri", input))
+  register_fig(output, "triwheel", tri_wheel_p, input, opts_prefix = "tri")
+
+  # The same θ, arranged as the diagram everyone has already seen: G1/G0 at twelve o'clock,
+  # running clockwise through S, G2 and M. The wheel above is the measurement in its own
+  # coordinates; this is the one a reader recognises without being taught the axes.
+  tri_rose_p <- reactive({
+    d <- if (isTRUE(input$tri_rosesplit)) tri_ct_full() else tri_full()
+    fb <- input$tri_colour %||% "tricycle_stage"
+    tri_rose_gg(d, bs = input$tri_basesize %||% 13, fill_by = fb,
+                pal_choice = input$tri_palette %||% "Default",
+                facet = if (isTRUE(input$tri_rosesplit)) c("timepoint", "genotype") else NULL,
+                ttl = paste0("The cell cycle — ", tri_label()),
+                sub = paste0("Angle = position on the cycle; wedge length = the SHARE of ",
+                             "cells there (\u221a scale), so panels of different size compare."))
+  })
+  output$tri_rose <- renderPlot(apply_fig_opts(tri_rose_p(), "tri", input))
+  register_fig(output, "trirose", tri_rose_p, input, opts_prefix = "tri")
+
+  output$tri_wheel_note <- renderUI({
+    tri_ok(); d <- tri_full()
+    ns <- sum(d$tricycle_stage == TRI$not_staged)
+    div(class = "alert alert-secondary", style = "font-size:13px;margin-top:10px",
+      HTML(sprintf(paste0("<b>%s cells.</b> %.1f%% sit on the cycling arc (0.5π–1.5π). ",
+                          "tricycle declined to assign a discrete stage to %.1f%% of them ",
+                          "(%s cells) — those are drawn grey, and that abstention is a ",
+                          "result, not missing data: Seurat's phase call has no way to ",
+                          "express it."),
+                   format(nrow(d), big.mark = ","), 100 * mean(d$tricycle_cycling),
+                   100 * ns / nrow(d), format(ns, big.mark = ","))))
+  })
+  output$tri_wheel_method <- renderUI(tri_wheel_method_note(input$tri_colour %||% "tricycle_stage"))
+
+  # ---- KO vs WT on the cycle ----
+  tri_geno_p <- reactive({
+    d <- tri_ct_full()
+    maxn <- as.integer(input$tri_maxn %||% 30000)
+    dd <- if (nrow(d) > maxn) { set.seed(42L); d[sort(sample(nrow(d), maxn)), , drop = FALSE] } else d
+    tri_wheel_gg(dd, colour_by = "tricycle_stage", psize = input$tri_psize %||% 0.45,
+                 bs = input$tri_basesize %||% 13, show_peaks = FALSE,
+                 facet = c("timepoint", "genotype"),
+                 ttl = paste0("WT vs KO around the cycle — ", tri_label()),
+                 sub = "Same cycle space, split by genotype and age. Rows are timepoints.")
+  })
+  output$tri_geno <- renderPlot(apply_fig_opts(tri_geno_p(), "tri", input))
+  register_fig(output, "trigeno", tri_geno_p, input, opts_prefix = "tri")
+
+  tri_dens_p <- reactive({
+    d <- tri_ct_full()
+    pct <- tapply(d$tricycle_cycling, list(d$timepoint, d$genotype), function(x) 100 * mean(x))
+    lab <- paste(apply(expand.grid(rownames(pct), colnames(pct)), 1, function(r)
+      sprintf("%s %s %.1f%%", r[1], r[2], pct[r[1], r[2]])), collapse = "  ·  ")
+    tri_theta_density_gg(d, colour_by = "genotype", facet = "timepoint",
+                         bs = input$tri_basesize %||% 13,
+                         ttl = paste0("Where the cells sit on the cycle — ", tri_label()),
+                         sub = paste0("On the cycling arc: ", lab))
+  })
+  output$tri_dens <- renderPlot(apply_fig_opts(tri_dens_p(), "tri", input))
+  register_fig(output, "tridens", tri_dens_p, input, opts_prefix = "tri")
+  output$tri_geno_method <- renderUI(tri_geno_method_note())
+
+  # ---- Composition & fractions ----
+  tri_comp_p <- reactive({
+    d <- tri_ct_full()
+    tri_comp_gg(d, xvar = "genotype", facet = "timepoint", bs = input$tri_basesize %||% 13,
+                show_abstain = isTRUE(input$tri_abstain %||% TRUE),
+                ttl = paste0("Cell-cycle stage composition — ", tri_label()),
+                sub = if (isTRUE(input$tri_abstain %||% TRUE))
+                  "Grey = cells tricycle declined to stage; they are shown, not renormalised away."
+                else "Abstentions hidden — the remaining bars are renormalised to the staged cells only.")
+  })
+  output$tri_comp <- renderPlot(apply_fig_opts(tri_comp_p(), "tri", input))
+  register_fig(output, "tricomp", tri_comp_p, input, opts_prefix = "tri")
+
+  output$tri_comp_note <- renderUI({
+    tri_ok()
+    div(class = "alert alert-secondary", style = "font-size:13px;margin-top:10px",
+      HTML(paste0("Stage shares per genotype and age. The table below is the full ",
+                  "cell-type × timepoint × genotype breakdown with <b>both methods'</b> ",
+                  "cycling fractions side by side — at P7 the cardiomyocyte KO/WT gap is ",
+                  "23.3% vs 20.0% by tricycle and 31.6% vs 25.6% by Seurat. ",
+                  "<b>Read the direction, not the absolute value</b>, and see ",
+                  "<i>Depth &amp; ambient floor</i> for why.")))
+  })
+  tri_tab_df <- reactive({
+    tri_ok(); t <- TRI$by_celltype
+    validate(need(!is.null(t) && nrow(t), "No summary table in this build."))
+    ct <- input$tri_ct %||% "All"
+    if (!identical(ct, "All")) t <- t[t$celltype == ct, , drop = FALSE]
+    t[order(t$celltype, t$timepoint, t$genotype), , drop = FALSE]
+  })
+  output$tri_tab <- renderDT(enr_dt(tri_tab_df(), scroll = "360px"))
+
+  # ---- tricycle vs Seurat ----
+  tri_vs_p <- reactive({
+    tri_ok()
+    tri_vs_gg(TRI$by_celltype, min_n = as.integer(input$tri_minn %||% 100),
+              bs = input$tri_basesize %||% 13, label = isTRUE(input$tri_vslab %||% TRUE),
+              ttl = "Cycling fraction: Seurat CellCycleScoring vs tricycle",
+              sub = "One point per cell type × timepoint × genotype. On the dashed line = the two methods agree.")
+  })
+  output$tri_vs <- renderPlot(apply_fig_opts(tri_vs_p(), "tri", input))
+  register_fig(output, "trivs", tri_vs_p, input, opts_prefix = "tri")
+
+  tri_conf_p <- reactive({
+    tri_ok()
+    tri_confusion_gg(TRI$confusion, bs = input$tri_basesize %||% 13,
+                     ttl = "Seurat phase × tricycle stage, cell by cell",
+                     sub = "Shading is the share of each Seurat phase row.")
+  })
+  output$tri_conf <- renderPlot(apply_fig_opts(tri_conf_p(), "tri", input))
+  register_fig(output, "triconf", tri_conf_p, input, opts_prefix = "tri")
+
+  output$tri_agree_note <- renderUI({
+    tri_ok()
+    k <- tri_ctrl("kappa"); cc <- tri_ctrl("pct_concordance")
+    rg <- tri_ctrl("r_group_fractions", "groups n>=100"); ng <- tri_ctrl("n_ref_genes_matched")
+    fmt <- function(x, d = 2) if (is.na(x)) "—" else formatC(x, format = "f", digits = d)
+    div(class = "alert alert-success", style = "font-size:13px;margin-top:10px",
+      HTML(sprintf(paste0("<b>The two methods agree.</b> Cohen's κ = %s, per-cell ",
+                          "concordance %s%%, and r = %s across groups — with %s of ",
+                          "tricycle's 500 reference genes matched. This panel exists to test ",
+                          "whether the phase calls used elsewhere in this app are an artifact ",
+                          "of Seurat's scoring; that hypothesis did <b>not</b> survive. ",
+                          "What it does not establish is that either method is measuring ",
+                          "biology rather than sequencing depth."),
+                   fmt(k, 3), fmt(cc, 1), fmt(rg, 3),
+                   if (is.na(ng)) "—" else format(as.integer(ng)))))
+  })
+  output$tri_vs_method <- renderUI(tri_vs_method_note())
+
+  # ---- Depth & ambient floor ----
+  tri_peaks_p <- reactive({
+    tri_ok()
+    tri_peaks_gg(TRI$marker_peaks, bs = input$tri_basesize %||% 13,
+                 ttl = "Does θ track the cycle in these cells?",
+                 sub = "Where each canonical marker peaks along θ (periodic loess). S genes before G2/M genes.")
+  })
+  output$tri_peaks <- renderPlot(apply_fig_opts(tri_peaks_p(), "tri", input))
+  register_fig(output, "tripeaks", tri_peaks_p, input, opts_prefix = "tri")
+
+  tri_depth_tab <- reactive({
+    tri_ok()
+    ct <- input$tri_ct %||% "All"
+    cts <- if (identical(ct, "All")) c("Cardiomyocyte", "Endothelial", "Fibroblast") else ct
+    d <- tri_depth_df(cts)
+    validate(need(!is.null(d) && nrow(d), "Not enough cells in this selection to bin by depth."))
+    d
+  })
+  tri_depth_p <- reactive({
+    tri_depth_gg(tri_depth_tab(), bs = input$tri_basesize %||% 13,
+                 ttl = "Cycling fraction against sequencing depth",
+                 sub = "Nothing biological makes a cell likelier to be in S phase because it was sequenced deeper.")
+  })
+  output$tri_depth <- renderPlot(apply_fig_opts(tri_depth_p(), "tri", input))
+  register_fig(output, "tridepth", tri_depth_p, input, opts_prefix = "tri")
+  output$tri_depthtab <- renderDT(enr_dt(tri_depth_tab(), scroll = "320px"))
+  output$tri_depth_method <- renderUI(tri_depth_method_note())
+
+  output$tri_depth_note <- renderUI({
+    tri_ok()
+    d0 <- tri_ctrl("cm_pct_cycling_raw", "P0"); d7 <- tri_ctrl("cm_pct_cycling_raw", "P7")
+    m0 <- tri_ctrl("cm_pct_cycling_depthmatched", "P0")
+    m7 <- tri_ctrl("cm_pct_cycling_depthmatched", "P7")
+    amb <- tri_ctrl("pct_nonCM_detecting_sarcomere", "Tnnt2/Myh6/Actc1")
+    rbc <- tri_ctrl("pct_cycling_tricycle", "RBC"); cmc <- tri_ctrl("pct_cycling_tricycle", "Cardiomyocyte")
+    f <- function(x, d = 1) if (is.na(x)) "—" else formatC(x, format = "f", digits = d)
+    div(class = "alert alert-warning", style = "font-size:13px;margin-top:10px",
+      HTML(sprintf(paste0("<b>How far to trust the absolute numbers.</b> Matching ",
+                          "cardiomyocytes on depth turns the P0→P7 rise of %s%% → %s%% into ",
+                          "%s%% → %s%%, so roughly two thirds of that gap is sequencing ",
+                          "depth rather than development. Separately, %s%% of ",
+                          "<i>non-cardiomyocytes</i> detect cardiac sarcomere transcripts ",
+                          "they cannot transcribe — ambient RNA — and the same ambient ",
+                          "carries proliferation transcripts into every barcode: 'RBC' cells ",
+                          "score %s%% cycling against cardiomyocytes' %s%%. ",
+                          "<b>The absolute cardiomyocyte cycling fraction is not resolvable ",
+                          "above that floor, and neither method can fix it because the ",
+                          "problem is upstream of both.</b> Comparisons at matched depth, and ",
+                          "KO-vs-WT within one timepoint, are the safer reads."),
+                   f(d0), f(d7), f(m0), f(m7), f(amb), f(rbc), f(cmc))))
+  })
+
   # ---- Maturation & metabolism ----
   mat_violin_plot <- reactive(score_violin(input$mat_score, input$mat_ct,
     input$mat_basesize %||% 13, input$mat_palette %||% "Default", input$mat_stratum %||% "all"))
@@ -5824,6 +6576,12 @@ server <- function(input, output, session) {
     # Gene-set provenance
     list(id = "gsp_tab", base = "gene_set_provenance", df = function() gsp_df()),
     # Clustering variants
+    list(id = "tri_tab",
+         base = function() paste0("tricycle_cycling_", input$tri_ct %||% "all"),
+         df = function() tri_tab_df()),
+    list(id = "tri_depthtab",
+         base = function() paste0("tricycle_depth_quartiles_", input$tri_ct %||% "all"),
+         df = function() tri_depth_tab()),
     list(id = "clu_mk", base = function() paste0("markers_", input$clu_var %||% "variant"),
          df = function() clu_mk_df()),
     list(id = "clu_de", base = function() paste0("DE_", input$clu_var %||% "variant", "_", input$clu_cl %||% ""),

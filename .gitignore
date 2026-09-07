@@ -20,6 +20,9 @@ shiny_app/app_data.rds
 # rsconnect deploy logs (the .dcf deployment record IS tracked)
 rsconnect/*.log
 shiny_app/rsconnect/**/*.log
+# bslib compiles its theme to sass on first run, so simply starting the app leaves
+# this behind; it is regenerated every time and must never be committed.
+shiny_app/app_cache/
 
 # Python model (model/) — build artefacts, not sources
 __pycache__/

@@ -39,6 +39,16 @@ ok("other menus are NOT right-aligned",
      !grepl('dropdown-menu-end', s2) })
 ok("variant tab renamed and findable", grepl("Variant explorer &mdash; PCA 10/30/50|Variant explorer — PCA 10/30/50", h))
 ok("PC dimensions panel cross-references it", grepl("Looking for how DE, GO and the subclusters change", h))
-ok("still 21 top-level nav_panels", TRUE)
+# Was a hardcoded TRUE, i.e. a label that could never fail while claiming to count. It now
+# counts the same way tools/check_docs_coverage.py does -- "^  nav_panel(" at EXACTLY two
+# spaces -- so a tab added without a docs chapter trips here too, and the number in the
+# label cannot quietly become a lie.
+ok("22 top-level nav_panels, at the indentation the docs gate keys on", {
+  src <- readLines("app.R", warn = FALSE)
+  n <- sum(grepl('^  nav_panel\\(\\s*"', src))
+  cat(sprintf("   top-level nav_panels: %d\n", n))
+  identical(n, 22L) })
+ok("the Cell cycle menu exists and holds the tricycle tab",
+   grepl('data-value="Cell cycle"', h, fixed = TRUE) && grepl("Cell cycle \\(tricycle\\)", h))
 cat(sprintf("\n%s\n", if(FAIL==0) "ALL PASS" else paste(FAIL,"FAILURES")))
 if (FAIL) quit(status=1)

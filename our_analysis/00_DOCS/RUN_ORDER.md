@@ -92,6 +92,7 @@ Rscript process each). See each file's header for its exact inputs/outputs.
 | `abundance_propeller.R` | Cell-type composition + propeller |
 | `cell_cycle.R` | Phase composition; cycling fraction by cell type |
 | `cellcycle_ridge.R` | Cell-cycle score ridge plots |
+| `cellcycle_tricycle.R` | Independent cross-check of the phase calls: projects cells onto a fixed external reference cycle for a continuous position θ, plus depth and ambient-RNA controls. Agrees with `CellCycleScoring` (κ 0.87); both are depth-floored. Runs in `e2f-tricycle` (`Dockerfile.tricycle`) |
 | `cm_subtypes.R` | Cardiomyocyte subtype labeling/composition |
 | `cm_subcluster_analyze.R` | KO-vs-WT DE per CM subcluster (resolution sweep) |
 | `trajectory_slingshot.R` | Pseudotime / CM maturation ordering |

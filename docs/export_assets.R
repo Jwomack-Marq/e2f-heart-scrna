@@ -922,6 +922,52 @@ step("tbl-commun-scores", "10", "top signalling deltas",
           caption = "VEGF at P7: sender, receiver, WT and KO scores, and the KO-WT delta."))
 
 # ===========================================================================
+# 12 -- the cell cycle as a position (tricycle)
+# ===========================================================================
+cat("\n== 12 cell cycle (tricycle) ==\n")
+if (is.null(TRI)) cat("  (no app$tricycle in this bundle -- run build_tricycle.R; skipping)\n") else {
+  CMCC <- tri_slice("Cardiomyocyte")
+  # The clock face first, because it is the figure a reader recognises unaided.
+  step("cc-rose", "12", "the cell cycle drawn as a cycle",
+       fig("cc-rose", tri_rose_gg(CMCC,
+             ttl = "Cardiomyocytes on the cell cycle",
+             sub = "Angle = position; wedge length = share of cells there (sqrt scale)."), 7, 5.6))
+  step("cc-rose-geno", "12", "WT vs KO on the cycle",
+       fig("cc-rose-geno", tri_rose_gg(CMCC, fill_by = "genotype",
+             facet = c("timepoint", "genotype"),
+             ttl = "WT vs KO on the cell cycle - cardiomyocytes",
+             sub = "Shares, so the unequal group sizes compare."), 8, 7.4))
+  # raster: a 42,000-cell point cloud as SVG is megabytes of <circle> elements.
+  step("cc-wheel", "12", "tricycle's own cycle space, with the marker peaks",
+       fig("cc-wheel", tri_wheel_gg(CMCC, "tricycle_stage", psize = 0.35, show_peaks = TRUE,
+             ttl = "Cardiomyocytes in tricycle's cycle space",
+             sub = "Angle = position on the cycle; radius = how much cycle signal the cell has."),
+           8, 6.6, raster = TRUE))
+  step("cc-peaks", "12", "where each marker peaks along theta",
+       fig("cc-peaks", tri_peaks_gg(TRI$marker_peaks,
+             ttl = "Does theta track the cycle in these cells?",
+             sub = "S genes peak before G2/M genes, which is what licenses the cycling arc."), 7.5, 3.6))
+  step("cc-vs", "12", "tricycle vs Seurat cycling fractions",
+       fig("cc-vs", tri_vs_gg(TRI$by_celltype,
+             ttl = "Cycling fraction: Seurat CellCycleScoring vs tricycle",
+             sub = "One point per cell type x timepoint x genotype. On the line = the methods agree."), 7.5, 5))
+  step("cc-depth", "12", "cycling fraction against sequencing depth",
+       fig("cc-depth", tri_depth_gg(tri_depth_df(c("Cardiomyocyte", "Endothelial", "Fibroblast")),
+             ttl = "Cycling fraction against sequencing depth",
+             sub = "Nothing biological makes a cell likelier to be in S phase because it was sequenced deeper."),
+           8.5, 3.8))
+  step("tbl-cc-bycelltype", "12", "both methods' cycling fractions, every group",
+       frag("tbl-cc-bycelltype", TRI$by_celltype,
+            caption = paste("Cycling fraction by both methods for every cell type x timepoint x",
+                            "genotype group. `median_theta` is the group's median position on the cycle.")))
+  step("tbl-cc-controls", "12", "the control statistics behind the caveats",
+       frag("tbl-cc-controls", TRI$controls,
+            caption = paste("Written by `cellcycle_tricycle.R`. Every number the chapter and the app",
+                            "quote about method agreement, sequencing depth and the ambient floor",
+                            "is read from this table rather than typed in.")))
+}
+
+# ===========================================================================
 # 11 -- confounds, sensitivity, reproducibility
 # ===========================================================================
 cat("\n== 11 confounds and reproducibility ==\n")

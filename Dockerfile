@@ -21,12 +21,15 @@ RUN R -e 'remotes::install_github("immunogenomics/presto", upgrade = "never")'
 
 WORKDIR /srv/shiny-app
 
-# App code + the data-prep build scripts (scripts aren't needed at runtime, kept for reference).
-# download_helpers.R IS needed at runtime -- app.R sources it.
-COPY shiny_app/app.R shiny_app/download_helpers.R ./
-COPY shiny_app/build_communication.R shiny_app/build_refmap.R \
-     shiny_app/build_signature_scores.R shiny_app/build_subcluster_enrichment.R \
-     shiny_app/build_fourgroup.R ./
+# App code + the data-prep build scripts (the build scripts aren't needed at runtime, but
+# they are small and keeping them makes the image self-documenting).
+#
+# A GLOB, deliberately, not a hand-written list. app.R sources download_helpers.R AND
+# studio_helpers.R at startup, and the list this replaced named only the first -- so the
+# image built fine and then died on launch with "cannot open file 'studio_helpers.R'".
+# Every new helper would re-introduce that, and the failure is at container start rather
+# than at build, which is the worst place to find it. Copy them all.
+COPY shiny_app/*.R ./
 
 # app_data.rds (the ~103 MB enriched bundle) is git-ignored and NOT baked in by default —
 # it is supplied at runtime via a volume mount (see docker-compose.yml / DOCKER.md).

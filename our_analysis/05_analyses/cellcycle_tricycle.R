@@ -45,6 +45,11 @@
 #   Writes results/tables/cellcycle_tricycle_*.csv
 #          results/figures/cellcycle_tricycle_*.png
 #
+# Everything the app needs must land in a FILE. The numbers below that are only cat()'d --
+# kappa, concordance, the depth correlations, the ambient percentages -- were for a long
+# time recoverable solely from a commit message, which is not a place a plot can read from.
+# They now go to cellcycle_tricycle_controls.csv as well as to stdout.
+#
 #   Rscript cellcycle_tricycle.R [--max-cells=N]   # N subsamples, for a smoke test
 #
 # Runs in e2f-tricycle:latest (our_analysis/Dockerfile.tricycle).
@@ -62,6 +67,17 @@ argval <- function(flag, default) {
 MAXCELLS <- as.integer(argval("--max-cells", "0"))
 SEED     <- 42L
 say <- function(...) cat(sprintf("[tricycle] %s\n", paste0(...)))
+
+# Long-form accumulator for the control statistics, so each one is written where it is
+# computed rather than re-derived at the end (re-deriving is how a reported number and the
+# number the script actually printed drift apart).
+CTRL <- list()
+ctrl <- function(metric, value, scope = "all") {
+  CTRL[[length(CTRL) + 1L]] <<- data.frame(metric = metric, scope = scope,
+                                           value = round(as.numeric(value), 4),
+                                           stringsAsFactors = FALSE)
+  invisible(value)
+}
 
 ## ---- 1. the cells, and the call we already made ---------------------------
 obj <- file.path(PROC, "seurat.combined.annotated.rds")
@@ -89,8 +105,20 @@ if (MAXCELLS > 0 && MAXCELLS < ncol(comb)) {
 # logcounts, because that is what tricycle's reference was built against. Same matrix
 # Seurat scored, so no normalisation difference can explain a disagreement.
 X <- SeuratObject::GetAssayData(comb, assay = "RNA", layer = "data")
-sce <- SingleCellExperiment(assays = list(logcounts = X),
-                            colData = md[colnames(X), , drop = FALSE])
+
+# ONE authoritative cell order, fixed here and relied on by everything below.
+#
+# This is load-bearing under --max-cells. `keep` is a random sample, so `md[keep, ]` is in
+# random order, while `comb[, keep]` hands the columns back in the OBJECT's order -- and the
+# per-cell frame in section 3 pairs colnames(sce) with md$celltype / md$Phase / md$timepoint
+# straight off `md`. Mismatched, that silently emits a table where a P7KO barcode is labelled
+# P0: no error, no warning, just wrong, and wrong in a way that reads as a real result
+# (a smoke run scored kappa -0.02 against the full run's 0.87 before this line existed).
+# Re-keying md off colnames(X) makes the two orders the same one.
+md <- md[colnames(X), , drop = FALSE]
+stopifnot(identical(rownames(md), colnames(X)))
+
+sce <- SingleCellExperiment(assays = list(logcounts = X), colData = md)
 rm(X); invisible(gc())
 
 say("projecting onto the reference cycle space (mouse, gene symbols) ...")
@@ -107,10 +135,21 @@ say(sprintf("  %s of tricycle's 500 reference genes matched our features",
             if (is.na(ngene)) "?" else format(ngene)))
 if (!is.na(ngene) && ngene < 300)
   warning("only ", ngene, " reference genes matched -- the projection is weakly supported")
+ctrl("n_ref_genes_matched", if (is.na(ngene)) NA_real_ else ngene)
 
 sce <- estimate_cycle_position(sce)
 theta <- sce$tricyclePosition
 say(sprintf("  theta assigned for %s cells", format(sum(!is.na(theta)), big.mark = ",")))
+ctrl("n_cells", ncol(sce)); ctrl("n_theta_assigned", sum(!is.na(theta)))
+
+# The cycle space ITSELF, not just the angle taken off it. theta is atan2(PC2, PC1), which
+# discards the RADIUS -- and the radius is the whole difference between a cell with a strong
+# cycle signal and one with almost none. Both get an angle; only one of them means anything.
+# Keeping PC1/PC2 lets a reader see the ring AND its hollow centre, so a cell with no cycle
+# signal can be recognised as such instead of being drawn on the rim looking confident.
+emb <- SingleCellExperiment::reducedDim(sce, "tricycleEmbedding")
+stopifnot(nrow(emb) == ncol(sce), ncol(emb) >= 2)
+say(sprintf("  cycle-space embedding kept: %d x %d", nrow(emb), ncol(emb)))
 
 # The discrete call that is ALLOWED TO ABSTAIN. NA here is not a failure, it is the
 # measurement refusing to guess -- exactly what CellCycleScoring cannot do.
@@ -123,17 +162,22 @@ stopifnot(length(stage) == ncol(sce))
 say(sprintf("  staged %s of %s cells; %s (%.1f%%) left NA -- the abstentions",
             format(sum(!is.na(stage)), big.mark = ","), format(ncol(sce), big.mark = ","),
             format(sum(is.na(stage)), big.mark = ","), 100 * mean(is.na(stage))))
+ctrl("pct_staged", 100 * mean(!is.na(stage)))
+ctrl("pct_abstained", 100 * mean(is.na(stage)))
 
 ## ---- 3. one table, both methods, same cells --------------------------------
 # The cycling arc is derived from OUR data, not assumed. fit_periodic_loess of each
 # canonical marker against theta puts the S genes first and the G2M genes after, in order:
-# Mcm2 0.64pi, Pcna 0.79pi, Rrm2 1.01pi, Cdk1 1.05pi, Top2a 1.06pi, Mki67 1.16pi,
-# Ccnb1 1.20pi -- with R2 0.41-0.62, so theta genuinely tracks the cycle here. That places
+# Mcm2 0.69pi, Pcna 0.82pi, Rrm2 1.03pi, Cdk1 1.06pi, Top2a 1.08pi, Mki67 1.16pi,
+# Ccnb1 1.19pi -- with R2 0.40-0.62, so theta genuinely tracks the cycle here. That places
 # S-through-M in (0.5pi, 1.5pi) and leaves the G1/G0 pile at theta ~ 0/2pi, which is where
 # ~70 % of all cells sit. Verified rather than assumed, and re-checked below.
 CYC_LO <- 0.5 * pi; CYC_HI <- 1.5 * pi
 cyc_tri <- !is.na(theta) & theta >= CYC_LO & theta <= CYC_HI
 
+# nFeature/nCount are carried HERE rather than added after the write. Depth turns out to be
+# the dominant confound on every cycling call below, so a per-cell table that omits it forces
+# anyone re-examining the question to go back to the 3 GB object for one column.
 out <- data.frame(
   cell            = colnames(sce),
   celltype        = md$celltype,
@@ -143,9 +187,13 @@ out <- data.frame(
   seurat_phase    = md$Phase,
   seurat_cycling  = md$Phase %in% c("S", "G2M"),
   tricycle_theta  = round(theta, 4),
+  tricycle_pc1    = round(emb[, 1], 4),
+  tricycle_pc2    = round(emb[, 2], 4),
   tricycle_stage  = as.character(stage),
   tricycle_staged = !is.na(stage),
   tricycle_cycling = cyc_tri,
+  ngene           = md$nFeature_RNA,
+  numi            = if ("nCount_RNA" %in% names(md)) md$nCount_RNA else NA_real_,
   stringsAsFactors = FALSE)
 write.csv(out, file.path(OUTTAB, "cellcycle_tricycle_percell.csv"), row.names = FALSE)
 
@@ -202,6 +250,22 @@ cat(sprintf("\n  cells both call cycling : %s\n  Seurat only            : %s\n  
             format(sum(out$seurat_cycling & !out$tricycle_cycling), big.mark = ","),
             format(sum(!out$seurat_cycling & out$tricycle_cycling), big.mark = ","),
             format(sum(!out$seurat_cycling & !out$tricycle_cycling), big.mark = ",")))
+
+# Cohen's kappa on the 2x2 cycling/not call. Raw concordance alone would flatter any pair of
+# methods that both mostly say "not cycling", which is exactly the regime we are in --
+# kappa is the number that survives that objection, so report both.
+.po <- mean(out$seurat_cycling == out$tricycle_cycling)
+.pe <- mean(out$seurat_cycling) * mean(out$tricycle_cycling) +
+       (1 - mean(out$seurat_cycling)) * (1 - mean(out$tricycle_cycling))
+.kappa <- (.po - .pe) / (1 - .pe)
+.big <- by_ct[by_ct$n >= 100, ]
+.rgrp <- if (nrow(.big) >= 3) cor(.big$pct_cycling_seurat, .big$pct_cycling_tricycle) else NA_real_
+cat(sprintf("\n  kappa %.3f | per-cell concordance %.1f%% | r across groups (n>=100) %.3f\n",
+            .kappa, 100 * .po, .rgrp))
+ctrl("kappa", .kappa); ctrl("pct_concordance", 100 * .po)
+ctrl("r_group_fractions", .rgrp, scope = "groups n>=100")
+ctrl("pct_cycling_seurat", 100 * mean(out$seurat_cycling))
+ctrl("pct_cycling_tricycle", 100 * mean(out$tricycle_cycling))
 write.csv(as.data.frame.matrix(tb),
           file.path(OUTTAB, "cellcycle_tricycle_confusion.csv"))
 
@@ -228,15 +292,18 @@ print(peaks, row.names = FALSE)
 write.csv(peaks, file.path(OUTTAB, "cellcycle_tricycle_marker_peaks.csv"), row.names = FALSE)
 cat(sprintf("  -> theta explains %.0f-%.0f%% of marker variance; the arc %.2fpi-%.2fpi is\n",
             100*min(peaks$R2), 100*max(peaks$R2), CYC_LO/pi, CYC_HI/pi))
+ctrl("marker_R2_min", min(peaks$R2)); ctrl("marker_R2_max", max(peaks$R2))
 cat("     supported by the data rather than assumed.\n")
 
 cat("\n=== CONTROL 2: is the call driven by SEQUENCING DEPTH? ===\n")
-out$ngene <- md$nFeature_RNA
 for (ct in c("Cardiomyocyte","Endothelial","Fibroblast")) for (tp in c("P0","P7")) {
   z <- out[out$celltype == ct & out$timepoint == tp, ]
   if (nrow(z) < 400) next
-  cat(sprintf("  %-14s %s  r(cycling, nGene) = %+.3f tricycle / %+.3f Seurat\n", ct, tp,
-              cor(as.numeric(z$tricycle_cycling), z$ngene), cor(as.numeric(z$seurat_cycling), z$ngene)))
+  .rt <- cor(as.numeric(z$tricycle_cycling), z$ngene)
+  .rs <- cor(as.numeric(z$seurat_cycling), z$ngene)
+  cat(sprintf("  %-14s %s  r(cycling, nGene) = %+.3f tricycle / %+.3f Seurat\n", ct, tp, .rt, .rs))
+  ctrl("r_cycling_ngene_tricycle", .rt, scope = paste(ct, tp))
+  ctrl("r_cycling_ngene_seurat",   .rs, scope = paste(ct, tp))
 }
 # Depth-matched P0 vs P7 in cardiomyocytes: common absolute bins, equal weight per bin.
 cmx <- out[out$celltype == "Cardiomyocyte", ]
@@ -247,21 +314,34 @@ mm <- do.call(rbind, lapply(levels(cmx$bin), function(b) {
   data.frame(bin=b, n_P0=nrow(a), n_P7=nrow(z), w=min(nrow(a),nrow(z)),
              P0=100*mean(a$tricycle_cycling), P7=100*mean(z$tricycle_cycling))
 }))
+# The raw fractions stand on their own; only the depth-matched pair needs the bins, and
+# under --max-cells no bin clears its 100-cell floor.
+raw0 <- 100*mean(cmx$tricycle_cycling[cmx$timepoint=="P0"])
+raw7 <- 100*mean(cmx$tricycle_cycling[cmx$timepoint=="P7"])
+ctrl("cm_pct_cycling_raw", raw0, scope = "P0")
+ctrl("cm_pct_cycling_raw", raw7, scope = "P7")
+
 cat("\n  cardiomyocytes, P0 vs P7 at MATCHED depth (tricycle):\n")
-print(transform(mm, P0=round(P0,1), P7=round(P7,1))[, c("bin","n_P0","n_P7","P0","P7")], row.names = FALSE)
-cat(sprintf("\n  depth-standardised: P0 %.1f%% vs P7 %.1f%%   (raw, unmatched: %.1f%% vs %.1f%%)\n",
-            weighted.mean(mm$P0, mm$w), weighted.mean(mm$P7, mm$w),
-            100*mean(cmx$tricycle_cycling[cmx$timepoint=="P0"]),
-            100*mean(cmx$tricycle_cycling[cmx$timepoint=="P7"])))
-write.csv(mm, file.path(OUTTAB, "cellcycle_tricycle_depthmatched_cm.csv"), row.names = FALSE)
+if (is.null(mm)) {
+  cat("  (no depth bin holds 100 cells at both timepoints -- expected under --max-cells)\n")
+} else {
+  print(transform(mm, P0=round(P0,1), P7=round(P7,1))[, c("bin","n_P0","n_P7","P0","P7")],
+        row.names = FALSE)
+  cat(sprintf("\n  depth-standardised: P0 %.1f%% vs P7 %.1f%%   (raw, unmatched: %.1f%% vs %.1f%%)\n",
+              weighted.mean(mm$P0, mm$w), weighted.mean(mm$P7, mm$w), raw0, raw7))
+  ctrl("cm_pct_cycling_depthmatched", weighted.mean(mm$P0, mm$w), scope = "P0")
+  ctrl("cm_pct_cycling_depthmatched", weighted.mean(mm$P7, mm$w), scope = "P7")
+  write.csv(mm, file.path(OUTTAB, "cellcycle_tricycle_depthmatched_cm.csv"), row.names = FALSE)
+}
 
 cat("\n=== CONTROL 3: the ambient-RNA floor ===\n")
 Cc <- SeuratObject::GetAssayData(comb, assay = "RNA", layer = "counts")
 sarc <- intersect(c("Tnnt2","Myh6","Actc1"), rownames(Cc))
 nonCM <- out$celltype != "Cardiomyocyte"
+.amb <- 100*mean(Matrix::colSums(Cc[sarc, nonCM, drop=FALSE] > 0) > 0)
 cat(sprintf("  %% of NON-cardiomyocytes detecting cardiac sarcomere genes (%s): %.1f%%\n",
-            paste(sarc, collapse="/"),
-            100*mean(Matrix::colSums(Cc[sarc, nonCM, drop=FALSE] > 0) > 0)))
+            paste(sarc, collapse="/"), .amb))
+ctrl("pct_nonCM_detecting_sarcomere", .amb, scope = paste(sarc, collapse = "/"))
 cat("  Those cells cannot transcribe sarcomere genes. Detection at this rate is ambient RNA,\n")
 cat("  and the same ambient carries proliferation transcripts into every barcode.\n")
 if (any(out$celltype == "RBC")) {
@@ -270,6 +350,11 @@ if (any(out$celltype == "RBC")) {
               nrow(r), 100*mean(r$tricycle_cycling), 100*mean(r$seurat_cycling)))
   cat(sprintf("  compare cardiomyocytes: tricycle %.1f%%\n",
               100*mean(out$tricycle_cycling[out$celltype=="Cardiomyocyte"])))
+  ctrl("n_cells", nrow(r), scope = "RBC")
+  ctrl("pct_cycling_tricycle", 100*mean(r$tricycle_cycling), scope = "RBC")
+  ctrl("pct_cycling_seurat",   100*mean(r$seurat_cycling),   scope = "RBC")
+  ctrl("pct_cycling_tricycle",
+       100*mean(out$tricycle_cycling[out$celltype=="Cardiomyocyte"]), scope = "Cardiomyocyte")
   cat("  A population scoring at or above cardiomyocytes bounds what the CM number can mean.\n")
   cat("  CAVEAT: these may be nucleated erythroid precursors, which do cycle -- so this is a\n")
   cat("  ceiling on confidence, not a calibrated zero.\n")
@@ -298,6 +383,13 @@ p2 <- ggplot(pl, aes(pct_cycling_seurat, pct_cycling_tricycle, colour = timepoin
        subtitle = "Same cells, same normalisation. Points above the dashed line: tricycle calls more cycling.",
        x = "% cycling (Seurat S/G2M)", y = "% cycling (tricycle θ arc)") + theme_bw()
 ggsave(file.path(OUTFIG, "cellcycle_tricycle_vs_seurat.png"), p2, width = 9, height = 6, dpi = 130)
+
+## ---- 6. the controls, as a table rather than only as console output -------
+# Every number the app quotes about how far to trust this comes from here, so that the tab
+# and the script can never disagree about what the run found.
+controls <- do.call(rbind, CTRL)
+write.csv(controls, file.path(OUTTAB, "cellcycle_tricycle_controls.csv"), row.names = FALSE)
+cat("\n=== controls written ===\n"); print(controls, row.names = FALSE)
 
 say("wrote tables + figures")
 cat("=== DONE cellcycle_tricycle ===\n")
