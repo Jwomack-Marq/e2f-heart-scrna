@@ -73,7 +73,7 @@ hand-export into the same paths and the chapters are unchanged.
 python3 tools/check_docs_coverage.py --list
 ```
 
-Asserts that all 18 top-level app tabs are claimed by exactly one chapter, that no
+Asserts that all 22 top-level app tabs are claimed by exactly one chapter, that no
 chapter claims a tab that no longer exists, that every referenced asset is present, and
 that no chapter has escaped `engine: markdown`. `docs/render.sh` runs it before
 rendering. It is Python, not R, for the same reason the render image has no R: it must
