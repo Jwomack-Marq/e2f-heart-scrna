@@ -87,6 +87,8 @@ Rscript process each). See each file's header for its exact inputs/outputs.
 | `per_celltype_de.R` | KO-vs-WT DE within each annotated cell type |
 | `cross_timepoint.R` | P0↔P7 cardiac DE within genotype |
 | `pathway_msigdb.R` | GO/GSEA + fgsea over Hallmark/KEGG/E2F sets |
+| `gene_set_provenance.R` | Audit, generated from the code, of where every gene set came from. The headline it exists to surface rather than bury: 38 of 46 sets were typed into a script with no citation — not wrong, but unauditable |
+| `gene_set_benchmark.R` | Follow-up to the audit: benchmarks each hand-curated panel against MSigDB Hallmark, since "are they right" has no ground truth but "do they agree with a published set" does |
 | `e2f_readouts.R` | KO verification, E2F-target de-repression, cycling/maturation |
 | `e2f_atlas.R` | E2F family expression atlas plots |
 | `abundance_propeller.R` | Cell-type composition + propeller |
@@ -96,9 +98,12 @@ Rscript process each). See each file's header for its exact inputs/outputs.
 | `cellcycle_tricycle_depthmatched.R` | Re-asks KO-vs-WT after binomially thinning both genotypes to one depth distribution per cell type × timepoint, then re-projecting through tricycle. At P7 the WT is the deeper library, so the raw gap *understates*: P7 CM KO−WT goes +3.4 → +4.1 points. Runs in `e2f-tricycle` |
 | `cm_cycling_investigate.R` | Advisor follow-up: are the two "cycling" CM subclusters two identities or one proliferating population split by phase? Marker Jaccard + phase composition per subcluster. Answer: one population — CM4 is 24 % S / 76 % G2M with no G1 |
 | `cm_subtypes.R` | Cardiomyocyte subtype labeling/composition |
+| `cm_immune_contamination.R` | Flags the ~99 leukocytes (about half mast cells) that `annotate.R` labelled "Cardiomyocyte" via `max.col` over nine marker scores. Not doublets — Scrublet clears them all. Feeds `shiny_app/build_immune_flag.R` |
 | `cm_subcluster_analyze.R` | KO-vs-WT DE per CM subcluster (resolution sweep) |
+| `cm_subcluster_celllevel_de.R` | Cell-level Wilcoxon KO-vs-WT for the CM subclusters pseudobulk cannot test (CM12 at res 0.2 has 99 cells, so only one sample clears the 20-cell floor). A **ranking by AUC, not a test** — feeds `shiny_app/build_celllevel_de.R` |
 | `trajectory_slingshot.R` | Pseudotime / CM maturation ordering |
 | `cell_state_classifier.R` | Portable glmnet cell-type + CM-stage (P0/P7) predictors; marker panels, held-out accuracy, `predict_cell_state()` applier (descriptive; genotype NOT predicted) |
+| `baniol_maturation_validation.R` | The one **external** test this dataset supports: applies the CM maturation (P0-vs-P7) model to Baniol et al. 2021 (285 FACS-sorted CMs, Smart-seq2, ENA PRJEB47622). Validates the timepoint model only — genotype is not testable there |
 | `tf_activity.R` | decoupleR TF-regulon activity over E2F regulons |
 | `cellchat.R` | Cell–cell communication, KO vs WT per timepoint |
 | `sex_check.R` | Xist / Y-gene sex calls per sample-lane |

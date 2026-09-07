@@ -125,8 +125,42 @@ from depth at all. The gaps then move slightly *away* from zero almost everywher
 
 P7 cardiomyocytes go from **+3.4 to +4.1** points. The effect is small — the honest headline
 is "the difference survives depth matching and is marginally larger", not "depth was masking
-a big effect". P7 fibroblasts carry a much larger gap than cardiomyocytes do (+14.5 → +15.4),
-which is worth a look in its own right.
+a big effect".
+
+### What the table says that the cardiomyocyte number does not
+
+Two patterns are visible only across the whole table, and both bear on whether any of this
+is biology.
+
+**The effect is P7-specific.** At P0 every cell type sits between −3.3 and +2.3 points:
+there is no genotype difference in cycling at birth. That is the right shape for E2F7/8,
+which govern cardiomyocyte cell-cycle *exit* — a process that happens over exactly this
+window — rather than proliferation in general.
+
+**And at P7 it is graded, not uniform.** Fibroblasts carry the largest gap by a wide margin,
+and immune myeloid cells run the other way:
+
+| cell type | P0 | P7 |
+|---|---|---|
+| Fibroblast | +0.5 | **+15.4** |
+| Endothelial | −1.8 | +7.9 |
+| Cardiomyocyte | +0.5 | +4.1 |
+| Mural / pericyte | −3.3 | +3.6 |
+| Immune myeloid | +2.3 | −5.6 |
+
+This matters because it is the check on the confound that depth matching *cannot* remove. A
+genotype-wide sort or library artifact would shift every cell type by a similar amount; this
+spans 21 points and reverses sign. It does not exclude a partial contribution, but a single
+global artifact does not produce that pattern. The sign agrees with the E2F regulon
+activity in `tf_activity_by_celltype_genotype.csv`, too — immune myeloid is the one cell type
+where both the cycling gap and E2F-target activity are *lower* in the knockout.
+
+**The fibroblast result deserves its own attention.** At P7 the knockout has roughly **half**
+the fibroblast proportion of the wild type (0.070 vs 0.131 of all cells,
+`propeller_results.csv`) while **more** of the fibroblasts it does have are cycling (37 % vs
+22 %). Fewer fibroblasts, a larger proliferative fraction among them. That pairing is not
+what this project set out to measure and no analysis here explains it; it is flagged rather
+than interpreted.
 
 Depth matching removes depth. It cannot remove sex, animal or library, and n = 1 per group.
 

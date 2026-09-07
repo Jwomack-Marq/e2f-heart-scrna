@@ -6422,6 +6422,13 @@ server <- function(input, output, session) {
       return(div(class = "alert alert-secondary", style = "font-size:13px", TRI_MATCH_MSG))
     cm <- m[m$celltype == "Cardiomyocyte" & m$timepoint == "P7", ]
     f <- function(x, d = 1) if (length(x) != 1 || is.na(x)) "\u2014" else formatC(x, format = "f", digits = d)
+    fn <- function(x) if (length(x) != 1 || is.na(x)) "\u2014" else
+      formatC(x, format = "d", big.mark = ",")   # UMI counts read as 20,022 not 20022
+    # RBC is excluded from the spread: it is the ambient-floor population (n = 300/254) and
+    # its gap is an artifact of that floor rather than a cell type behaving differently.
+    z <- m[m$celltype != "RBC", ]
+    p7 <- z[z$timepoint == "P7", ]; p0 <- z[z$timepoint == "P0", ]
+    top <- p7[which.max(p7$gap_matched), ]; bot <- p7[which.min(p7$gap_matched), ]
     div(class = "alert alert-secondary", style = "font-size:13px;margin-top:10px",
       HTML(sprintf(paste0("<b>At matched depth.</b> The confound here runs the ",
                           "counter-intuitive way: at P7 the <i>wild type</i> is the deeper ",
@@ -6429,10 +6436,22 @@ server <- function(input, output, session) {
                           "cycling call \u2014 so the raw comparison flatters the genotype with ",
                           "the lower number. Thinning both to one depth distribution takes the ",
                           "P7 cardiomyocyte gap from %s to %s points (depth AUC %s \u2192 %s, ",
-                          "where 0.5 means genotype can no longer be told from depth)."),
-                   f(cm$median_numi_WT_raw, 0), f(cm$median_numi_KO_raw, 0),
+                          "where 0.5 means genotype can no longer be told from depth).",
+                          "<br><br><b>Two things the table says that the cardiomyocyte number ",
+                          "does not.</b> The effect is <b>P7-specific</b> \u2014 at P0 every ",
+                          "cell type sits between %s and %s points, i.e. no genotype difference ",
+                          "at birth. And at P7 it is <b>graded across cell types rather than ",
+                          "uniform</b>: %s carries the largest gap at %s points, more than three ",
+                          "times the cardiomyocyte value, while %s runs the other way at %s. A ",
+                          "genotype-wide sort or library artifact would move every cell type by ",
+                          "a similar amount; this spans %s points."),
+                   fn(cm$median_numi_WT_raw), fn(cm$median_numi_KO_raw),
                    f(cm$gap_raw), f(cm$gap_matched),
-                   f(cm$auc_depth_raw, 3), f(cm$auc_depth_matched, 3))))
+                   f(cm$auc_depth_raw, 3), f(cm$auc_depth_matched, 3),
+                   f(min(p0$gap_matched)), f(max(p0$gap_matched)),
+                   gsub("_", " ", top$celltype), f(top$gap_matched),
+                   gsub("_", " ", bot$celltype), f(bot$gap_matched),
+                   f(max(p7$gap_matched) - min(p7$gap_matched)))))
   })
 
   # ---- Composition & fractions ----

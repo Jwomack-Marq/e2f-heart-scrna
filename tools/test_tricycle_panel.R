@@ -138,6 +138,24 @@ if (is.null(M)) {
      cm7$gap_matched >= cm7$gap_raw - 0.05)
   ok("gap stays positive (KO cycles more at P7)", cm7$gap_matched > 0)
   mk("depth-matched gap figure", E$tri_matched_gg(M))
+
+  # The panel's prose and chapter 12 both assert the cross-cell-type SHAPE, not just the
+  # cardiomyocyte number: no genotype difference at P0, and a graded rather than uniform
+  # spread at P7. That spread is the argument that a genotype-wide sort or library artifact
+  # is not what produces this, so if a rebuild flattened it the prose would be a lie.
+  z  <- M[M$celltype != "RBC", ]                 # ambient-floor population, excluded
+  p0 <- z[z$timepoint == "P0", ]; p7 <- z[z$timepoint == "P7", ]
+  cat(sprintf("   P0 gaps span %+.1f..%+.1f; P7 gaps span %+.1f..%+.1f (%.1f points)\n",
+              min(p0$gap_matched), max(p0$gap_matched),
+              min(p7$gap_matched), max(p7$gap_matched),
+              max(p7$gap_matched) - min(p7$gap_matched)))
+  ok("no genotype cycling difference at P0 (all within +/-4 points)",
+     all(abs(p0$gap_matched) < 4))
+  ok("the P7 effect is graded, not a uniform shift (spread > 10 points)",
+     max(p7$gap_matched) - min(p7$gap_matched) > 10)
+  ok("fibroblasts carry the largest P7 gap, as the prose says",
+     p7$celltype[which.max(p7$gap_matched)] == "Fibroblast")
+  ok("and at least one cell type reverses sign at P7", any(p7$gap_matched < 0))
 }
 
 cat("\n== the depth confound is visible, which is why the panel exists ==\n")
