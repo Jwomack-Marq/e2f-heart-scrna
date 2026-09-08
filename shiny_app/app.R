@@ -2784,11 +2784,16 @@ tri_rose_gg <- function(d, nbins = 48L, bs = 13, show_abstain = TRUE, facet = NU
   keys <- unique(c(facet, ".bin", fill_by))
   tb <- as.data.frame(table(d[keys]), stringsAsFactors = FALSE)
   names(tb)[names(tb) == "Freq"] <- "n"
+  # den must be the SAME LENGTH as tb, in both branches. It was a scalar in the un-faceted
+  # case, and ifelse() with a length-1 condition returns a length-1 RESULT -- so every share
+  # became the first one, recycled. Constant height at every angle draws as a bullseye of
+  # concentric rings rather than a fan of wedges, which is what the default view showed.
   if (length(facet)) {
     grp <- interaction(tb[facet], drop = FALSE)
     tot <- tapply(tb$n, grp, sum)
     den <- as.numeric(tot[as.character(grp)])
-  } else den <- sum(tb$n)
+  } else den <- rep(sum(tb$n), nrow(tb))
+  stopifnot(length(den) == nrow(tb))
   tb$share <- ifelse(den > 0, tb$n / den, 0)
   tb$theta <- ctr[match(tb$.bin, levels(d$.bin))]
   tb[[fill_by]] <- factor(tb[[fill_by]], levels = levels(factor(d[[fill_by]])))

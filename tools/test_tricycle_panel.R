@@ -63,14 +63,29 @@ cat(sprintf("   abstained: %.1f%%\n", 100*mean(pc$tricycle_stage == TRI$not_stag
 
 cat("\n== 3. the rose reports shares, so unequal groups compare ==\n")
 d <- E$tri_slice("Cardiomyocyte")
-# fill_by is deliberately ALSO a facet variable here: that is the KO-vs-WT view, and it is
-# the case where a duplicated key silently doubled every share.
+# THE UN-FACETED CALL FIRST, because it is the default view and it is the path that broke.
+# den was a scalar there, and ifelse() with a length-1 condition returns a length-1 RESULT,
+# so every share became the first one recycled -- constant height at every angle, which in
+# polar coordinates draws as a bullseye of concentric rings instead of a fan of wedges. Both
+# earlier assertions here passed facet=, so they exercised the vector path twice and never
+# touched the view a user actually opens. Shares varying is the thing to assert, not just
+# summing to one: a constant sums to one too.
+tb0 <- attr(E$tri_rose_gg(d), "rose_data")
+cat(sprintf("   un-faceted: %d rows, %d distinct share values, sum %.6f\n",
+            nrow(tb0), length(unique(tb0$share)), sum(tb0$share)))
+ok("un-faceted shares sum to 1", abs(sum(tb0$share) - 1) < 1e-9)
+ok("un-faceted shares actually VARY (not one value recycled)",
+   length(unique(tb0$share)) > 20)
+
+# fill_by deliberately ALSO a facet variable: the KO-vs-WT view, and the case where a
+# duplicated key silently doubled every share.
 g  <- E$tri_rose_gg(d, facet = c("timepoint","genotype"), fill_by = "genotype")
 tb <- attr(g, "rose_data")
 tot <- tapply(tb$share, interaction(tb$timepoint, tb$genotype), sum)
 cat(sprintf("   per-panel share totals: %s\n", paste(sprintf("%.3f", tot), collapse = ", ")))
 ok("every panel sums to 1 (shares, not counts)", all(abs(tot - 1) < 1e-9))
-# and again with a fill that is NOT a facet variable, so both paths are covered
+ok("faceted shares vary too", length(unique(tb$share)) > 20)
+# and again with a fill that is NOT a facet variable, so both key paths are covered
 tb2 <- attr(E$tri_rose_gg(d, facet = c("timepoint","genotype")), "rose_data")
 ok("same when the fill is not a facet variable",
    all(abs(tapply(tb2$share, interaction(tb2$timepoint, tb2$genotype), sum) - 1) < 1e-9))
