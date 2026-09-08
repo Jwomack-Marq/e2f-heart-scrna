@@ -10,22 +10,51 @@ subcluster identity / cell-cycle state, and browse pathway/enrichment results.
 > All KO-vs-WT differences are hypothesis-generating only. See the **About / caveats**
 > tab in the app.
 
-The repo also holds a **mechanistic model** of the cardiomyocyte cell-cycle fate
-decision, built from two FUCCI papers — see [model/](model/) and its
-[RESULTS.md](model/RESULTS.md) / [TODO.md](model/TODO.md). The app is the
-descriptive half; `model/` is the quantitative half.
+The app is only one of several things in here. The repo holds the **descriptive**
+half (the scRNA-seq re-analysis and the app that browses it), a **mechanistic** half
+(an ODE model of the cardiomyocyte cell-cycle fate decision), and a **machine-learning**
+half that connects them.
+
+## What's in this repo
+
+| Directory | What it is | Start at |
+|---|---|---|
+| [`our_analysis/`](our_analysis/) | **Our re-analysis** of the E2F7/8 scRNA-seq — the numbered pipeline from raw PIPseeker matrices to every result table | [RUN_ORDER.md](our_analysis/00_DOCS/RUN_ORDER.md) |
+| [`shiny_app/`](shiny_app/) | **The website** — the interactive cell browser, and the `build_*.R` scripts that bake its data bundle | [app.R](shiny_app/app.R) |
+| [`model/`](model/) | **The ODE models** — a two-tier mechanistic model of the CM cell-cycle fate decision, calibrated against two FUCCI papers | [model/README.md](model/README.md) |
+| [`our_analysis/05_analyses/ko_signature_ml.R`](our_analysis/05_analyses/ko_signature_ml.R) | **The machine learning** — elastic-net classifiers used as an instrument on the KO, under three confound controls | [§ KO-signature ML](#ko-signature-machine-learning-our_analysis05_analyses) |
+| [`docs/`](docs/) | Quarto **methods book** — one chapter per analysis, written for review rather than operation | [docs/README.md](docs/README.md) |
+| [`original_Han_analysis/`](original_Han_analysis/) | The **inherited** upstream analysis we received — provenance and comparison baseline, not re-run | [ORIGINAL_README.md](original_Han_analysis/ORIGINAL_README.md) |
+| [`deliverables/`](deliverables/), [`analysis/`](analysis/), [`slides/`](slides/) | Dated **collaborator handoffs** — the Excel/CSV packages and decks, with the scripts that made them | [deliverables/2026-08-21/](deliverables/2026-08-21/) |
+| [`env/`](env/), [`tools/`](tools/) | Docker image version captures, and the app test suite | [env/README.md](env/README.md) |
+
+Each has its own section below.
 
 ## Layout
 
 ```
+our_analysis/       our re-analysis — the numbered pipeline (see RUN_ORDER.md)
+  00_DOCS/          caveats, biological question, pipeline map, run order
+  01_input/         8 PIPseeker sample folders (P0/P7 × KO/WT × lane1/lane6)
+  02_..05_          QC & lane merge → condition merge → integrate/annotate → analyses
+  05_analyses/      29 scripts: DE, abundance, cell cycle, trajectory, ML, ...
+  06_outputs/       report, plots, and build_app_data.R (bakes the app bundle)
+  results/          figures/, markers/, tables/ — the analysis output
 shiny_app/
-  app.R           # the whole app (UI + server)
-  app_data.rds    # data bundle (built by build_app_data.R) — NOT in git, see below
-  rsconnect/      # shinyapps.io deployment record
+  app.R             # the whole app (UI + server)
+  build_*.R         # the bundle builders — each adds one block to app_data.rds
+  app_data.rds      # data bundle — NOT in git, see below
+  rsconnect/        # shinyapps.io deployment record
 model/
-  cmcycle/        # cell-cycle fate model + re-analysis of the FUCCI papers (Python, stdlib only)
-  figures/        # generated SVGs
-  tests/          # 32 tests
+  cmcycle/          # tier 1: normalized-Hill logic-ODE, 55 nodes (Python, stdlib only)
+  tier2/            # tier 2: mass-action + Michaelis–Menten ODE, 63 species (Julia)
+  data/ko_export/   # small derived tables from the KO bundle
+  figures/          # generated SVGs
+  tests/            # pytest suite
+docs/               Quarto methods book, one chapter per analysis
+original_Han_analysis/   the inherited upstream analysis (not re-run)
+deliverables/, analysis/, slides/   dated collaborator handoffs
+env/, tools/        Docker version captures; app test suite
 ```
 
 At runtime the app needs only `app_data.rds` (no Seurat / source objects). The bundle
@@ -52,6 +81,150 @@ shiny::runApp("shiny_app")   # needs shiny_app/app_data.rds present
 rsconnect::deployApp("shiny_app")   # account: jwomackmu, app: e2f-heart-scrna
 ```
 
+## The re-analysis (`our_analysis/`)
+
+The pipeline behind everything else in this repo: eight PIPseeker sample folders
+(P0/P7 × KO/WT × lane1/lane6) in, 260-odd result tables out. Stages are numbered and
+run top to bottom; every script anchors itself on the `our_analysis/.projroot` sentinel,
+so it can be launched from any working directory.
+
+| Stage | What happens |
+|---|---|
+| [`01_input/`](our_analysis/01_input/) | the 8 raw PIPseeker sample folders |
+| [`02_qc_lane_merge/`](our_analysis/02_qc_lane_merge/) | per-sample QC, then lane1 + lane6 merged |
+| [`03_condition_merge/`](our_analysis/03_condition_merge/) | P0 and P7 condition merges |
+| [`04_integrate_annotate/`](our_analysis/04_integrate_annotate/) | integration, cell-type annotation, SingleR cross-check, CM subclustering, PC-dims sweep |
+| [`05_analyses/`](our_analysis/05_analyses/) | the science — 29 scripts (table in [RUN_ORDER.md](our_analysis/00_DOCS/RUN_ORDER.md)) |
+| [`06_outputs/`](our_analysis/06_outputs/) | the report (HTML + PPTX), result plots, and `build_app_data.R` |
+
+`05_analyses/` covers descriptive DE and per-cell-type DE, propeller abundance testing,
+cell-cycle scoring (Seurat **and** tricycle, including a depth-matched cross-check),
+CellChat cell–cell communication, Slingshot trajectory, decoupleR TF/regulon activity,
+MSigDB pathway enrichment, the E2F atlas and readouts, gene-set benchmarking and
+provenance, and the QC/confound scripts (doublets, sex check, barcode overlap, ambient
+and immune contamination).
+
+**Read the caveats before the results.** The design is n = 1 animal per condition
+(lane1/lane6 are the *same* library on two flow-cell lanes), genotype is confounded with
+sex (KO male / WT female), and the KO is likely a ROSA26 conditional allele invisible to
+3′ scRNA. Every KO-vs-WT comparison is descriptive only — there are no valid p-values.
+See [REPLICATES.md](our_analysis/00_DOCS/REPLICATES.md) and
+[BIOLOGICAL_QUESTION.md](our_analysis/00_DOCS/BIOLOGICAL_QUESTION.md), which works
+through which parts of the biological question this assay can and cannot reach —
+cell-cycle exit and maturation are addressable descriptively; **binucleation is not
+measurable by this assay at all**.
+
+## KO-signature machine learning (`our_analysis/05_analyses/`)
+
+Two scripts, and the second is the only external validation this dataset supports.
+
+### `ko_signature_ml.R` — the classifier as an instrument
+
+A KO-vs-WT classifier on these cells is trivially near-perfect and, on its own, tells you
+nothing: it has learned sex, animal, library and depth. **That number is not reported as a
+result.** [`ko_signature_ml.R`](our_analysis/05_analyses/ko_signature_ml.R) instead uses
+elastic-net (glmnet) as an *instrument*, under three controls, to ask questions whose
+answers are not fixed in advance by the design.
+
+The three controls:
+
+| Control | What it does |
+|---|---|
+| **lane1 only** | lane1/lane6 are one library sequenced twice (97–100 % barcode overlap); keeping both puts a cell's twin on both sides of every split |
+| **sex + ubiquity gene filter** | the 7-gene sex blocklist, then a data-driven filter dropping genes whose KO-vs-WT difference has the same sign in *every* cell type at *both* timepoints — a signal identical in every compartment is animal or sex, not knockout biology. Run with a positive control (it must rediscover *Xist*) and a negative control (a WT/WT split, where it must remove ~nothing). CM-dominant genes are exempted and flagged |
+| **UMI depth matching** | within each celltype × timepoint stratum the deeper genotype is binomially thinned to a shared depth distribution. Thinning only, never upsampling — at P7 the KO library has about half the WT depth |
+
+The five questions, and where each answer lands:
+
+| Question | Output |
+|---|---|
+| **Where** does the KO act? Every celltype × timepoint stratum at equal *n* against a permutation null, with P0 red blood cells as an **ambient control** — if RBCs separate as well as CMs, the signal is animal-level | `ko_ml_separability.csv` |
+| Does the signature **transfer** across animals? P0 and P7 are different animal pairs, so train-P0/test-P7 (and the reverse) is the only genuine held-out-animal test available. Both pairs are male-KO/female-WT, so transfer cannot break the sex confound | `ko_ml_transfer.csv` |
+| Is it **E2F-target de-repression**? The pre-specified E2F set and MSigDB Hallmark E2F targets fitted as the only features, against hundreds of expression-matched random gene sets of the same size | `ko_ml_featuresets.csv` |
+| Does the KO **shift maturation**, and where in the CM compartment does the signal sit? The shipped P0-vs-P7 stage model applied within timepoint (sex/ambient weights neutralised), and out-of-fold P(KO) summarised by phase and subcluster | `ko_ml_maturation_shift.csv`, `ko_ml_pko_by_state.csv` |
+| What genes carry it? A confounder-screened CM **KO gene panel** cross-referenced against the pseudobulk DESeq2 lists — next to a **naive** panel fitted with no controls, so the reader can see what the controls removed (the naive panel's top gene is *Xist*) | `ko_ml_cm_panel.csv`, `ko_ml_cm_panel_naive.csv` |
+
+Every removed gene is written out with its per-compartment effect sizes
+(`ko_ml_removed_genes.csv`), and the depth matching is audited before/after
+(`ko_ml_depth_matching.csv`).
+
+### `baniol_maturation_validation.R` — the external test
+
+[`baniol_maturation_validation.R`](our_analysis/05_analyses/baniol_maturation_validation.R)
+applies the CM maturation (P0-vs-P7) model to **Baniol et al. 2021** — 285 FACS-sorted
+cardiomyocytes, Smart-seq2, ENA PRJEB47622. This validates the **timepoint** model only;
+genotype is not testable there. Judge it by rank AUC, not accuracy at 0.5: the two
+platforms are not on a common absolute scale, so the threshold is uncalibrated across
+them while ranking is unaffected. The stratified table
+(`baniol_stratified_auc.csv`) includes the check that matters — within the P0 group
+Baniol did not sort-enrich, cycling carries no signal, so the model is **not** merely a
+cycling detector. Outputs: `baniol_maturation_validation.csv`,
+`baniol_stratified_auc.csv`, `baniol_percell_predictions.csv`,
+`baniol_celltype_smoketest.csv` (one-sided by construction — Baniol is 100 % sorted CMs,
+so a CM call is a tautology and only a non-CM call is informative).
+
+### Running it
+
+Both need `glmnet`, which is in no other image in this repo, so they have their own —
+[`our_analysis/Dockerfile.ml`](our_analysis/Dockerfile.ml), built on `e2f-seurat-full`.
+The build asserts a real sparse `cv.glmnet` fit and the offline msigdbr/org.Mm.eg.db
+paths, so it fails at build time rather than 20 minutes into a run.
+
+```bash
+docker build -t e2f-ml:latest -f our_analysis/Dockerfile.ml our_analysis/
+
+# --smoke first (tiny caps/repeats, a few minutes: exercises every code path,
+# numbers not usable), then the real run detached — it is far longer than 10 minutes
+docker run --rm -v "$PWD:/work" -w /work e2f-ml:latest \
+  Rscript our_analysis/05_analyses/ko_signature_ml.R --smoke
+
+docker run -d --name ko-ml -v "$PWD:/work" -w /work e2f-ml:latest \
+  Rscript our_analysis/05_analyses/ko_signature_ml.R --cores=8
+```
+
+Other flags: `--no-naive` skips the uncontrolled comparison panel,
+`--featureset-celltypes=all` runs the E2F-vs-random feature-set test on every cell type
+rather than cardiomyocytes alone.
+
+> **Not wired into the app.** These tables live in `our_analysis/results/tables/` and
+> are not read by `app.R`. Everything they contain is descriptive: n = 1, sex-confounded,
+> depth-matched — the `NOTE` column on every row says so.
+
+## The mechanistic model (`model/`)
+
+The quantitative half of the project: an ODE model of the four-way cardiomyocyte
+cell-cycle outcome — quiescence, productive division, binucleation, nuclear
+polyploidization — calibrated against two FUCCI papers (Baniol et al. 2021; Murganti
+et al. 2022) plus the re-analysis of their data that constrains it. Spatial components
+are deliberately out of scope.
+
+It is built in **two tiers**, because one formalism cannot do both jobs:
+
+| | Tier 1 — [`cmcycle/`](model/cmcycle/) | Tier 2 — [`tier2/`](model/tier2/) |
+|---|---|---|
+| Language | Python, stdlib only | Julia |
+| Formalism | normalized-Hill logic-ODE (Netflux-style) | mass-action + Michaelis–Menten |
+| Size | 55 nodes, 77 reactions | 63 species, 218 parameters |
+| Time | `tau`, a relaxation constant | real time |
+| Fates | closed-form, a product over three gate nodes | emergent from one cell's trajectory |
+
+Tier 1 takes eight inputs — a maturation coordinate, an in-vitro flag, mechanical load,
+adrenergic tone, two growth-factor arms, oxidative stress and a clonidine dose — and
+returns four fates that sum to exactly 1 with no normalization step. Every node carries
+a gene anchor and a justification; every reaction its own evidence column; every
+calibration target its citation.
+
+Tier 2 exists for the five things Tier 1 structurally cannot express: absolute phase
+durations, duration *distributions*, ploidy and cell counting, cumulative-EdU versus
+instantaneous Ki-67, and FUCCI trace shape. It is built on the published generic
+cell-cycle model in [`Cell_Cycle_Model`](https://github.com/Jwomack7512-bio/Cell_Cycle_Model)
+rather than Gérard & Goldbeter 2009, because it already supplies CDT1/Geminin as FUCCI
+observables.
+
+Start with [model/README.md](model/README.md); results and figures are in
+[RESULTS.md](model/RESULTS.md), open work in [TODO.md](model/TODO.md), and the
+formalism in [MODEL.md](model/MODEL.md).
+
 ## Methods notebooks (`docs/`)
 
 A Quarto book documenting every analysis behind the app — one chapter per analysis,
@@ -74,8 +247,9 @@ See [docs/README.md](docs/README.md).
 
 ## Data pipeline
 
-`app_data.rds` is produced by the upstream analysis pipeline (not in this repo;
-see `our_analysis/06_outputs/app/build_app_data.R` in the project workspace).
+`app_data.rds` is produced by the analysis pipeline in
+[`our_analysis/`](our_analysis/) — see
+[`06_outputs/app/build_app_data.R`](our_analysis/06_outputs/app/build_app_data.R).
 It bundles a downsampled cell × metadata table, a curated expression panel plus a
 broader matrix for on-the-fly DE, precomputed cell-type / subcluster DE tables,
 marker heatmaps, enrichment results, and per-gene info.
@@ -311,10 +485,13 @@ Set sizes are lopsided by design — one curated category (a few genes) against 
 cluster group (hundreds) — so the fold enrichment and hypergeometric p on the **Overlap
 statistics** tab, not the picture, are what carry the result.
 
-## Docker: the three images, and the lab-server dev deploy
+## Docker: the app images, and the lab-server dev deploy
 
 **There is no R on this host.** Everything — running the app, parsing `app.R`, running the
-tests — goes through one of three images. Knowing which does what saves a lot of time.
+tests — goes through one of the images below. Knowing which does what saves a lot of time.
+These three are the app-side images; the analysis-side ones (`e2f-seurat-full`, `e2f-enrich`,
+`e2f-tricycle`, `e2f-ml`, `e2f-export`) and the exact package versions each carries are
+captured in [env/README.md](env/README.md).
 
 | image | has | use it for |
 |---|---|---|
