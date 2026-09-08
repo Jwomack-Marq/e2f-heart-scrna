@@ -104,6 +104,7 @@ Rscript process each). See each file's header for its exact inputs/outputs.
 | `trajectory_slingshot.R` | Pseudotime / CM maturation ordering |
 | `cell_state_classifier.R` | Portable glmnet cell-type + CM-stage (P0/P7) predictors; marker panels, held-out accuracy, `predict_cell_state()` applier (descriptive; genotype NOT predicted) |
 | `baniol_maturation_validation.R` | The one **external** test this dataset supports: applies the CM maturation (P0-vs-P7) model to Baniol et al. 2021 (285 FACS-sorted CMs, Smart-seq2, ENA PRJEB47622). Validates the timepoint model only — genotype is not testable there |
+| `ko_signature_ml.R` | KO-vs-WT elastic-net (glmnet): per-cell-type separability vs permutation null, P0↔P7 transfer, E2F-target vs matched random feature sets, stage-model shift, P(KO) by phase/subcluster, CM KO gene panel. Descriptive only (n=1; sex blocklist + ubiquity filter + UMI depth matching). Runs in `e2f-ml` (`Dockerfile.ml`) |
 | `tf_activity.R` | decoupleR TF-regulon activity over E2F regulons |
 | `cellchat.R` | Cell–cell communication, KO vs WT per timepoint |
 | `sex_check.R` | Xist / Y-gene sex calls per sample-lane |

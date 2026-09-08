@@ -30,6 +30,7 @@ declare -A ROLE=(
   [e2f-export:latest]="docs/export.sh -- regenerates the methods-book figures"
   [lab-server-e2f-heart-scrna-dev:latest]="the deployed Shiny app"
   [e2f-tricycle:latest]="tricycle cell-cycle cross-check (05_analyses/cellcycle_tricycle.R)"
+  [e2f-ml:latest]="glmnet KO-signature ML (05_analyses/ko_signature_ml.R), built on e2f-seurat-full"
 )
 WANT=("${@:-}")
 
