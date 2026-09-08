@@ -1,0 +1,2 @@
+"predicted","Freq","frac","NOTE"
+"Cardiomyocyte",285,1,"ONE-SIDED SMOKE TEST, NOT VALIDATION: Baniol is 100% sorted cardiomyocytes, so there is no negative class. A CM call is a tautology; only a non-CM call is informative."

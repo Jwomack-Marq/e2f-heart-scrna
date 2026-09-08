@@ -1,0 +1,4 @@
+"arm","P7_vs_P0","P7noncyc_vs_all_P0","P7cyc_vs_all_P0","within_P7_cyc_vs_nonc","within_P0_cyc_vs_nonc","NOTE"
+"naive",0.829,0.757,0.917,0.725,0.566,"RANK AUCs (calibration-free). within_P0_cyc_vs_nonc ~0.5 means the model is NOT a cycling detector: in the group Baniol did not sort-enrich, cycling carries no signal for it."
+"shared_raw",0.924,0.899,0.954,0.721,0.537,"RANK AUCs (calibration-free). within_P0_cyc_vs_nonc ~0.5 means the model is NOT a cycling detector: in the group Baniol did not sort-enrich, cycling carries no signal for it."
+"shared_z",0.971,0.96,0.985,0.695,0.501,"RANK AUCs (calibration-free). within_P0_cyc_vs_nonc ~0.5 means the model is NOT a cycling detector: in the group Baniol did not sort-enrich, cycling carries no signal for it."

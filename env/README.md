@@ -32,6 +32,7 @@ reason `processing/seurat.cm.subclustered.rds` cannot be compared across rebuild
 | `e2f-seurat-full` | 4.5.1 | 271 | Seurat pipeline — SCTransform, Harmony, DESeq2 (`our_analysis/`) |
 | `e2f-export` | 4.5.1 | 191 | `docs/export.sh`, the methods-book figures |
 | `e2f-tricycle` | 4.5.1 | 286 | tricycle cell-cycle cross-check, built on `e2f-seurat-full` |
+| `e2f-ml` | 4.5.1 | 275 | glmnet KO-signature ML (`05_analyses/ko_signature_ml.R`), built on `e2f-seurat-full` |
 | `lab-server-e2f-heart-scrna-dev` | 4.5.1 | 110 | the deployed Shiny app |
 
 `e2f-docs` carries only the Quarto CLI — no R, deliberately, so a stray executable chunk
